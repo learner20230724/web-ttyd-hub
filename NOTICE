@@ -1,0 +1,8 @@
+Web TTYd Hub
+Based on https://github.com/sosopop/web-ttyd-hub
+Upstream revision: 325822e0328da9bf8aa38394455805438a0f76d5
+Original author: sosopop and contributors.
+The upstream README declares MIT; no standalone LICENSE exists at this revision.
+This distribution adds the standard MIT text and retains upstream attribution.
+Modifications: learner20230724 and contributors, 2026.
+ttyd and tmux are separately installed dependencies with their own licenses.

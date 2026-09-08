@@ -6,3 +6,7 @@ server/public/
 .DS_Store
 .claude
 frontend/.vscode/
+.env.*
+!.env.example
+*.pem
+*.key

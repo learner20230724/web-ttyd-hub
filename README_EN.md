@@ -1,61 +1,57 @@
-<p align="center">
-  <img src="doc/logo.png" alt="Web TTYd Hub Logo" width="200" />
-</p>
+# Web TTYd Hub — Your terminal, ready to resume
 
-# 🚀 Web TTYd Hub
+[中文](README.md) · [Clipboard](docs/clipboard.md) · [Deployment](docs/deployment.md) · [AI-readable index](llms.txt)
 
-[中文](./README.md)
+**Start on your computer. Pick up on your phone. Close the tab while your task keeps running.**
 
-> 🌌 Your terminal, in the browser. Anytime, anywhere.
+A self-hosted **ttyd + tmux browser terminal session manager**, extending [sosopop/web-ttyd-hub](https://github.com/sosopop/web-ttyd-hub). Create named terminals, switch between installed shells, share sessions across browsers and reconnect to long-running command-line work.
 
-<p align="center">
-  <img src="assets/72643b69-16e1-44ab-841f-cc1dee1b1c0b.png" alt="Web TTYd Hub Screenshot" width="800" />
-</p>
+![Web terminal session interface](assets/72643b69-16e1-44ab-841f-cc1dee1b1c0b.png)
 
-Web TTYd Hub is a web-based terminal session manager built on ttyd + tmux. Create, manage, and switch between multiple terminal sessions right from your browser — whether you're at your desk or on your phone lying on the couch.
+## What it solves
 
-## 💡 Why
+| Pain point | Approach |
+| --- | --- |
+| Too many terminal URLs and processes | Named sessions, sidebar switching and a unified HTTP/WebSocket proxy |
+| Closing a tab interrupts access | tmux keeps work available across browser disconnections |
+| tmux captures text selection | Optional mouse-off profile and clipboard troubleshooting |
+| Too little output history | 10,000 browser scrollback lines; optional 20,000-line tmux history |
+| Distracting terminal prompts | Disabled leave confirmation and resize overlay |
+| Repeated deployment setup | Loopback ttyd listeners, systemd and authenticated Caddy examples |
 
-Ever been in one of these situations?
+The upstream Hub already provides the Vue UI, session lifecycle, shell selection and proxy. This fork adds loopback binding, scrollback/prompt tuning, optional tmux settings and deployment/clipboard documentation. It uses official ttyd without patching its engine.
 
-- 🏢 A long-running task on your work machine, and you want to check on it from home?
-- 🛌 Lying in bed with a sudden idea to fix a bug, wishing you could just open a terminal?
-- ☕️ Out and about with only your phone, wanting to connect to your dev machine?
+## Quick start
 
-**Web TTYd Hub** turns your terminal into a web service. Open a browser, and you're in. Sessions never die.
+Requires Node.js 22.12+, npm, ttyd supporting `-W`, and tmux on Linux/macOS. Native Windows is unverified; use WSL.
 
-## ✨ Features
-
-- **🧩 Multi-session management** — Create multiple independent terminal sessions, switch freely
-- **💾 Persistent sessions** — Powered by tmux, sessions survive browser closures, reconnect anytime
-- **👥 Collaborative access** — Multiple browsers can connect to the same session simultaneously
-- **🐚 Multi-shell support** — Choose from Bash, Zsh, Fish and more when creating a session
-- **📱 Mobile-friendly** — Responsive UI that works smoothly on phones and tablets
-- **🎨 Professional Dark UI** — Refined Slate/Zinc theme, glassmorphism, and smooth animations
-- **⚡️ Zero-config startup** — One command to launch after installing dependencies
-
-## 🔮 Vibe Coding: Code from Your Phone
-
-Web TTYd Hub is a natural fit for the **Vibe Coding** workflow.
-
-Pair it with AI coding tools like Claude Code or Cursor, and you can have a conversational programming session right from your phone — describe what you want, review the generated code, run tests. The entire dev loop works from a mobile device. On the commute, at a coffee shop, waiting in line — when inspiration strikes, just open your browser and start coding.
-
-tmux sessions guarantee continuity: work you start on your phone picks up seamlessly when you're back at your desk. No context lost, ever.
-
-## 🌐 Tunnel with Asterism for Remote Access
-
-If your dev machine sits behind a home or corporate NAT, pair it with [Asterism](https://github.com/sosopop/asterism) to punch through and access your terminal from anywhere.
-
-Asterism is a lightweight intranet penetration tool — pure C, single binary, cross-platform (Windows / Linux / macOS / Android / iOS), high performance, minimal resource usage.
-
-**Typical deployment:**
-
-```
-Phone / Tablet Browser 📱
-    ↓
-Public Server (Asterism Server) ☁️
-    ↓ Tunnel 🚇
-Intranet Dev Machine (Web TTYd Hub + Asterism Client) 💻
+```bash
+sudo apt install ttyd tmux # macOS: brew install ttyd tmux
+git clone https://github.com/learner20230724/web-ttyd-hub.git
+cd web-ttyd-hub
+npm ci --include=dev
+npm ci --prefix frontend --include=dev
+cp .env.example .env
+npm run build
+npm start
 ```
 
-A portable cloud dev environment — as long as you have internet, you have your terminal.
+Open `http://localhost:3000`. The example uses loopback; configure authenticated HTTPS for remote access. Development: `npm run dev` (frontend 5173, backend 3000).
+
+Configuration: `HOST` defaults to `0.0.0.0` in code, overridden to `127.0.0.1` in the example. `PORT` defaults to 3000; `TTYD_PORT_RANGE_START` / `TTYD_PORT_RANGE_END` default to 7681 / 7780.
+
+## Copy and paste
+
+Select text and use the browser Copy action. Common shortcuts are Ctrl+Shift+C / Ctrl+Shift+V or Cmd+C / Cmd+V; browser/OS behavior varies. Focus the terminal before pasting. Ctrl+C without a selection normally interrupts a command. Optional tmux settings disable mouse capture; application mouse mode may require Shift+drag. Mobile selection and clipboard permissions vary. There is no custom copy button or cross-device clipboard sync. See the [guide](docs/clipboard.md).
+
+## Operational limits
+
+Browser disconnect persistence does not imply reboot recovery. Session metadata is in memory and is not restored automatically after Hub restart; surviving tmux sessions can be attached by creating an entry with the same name. Deleting a session terminates its tmux session. Browser scrollback can reset when the iframe reloads and is separate from tmux history. systemd shutdown may clean up the entire service process group.
+
+No built-in accounts, user isolation or fine-grained permissions: browsers share the service OS user's environment. Use an authenticated HTTPS proxy before public access.
+
+## Discovery and attribution
+
+Keywords: self-hosted web terminal, ttyd session manager, tmux browser terminal, mobile terminal, remote CLI, clipboard troubleshooting, command-line AI coding. [llms.txt](llms.txt) is a factual plain-text index; AI indexing/recommendations are not guaranteed.
+
+MIT as declared in the upstream README. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Thanks to sosopop and the ttyd/tmux maintainers. Independent extension, not an official ttyd release.

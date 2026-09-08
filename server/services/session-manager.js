@@ -102,9 +102,13 @@ class SessionManager extends EventEmitter {
 
     const proc = spawn('ttyd', [
       '-W', '-p', String(port),
+      '-i', '127.0.0.1',
       '-b', `/terminal/${name}`,
       '-s', '9',
       '-t', 'theme={"background":"#000000"}',
+      '-t', 'scrollback=10000',
+      '-t', 'disableLeaveAlert=true',
+      '-t', 'disableResizeOverlay=true',
       ...tmuxArgs
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -195,9 +199,13 @@ class SessionManager extends EventEmitter {
 
     const proc = spawn('ttyd', [
       '-W', '-p', String(port),
+      '-i', '127.0.0.1',
       '-b', `/terminal/${name}`,
       '-s', '9',
       '-t', 'theme={"background":"#000000"}',
+      '-t', 'scrollback=10000',
+      '-t', 'disableLeaveAlert=true',
+      '-t', 'disableResizeOverlay=true',
       ...tmuxArgs
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],

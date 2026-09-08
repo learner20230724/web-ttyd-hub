@@ -141,7 +141,7 @@ Environment variables (via `.env` or process.env):
 ## Key Implementation Details
 
 ### ttyd Process Management
-- Each session runs as a detached child process
+- Each session runs as a child process (detached: false)
 - ttyd integrates with tmux for session persistence
 - Sessions survive browser disconnection and can be reconnected
 - Graceful shutdown on SIGINT/SIGTERM kills all ttyd processes

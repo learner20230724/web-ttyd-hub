@@ -1,0 +1,6 @@
+terminal.example.com {
+    basic_auth {
+        admin {$HUB_PASSWORD_HASH}
+    }
+    reverse_proxy 127.0.0.1:3000
+}
