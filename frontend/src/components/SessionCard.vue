@@ -1,8 +1,8 @@
 <script setup>
-import { ref } from "vue";
+import { ref, nextTick } from "vue";
 import { useSessionStore } from "../stores/sessions";
 
-defineProps({
+const props = defineProps({
   session: Object,
   active: Boolean,
   collapsed: Boolean,
@@ -10,6 +10,41 @@ defineProps({
 
 const store = useSessionStore();
 const confirming = ref(false);
+const editing = ref(false);
+const draft = ref('');
+const error = ref('');
+const saving = ref(false);
+const nameInput = ref(null);
+
+async function startRename() {
+  draft.value = props.session.displayName || props.session.name;
+  error.value = '';
+  editing.value = true;
+  await nextTick();
+  nameInput.value?.focus();
+  nameInput.value?.select();
+}
+
+function onRenameEnter(event) {
+  if (event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  saveRename();
+}
+
+async function saveRename() {
+  if (saving.value) return;
+  saving.value = true;
+  error.value = '';
+  try {
+    await store.renameSession(props.session.name, draft.value);
+    editing.value = false;
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    saving.value = false;
+  }
+}
+
 
 function onClose(e, name) {
   e.stopPropagation();
@@ -36,15 +71,18 @@ function cancelRemove(e) {
   <div
     class="session-card"
     :class="{ active, collapsed }"
-    :title="session.name"
+    :title="session.displayName || session.name"
   >
     <div class="status-indicator" :class="session.status"></div>
 
     <div class="card-content" v-show="!collapsed">
       <div class="card-top">
-        <div class="session-name">{{ session.name }}</div>
+        <div class="session-name">{{ session.displayName || session.name }}</div>
+        <button v-if="!confirming && !editing" class="rename-btn" type="button"
+          title="重命名 / Rename" aria-label="重命名会话 / Rename session"
+          @click.stop="startRename">✎</button>
         <button
-          v-if="!confirming"
+          v-if="!confirming && !editing"
           class="close-btn"
           title="Delete session"
           @click="onClose($event, session.name)"
@@ -54,7 +92,18 @@ function cancelRemove(e) {
           </svg>
         </button>
       </div>
-      <div v-if="confirming" class="confirm-bar">
+      <div v-if="editing" class="rename-form" @click.stop @keydown.stop>
+        <input ref="nameInput" v-model="draft" aria-label="会话名称 / Session name"
+          :disabled="saving"
+          @keydown.enter="onRenameEnter"
+          @keydown.esc="!saving && (editing = false)" />
+        <div class="rename-actions">
+          <button type="button" :disabled="saving" @click="saveRename">{{ saving ? '保存中…' : '保存 / Save' }}</button>
+          <button type="button" :disabled="saving" @click="editing = false">取消 / Cancel</button>
+        </div>
+        <p v-if="error" role="alert">{{ error }}</p>
+      </div>
+      <div v-else-if="confirming" class="confirm-bar">
         <span class="confirm-text">Delete?</span>
         <button class="confirm-yes" @click="confirmRemove($event, session.name)">Yes</button>
         <button class="confirm-no" @click="cancelRemove($event)">No</button>
@@ -68,6 +117,29 @@ function cancelRemove(e) {
 </template>
 
 <style scoped>
+.rename-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  min-width: 32px;
+  min-height: 32px;
+}
+.rename-btn:hover, .rename-btn:focus-visible { color: var(--accent-primary); }
+.rename-form { display: grid; gap: 8px; padding-top: 6px; }
+.rename-form input {
+  width: 100%; min-width: 0; padding: 8px;
+  background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 4px;
+}
+.rename-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rename-actions button {
+  padding: 6px; cursor: pointer; background: var(--bg-primary);
+  color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px;
+}
+.rename-form [role="alert"] { font-size: 12px; color: var(--danger); overflow-wrap: anywhere; }
+
 .session-card {
   display: flex;
   align-items: center;

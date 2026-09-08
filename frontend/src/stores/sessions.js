@@ -36,6 +36,17 @@ export const useSessionStore = defineStore('sessions', () => {
     await fetchSessions()
   }
 
+  async function renameSession(name, displayName) {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: displayName })
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error)
+    await fetchSessions()
+  }
+
   async function stopSession(name) {
     const res = await fetch(`/api/sessions/${name}/stop`, { method: 'POST' })
     if (!res.ok) {
@@ -114,6 +125,7 @@ export const useSessionStore = defineStore('sessions', () => {
     fetchSessions,
     createSession,
     create,
+    renameSession,
     stopSession,
     restartSession,
     removeSession,

@@ -40,6 +40,14 @@ Open `http://localhost:3000`. The example uses loopback; configure authenticated
 
 Configuration: `HOST` defaults to `0.0.0.0` in code, overridden to `127.0.0.1` in the example. `PORT` defaults to 3000; `TTYD_PORT_RANGE_START` / `TTYD_PORT_RANGE_END` default to 7681 / 7780.
 
+## Chinese names and renaming
+
+Create sessions with Chinese text, spaces and symbols (1–80 Unicode characters after trimming; duplicate names and control characters are rejected). Empty creation names are generated automatically. Click **✎** in the sidebar to rename a running or stopped session; Enter saves and Escape cancels, with IME composition protected.
+
+Labels are separate from stable internal IDs, so renaming preserves the terminal connection and running tasks. Other browsers receive the updated label. `POST /api/sessions` accepts a display name in `name`; responses expose a stable `name` ID and a `displayName` label. Rename via `PATCH /api/sessions/:name` with `{"name":"新的中文名称"}`. Existing ASCII IDs stay compatible. Labels, like the session list, are in memory and do not automatically survive a Hub restart; use the internal ID to reattach surviving tmux sessions.
+
+Run `npm test` (requires ttyd and tmux) and `npm run build`.
+
 ## Copy and paste
 
 Select text and use the browser Copy action. Common shortcuts are Ctrl+Shift+C / Ctrl+Shift+V or Cmd+C / Cmd+V; browser/OS behavior varies. Focus the terminal before pasting. Ctrl+C without a selection normally interrupts a command. Optional tmux settings disable mouse capture; application mouse mode may require Shift+drag. Mobile selection and clipboard permissions vary. There is no custom copy button or cross-device clipboard sync. See the [guide](docs/clipboard.md).

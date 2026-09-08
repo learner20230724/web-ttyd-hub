@@ -11,6 +11,7 @@ const form = ref({
 });
 
 const loading = ref(false);
+const error = ref("");
 
 const nameHint = computed(() => {
   return form.value.name ? form.value.name : `${form.value.command}-auto`;
@@ -19,11 +20,12 @@ const nameHint = computed(() => {
 async function handleSubmit() {
   if (loading.value) return;
   loading.value = true;
+  error.value = "";
   try {
     await store.create(form.value);
     emit("close");
   } catch (e) {
-    console.error(e);
+    error.value = e.message;
   } finally {
     loading.value = false;
   }
@@ -45,9 +47,13 @@ async function handleSubmit() {
             v-model="form.name"
             type="text"
             :placeholder="nameHint"
-            @keyup.enter="handleSubmit"
+            @keydown.enter="!$event.isComposing && $event.keyCode !== 229 && handleSubmit()"
+            aria-describedby="name-help"
           />
         </label>
+
+        <p id="name-help">支持中文、空格，最多 80 个字符 / Chinese names supported</p>
+        <p v-if="error" role="alert">{{ error }}</p>
 
         <label class="form-group">
           <span class="label-text">Shell</span>

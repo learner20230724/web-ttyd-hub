@@ -20,6 +20,14 @@ module.exports = function (sessionManager) {
     }
   });
 
+  router.patch('/:name', (req, res) => {
+    try {
+      res.json(sessionManager.rename(req.params.name, req.body.name));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   router.post('/:name/stop', (req, res) => {
     try {
       const session = sessionManager.stop(req.params.name);

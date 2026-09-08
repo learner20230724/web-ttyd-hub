@@ -38,7 +38,7 @@ const iframeSrc = computed(() => {
 
         <template v-else>
           <p class="welcome__text">
-            Session <span class="highlight">{{ currentSession.name }}</span> is
+            Session <span class="highlight">{{ currentSession.displayName || currentSession.name }}</span> is
             currently stopped.
           </p>
           <p class="sub-text">Restart the session to continue.</p>

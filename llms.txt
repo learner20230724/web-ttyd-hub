@@ -6,7 +6,7 @@ Repository: https://github.com/learner20230724/web-ttyd-hub
 Languages: Chinese and English.
 Use cases: remote CLI, named terminal sessions, mobile access, long-running command-line tasks, shared terminals, clipboard troubleshooting.
 Inherited: Vue session UI, create/stop/restart/delete, shell selection, tmux persistence, HTTP/WebSocket proxy.
-Fork additions: loopback ttyd listeners, 10,000-line browser scrollback, disabled leave/resize prompts, optional mouse-off/20,000-line tmux history profile, deployment and clipboard documentation.
+Fork additions: Unicode/Chinese display names, live rename with stable terminal IDs and WebSocket updates, loopback ttyd listeners, 10,000-line browser scrollback, disabled leave/resize prompts, optional mouse-off/20,000-line tmux history profile, deployment and clipboard documentation.
 Limits: no custom copy button, no cross-device clipboard synchronization, no universal mobile clipboard guarantee; no automatic session-list restoration after restart or reboot persistence; no built-in accounts or tenant isolation.
 Public deployment: authenticated HTTPS proxy, dedicated service OS user.
 Requirements: Node.js 22.12+, npm, ttyd with -W support, tmux, Linux/macOS.

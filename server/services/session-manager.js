@@ -1,5 +1,6 @@
-const { spawn, execSync } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const net = require('net');
+const { randomUUID } = require('crypto');
 const EventEmitter = require('events');
 const PortManager = require('./port-manager');
 
@@ -80,20 +81,33 @@ class SessionManager extends EventEmitter {
     return shell.path;
   }
 
-  validateName(name) {
-    if (!name || !SESSION_NAME_RE.test(name)) {
-      throw new Error('Session name must contain only letters, numbers, hyphens and underscores');
+  validateDisplayName(value, exceptName) {
+    if (typeof value !== 'string') throw new Error('Session name must be text / 会话名称必须是文本');
+    const displayName = value.trim().normalize('NFC');
+    if (!displayName || Array.from(displayName).length > 80 || /[\p{Cc}\p{Cf}]/u.test(displayName)) {
+      throw new Error('Use 1–80 characters without control characters / 请输入 1–80 个字符，不含控制字符');
     }
-    if (this.sessions.has(name)) {
-      throw new Error(`Session "${name}" already exists`);
+    for (const session of this.sessions.values()) {
+      if (session.name !== exceptName && (session.displayName || session.name) === displayName) {
+        throw new Error('Session name already exists / 会话名称已存在');
+      }
     }
+    return displayName;
   }
 
-  async create(name, shell) {
-    if (!name) {
-      name = this.generateName(shell);
-    }
-    this.validateName(name);
+  rename(name, value) {
+    const session = this.getSession(name);
+    session.displayName = this.validateDisplayName(value, name);
+    this.emit('session:renamed', this.serialize(session));
+    return this.serialize(session);
+  }
+
+  async create(value, shell) {
+    if (value == null || value === '') value = this.generateName(shell);
+    const displayName = this.validateDisplayName(value);
+    // Keep legacy ASCII IDs compatible; labels never enter shell commands or URLs.
+    const name = SESSION_NAME_RE.test(displayName) && !this.sessions.has(displayName)
+      ? displayName : `session-${randomUUID()}`;
     const shellPath = this.resolveShell(shell);
     const port = await this.portManager.allocate();
 
@@ -121,6 +135,7 @@ class SessionManager extends EventEmitter {
 
     const session = {
       name,
+      displayName,
       port,
       pid: proc.pid,
       shell: shell || null,
@@ -143,6 +158,7 @@ class SessionManager extends EventEmitter {
     // Wait for ttyd to be ready
     try {
       await waitForPort(port);
+      this.validateDisplayName(displayName);
     } catch (err) {
       proc.kill('SIGTERM');
       this.portManager.release(port);
@@ -177,7 +193,7 @@ class SessionManager extends EventEmitter {
     }
     // Kill tmux session
     try {
-      execSync(`tmux kill-session -t ${name}`, { stdio: 'ignore' });
+      execFileSync('tmux', ['kill-session', '-t', `=${name}`], { stdio: 'ignore' });
     } catch (_) {
       // tmux session may not exist
     }

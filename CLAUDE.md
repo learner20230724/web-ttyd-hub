@@ -184,3 +184,7 @@ Currently no test runner or test files are configured in the codebase.
 - **Backend**: Express 4.21.2, ws 8.18.0, http-proxy-middleware 3.0.3, dotenv 16.4.7
 - **Frontend**: Vue 3.5.24, Vite 7.2.4, Pinia 3.0.4
 - **External**: ttyd and tmux must be installed on the system
+
+## Session labels
+
+`name` is the stable ASCII ID used for tmux, URLs, store selection and component keys. `displayName` is a mutable Unicode label. POST accepts a label as `name`; PATCH `/api/sessions/:name` changes only the label and broadcasts `session:renamed`. Never place labels in shell commands or terminal URLs. Labels are in-memory metadata. `npm test` covers Unicode validation and live terminal rename against an isolated tmux socket.
