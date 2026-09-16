@@ -1,10 +1,43 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
+import { LAYOUT_KEY, normalizeLayout, orderedSessions, moveSession } from '../utils/session-layout.mjs'
 
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref([])
   const shells = ref([])
   const current = ref(null)
+  const layout = ref(normalizeLayout(null))
+  const layoutError = ref('')
+  try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))) } catch {}
+  const sortedSessions = computed(() => orderedSessions(sessions.value, layout.value))
+  const isPinned = name => layout.value.pinned.includes(name)
+  function saveLayout(value) {
+    layout.value = value
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(value))
+      layoutError.value = ''
+    } catch {
+      layoutError.value = '无法保存排列，刷新后可能丢失。请允许浏览器存储。'
+    }
+  }
+  function togglePin(name) {
+    const pinned = isPinned(name) ? layout.value.pinned.filter(x => x !== name) : [...layout.value.pinned, name]
+    saveLayout({ order: [name, ...sortedSessions.value.map(s => s.name).filter(x => x !== name)], pinned })
+  }
+  function reorderSession(name, target, after) {
+    saveLayout(moveSession(sessions.value, layout.value, name, target, after))
+  }
+  function moveByKeyboard(name, direction) {
+    const group = sortedSessions.value.filter(s => isPinned(s.name) === isPinned(name))
+    const target = group[group.findIndex(s => s.name === name) + direction]
+    if (target) reorderSession(name, target.name, direction > 0)
+  }
+  function syncLayout(event) {
+    if (event.key !== LAYOUT_KEY && event.key !== null) return
+    try { layout.value = normalizeLayout(JSON.parse(event.newValue)) } catch {}
+  }
+  window.addEventListener('storage', syncLayout)
+  onScopeDispose(() => window.removeEventListener('storage', syncLayout))
   let ws = null
   let reconnectTimer = null
   let reconnectDelay = 1000
@@ -119,6 +152,12 @@ export const useSessionStore = defineStore('sessions', () => {
 
   return {
     sessions,
+    sortedSessions,
+    layoutError,
+    isPinned,
+    togglePin,
+    reorderSession,
+    moveByKeyboard,
     shells,
     current,
     init,

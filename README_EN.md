@@ -46,6 +46,10 @@ Wheel up inside the terminal to open a native, selectable **History** view. Scro
 
 History preserves terminal ANSI styling: 16/256 colors, RGB, backgrounds, bold, dim, italic, underline and inverse. Selection copies plain text. Styles come from the retained tmux output, not inferred syntax highlighting.
 
+## Session ordering and pins
+
+Drag the **⠿** handle to reorder sessions with a mouse or touch. Toggle the pin button to keep a session above ordinary sessions; reorder within each group. Focus the handle and use Up/Down for keyboard ordering, or Escape to cancel a drag. Preferences persist in this browser's localStorage and sync between same-origin tabs, not across devices. Reordering does not switch the selected session or recreate its terminal.
+
 ## Chinese names and renaming
 
 Create sessions with Chinese text, spaces and symbols (1–80 Unicode characters after trimming; duplicate names and control characters are rejected). Empty creation names are generated automatically. Click **✎** in the sidebar to rename a running or stopped session; Enter saves and Escape cancels, with IME composition protected.

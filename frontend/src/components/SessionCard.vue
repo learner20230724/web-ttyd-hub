@@ -8,6 +8,7 @@ const props = defineProps({
   collapsed: Boolean,
 });
 
+const emit = defineEmits(["drag-start"]);
 const store = useSessionStore();
 const confirming = ref(false);
 const editing = ref(false);
@@ -70,14 +71,29 @@ function cancelRemove(e) {
 <template>
   <div
     class="session-card"
-    :class="{ active, collapsed }"
+    :class="{ active, collapsed, pinned: store.isPinned(session.name) }"
+    :data-session-id="session.name"
     :title="session.displayName || session.name"
   >
+    <button v-if="!collapsed && !editing && !confirming" class="drag-handle" type="button"
+      title="拖动排序；也可按上下方向键" :aria-label="`拖动排序 ${session.displayName || session.name}`"
+      @pointerdown.stop="emit('drag-start', $event, session.name)" @click.stop
+      @keydown.up.prevent.stop="store.moveByKeyboard(session.name, -1)"
+      @keydown.down.prevent.stop="store.moveByKeyboard(session.name, 1)">⠿</button>
     <div class="status-indicator" :class="session.status"></div>
 
     <div class="card-content" v-show="!collapsed">
       <div class="card-top">
         <div class="session-name">{{ session.displayName || session.name }}</div>
+        <button v-if="!confirming && !editing" class="pin-btn" type="button"
+          :class="{ selected: store.isPinned(session.name) }" :aria-pressed="store.isPinned(session.name)"
+          :title="store.isPinned(session.name) ? '取消置顶' : '置顶会话'"
+          :aria-label="store.isPinned(session.name) ? '取消置顶' : '置顶会话'"
+          @click.stop="store.togglePin(session.name)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M9 3h6l-1 6 4 4v2H6v-2l4-4-1-6zM12 15v6" />
+          </svg>
+        </button>
         <button v-if="!confirming && !editing" class="rename-btn" type="button"
           title="重命名 / Rename" aria-label="重命名会话 / Rename session"
           @click.stop="startRename">✎</button>
@@ -117,6 +133,13 @@ function cancelRemove(e) {
 </template>
 
 <style scoped>
+.drag-handle { background: none; border: 0; padding: 4px 0; min-width: 22px; min-height: 36px; color: var(--text-tertiary); font-size: 22px; cursor: grab; touch-action: none; flex-shrink: 0; }
+.drag-handle:active { cursor: grabbing; }
+.pin-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 32px; padding: 4px; border: 1px solid transparent; border-radius: 4px; background: none; color: var(--text-tertiary); cursor: pointer; }
+.pin-btn.selected { color: var(--accent-primary); background: var(--accent-dim); }
+.pin-btn:hover { border-color: var(--border-color); }
+.session-card.pinned { border-left-color: var(--accent-primary); }
+
 .rename-btn {
   background: none;
   border: 1px solid var(--border-color);
@@ -143,8 +166,8 @@ function cancelRemove(e) {
 .session-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 10px 8px;
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.2s;
