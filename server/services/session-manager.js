@@ -1,6 +1,6 @@
 const { spawn, execFile, execFileSync } = require('child_process');
 const net = require('net');
-const { promisify } = require('util');
+const { promisify, stripVTControlCharacters } = require('util');
 const runFile = promisify(execFile);
 const { randomUUID } = require('crypto');
 const EventEmitter = require('events');
@@ -271,9 +271,9 @@ class SessionManager extends EventEmitter {
     const session = this.getSession(name);
     try {
       const { stdout } = await runFile('tmux', [
-        'capture-pane', '-p', '-J', '-S', '-20000', '-t', `=${session.name}:`
+        'capture-pane', '-p', '-e', '-J', '-S', '-20000', '-t', `=${session.name}:`
       ], { env: SPAWN_ENV, encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
-      return { name: session.name, text: stdout, capturedAt: new Date().toISOString() };
+      return { name: session.name, text: stripVTControlCharacters(stdout), ansi: stdout, capturedAt: new Date().toISOString() };
     } catch (_) {
       throw new Error('History is unavailable: the tmux pane may have exited / 暂无历史输出，终端可能尚未连接或已退出');
     }

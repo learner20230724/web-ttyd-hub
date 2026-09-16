@@ -44,6 +44,8 @@ Configuration: `HOST` defaults to `0.0.0.0` in code, overridden to `127.0.0.1` i
 
 Wheel up inside the terminal to open a native, selectable **History** view. Scroll with the wheel, scrollbar or touch; click **Live** or press Escape to return to the still-connected terminal. The view reads the active tmux pane's retained output (up to 20,000 preceding lines) without sending keys or changing tmux modes. Refresh updates the snapshot. Wheel down at the live terminal does not send arrows; Ctrl+wheel retains browser zoom. Lost, overwritten or discarded terminal output cannot be recovered. The history endpoint inherits site authentication and uses `Cache-Control: no-store`.
 
+History preserves terminal ANSI styling: 16/256 colors, RGB, backgrounds, bold, dim, italic, underline and inverse. Selection copies plain text. Styles come from the retained tmux output, not inferred syntax highlighting.
+
 ## Chinese names and renaming
 
 Create sessions with Chinese text, spaces and symbols (1–80 Unicode characters after trimming; duplicate names and control characters are rejected). Empty creation names are generated automatically. Click **✎** in the sidebar to rename a running or stopped session; Enter saves and Escape cancels, with IME composition protected.

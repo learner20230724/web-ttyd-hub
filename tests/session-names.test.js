@@ -90,10 +90,20 @@ test('Chinese creation and rename preserve the live terminal, broadcast, and lif
     assert.equal(terminal.readyState, WebSocket.OPEN);
     terminal.send(Buffer.from("0printf '%s%s\\n' HUB_RENAME_ STILL_ALIVE\r"));
     await until(() => output.includes('HUB_RENAME_STILL_ALIVE'));
+    terminal.send(Buffer.from("0printf '\\033[1;31mHUB_COLOR\\033[0m\\n'\r"));
+    await until(() => output.includes('HUB_COLOR'));
+    // Verify the emitted color, not just the echoed printf command.
+    const { ansiToRuns } = await import('../frontend/src/utils/ansi.mjs');
+    await until(async () => ansiToRuns((await api(url + '/history')).data.ansi || '').some(
+      run => run.text.includes('HUB_COLOR') && run.style.fontWeight === '700' && run.style.color === '#ef2929'
+    ));
     const history = await api(url + '/history');
     assert.equal(history.status, 200);
     assert.ok(history.data.text.includes('HUB_RENAME_STILL_ALIVE'));
     assert.equal(history.data.name, session.name);
+    assert.ok(history.data.ansi.includes('\x1b['));
+    assert.ok(!history.data.text.includes('\x1b'));
+    assert.ok(history.data.text.includes('HUB_COLOR'));
     assert.equal((await api('/api/sessions/not-a-session/history')).status, 400);
     assert.equal((await fetch(base + url + '/history')).headers.get('cache-control'), 'no-store');
     assert.equal(terminal.readyState, WebSocket.OPEN);

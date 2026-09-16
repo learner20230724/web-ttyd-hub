@@ -2,6 +2,8 @@
 import { computed, ref, watch, nextTick, onBeforeUnmount } from "vue";
 import { useSessionStore } from "../stores/sessions";
 
+import { ansiToRuns } from "../utils/ansi.mjs";
+
 const store = useSessionStore();
 const emit = defineEmits(["create"]);
 
@@ -19,6 +21,7 @@ const terminalFrame = ref(null);
 const historyPane = ref(null);
 const historyOpen = ref(false);
 const historyText = ref('');
+const historyRuns = computed(() => ansiToRuns(historyText.value));
 const historyLoading = ref(false);
 const historyError = ref('');
 let detachWheel = () => {};
@@ -38,7 +41,7 @@ async function openHistory(fromWheel = false) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     if (controller.signal.aborted || currentSession.value?.name !== name) return;
-    historyText.value = data.text;
+    historyText.value = data.ansi ?? data.text;
     await nextTick();
     if (historyPane.value) {
       const pane = historyPane.value;
@@ -124,13 +127,13 @@ onBeforeUnmount(() => { detachWheel(); requestController?.abort(); });
     </button>
     <section v-if="historyOpen" class="history-panel" aria-label="历史输出 / Terminal history" @keydown.esc="closeHistory">
       <header class="history-toolbar">
-        <span>历史输出 · 可滚动、拖选复制</span>
+        <span>历史输出 · 保留颜色、可拖选复制</span>
         <button :disabled="historyLoading" @click="openHistory(false)">刷新 / Refresh</button>
         <button @click="closeHistory">回到终端 / Live</button>
       </header>
       <p v-if="historyLoading" class="history-notice" role="status">正在读取历史输出…</p>
       <p v-if="historyError" class="history-notice" role="alert">{{ historyError }}</p>
-      <pre ref="historyPane" class="history-output" tabindex="0" aria-label="历史内容 / History content">{{ historyText }}</pre>
+      <pre ref="historyPane" class="history-output" tabindex="0" aria-label="历史内容 / History content"><span v-for="(run, index) in historyRuns" :key="index" :style="run.style">{{ run.text }}</span></pre>
     </section>
 
   </div>
@@ -143,7 +146,7 @@ onBeforeUnmount(() => { detachWheel(); requestController?.abort(); });
   border: 1px solid var(--border-color); border-radius: 6px;
   padding: 8px 12px; cursor: pointer;
 }
-.history-panel { position: absolute; inset: 0; display: flex; flex-direction: column; background: #080b10; color: #e2e8f0; z-index: 2; }
+.history-panel { position: absolute; inset: 0; display: flex; flex-direction: column; background: #000000; color: #ffffff; z-index: 2; }
 .history-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--border-color); }
 .history-toolbar span { flex: 1; font-size: 13px; }
 .history-output { flex: 1; min-height: 0; margin: 0; padding: 16px; overflow: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; user-select: text; touch-action: pan-y; scrollbar-gutter: stable; }
