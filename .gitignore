@@ -10,3 +10,8 @@ frontend/.vscode/
 !.env.example
 *.pem
 *.key
+android/.gradle/
+android/**/build/
+android/local.properties
+*.jks
+*.keystore

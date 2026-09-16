@@ -19,6 +19,7 @@ const iframeSrc = computed(() => {
 
 const terminalFrame = ref(null);
 const historyPane = ref(null);
+const touchDevice = window.matchMedia('(pointer: coarse)').matches;
 const historyOpen = ref(false);
 const historyText = ref('');
 const historyRuns = computed(() => ansiToRuns(historyText.value));
@@ -136,7 +137,35 @@ function bindWheel() {
     if (event.deltaY < 0 && !historyOpen.value) openHistory(true);
   };
   doc.addEventListener('wheel', onWheel, { capture: true, passive: false });
-  detachWheel = () => doc.removeEventListener('wheel', onWheel, true);
+  let touchStart = null;
+  const onTouchStart = event => {
+    touchStart = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY, time: Date.now() } : null;
+  };
+  const onTouchMove = event => {
+    if (!touchStart || event.touches.length !== 1 || Date.now() - touchStart.time > 450 ||
+        doc.defaultView?.term?.getSelection?.()) return;
+    const dx = event.touches[0].clientX - touchStart.x;
+    const dy = event.touches[0].clientY - touchStart.y;
+    // Reserve a quick vertical gesture for history, not xterm's arrow-key emulation.
+    // Long presses, selection dragging and two-finger zoom keep their native behavior.
+    if (Math.abs(dy) > Math.abs(dx)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (Math.abs(dy) > 28) { touchStart = null; openHistory(true); }
+    }
+  };
+  const onTouchEnd = () => { touchStart = null; };
+  doc.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
+  doc.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+  doc.addEventListener('touchend', onTouchEnd, true);
+  doc.addEventListener('touchcancel', onTouchEnd, true);
+  detachWheel = () => {
+    doc.removeEventListener('wheel', onWheel, true);
+    doc.removeEventListener('touchstart', onTouchStart, true);
+    doc.removeEventListener('touchmove', onTouchMove, true);
+    doc.removeEventListener('touchend', onTouchEnd, true);
+    doc.removeEventListener('touchcancel', onTouchEnd, true);
+  };
 }
 
 watch(iframeSrc, () => {
@@ -191,12 +220,12 @@ onBeforeUnmount(() => { detachWheel(); requestController?.abort(); });
       <header class="history-toolbar">
         <span>历史输出 · 输入或粘贴即可返回终端</span>
         <button :disabled="historyLoading" @click="openHistory(false)">刷新 / Refresh</button>
-        <button @click="closeHistory">回到终端 / Live</button>
+        <button data-action="close-history" @click="closeHistory">回到终端 / Live</button>
       </header>
       <p v-if="historyLoading" class="history-notice" role="status">正在读取历史输出…</p>
       <p v-if="historyError" class="history-notice" role="alert">{{ historyError }}</p>
       <pre :key="historyRevision" ref="historyPane" class="history-output" tabindex="0"
-        contenteditable="true" spellcheck="false" autocapitalize="off" autocorrect="off"
+        :inputmode="touchDevice ? 'none' : 'text'" contenteditable="true" spellcheck="false" autocapitalize="off" autocorrect="off"
         aria-label="历史内容，输入或粘贴返回终端 / History content"
         @beforeinput="historyBeforeInput" @paste="historyPaste"
         @compositionstart="historyCompositionStart" @compositionend="historyCompositionEnd"
