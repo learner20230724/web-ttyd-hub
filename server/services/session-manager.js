@@ -1,5 +1,7 @@
-const { spawn, execFileSync } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 const net = require('net');
+const { promisify } = require('util');
+const runFile = promisify(execFile);
 const { randomUUID } = require('crypto');
 const EventEmitter = require('events');
 const PortManager = require('./port-manager');
@@ -263,6 +265,18 @@ class SessionManager extends EventEmitter {
 
     this.emit('session:created', this.serialize(session));
     return this.serialize(session);
+  }
+
+  async history(name) {
+    const session = this.getSession(name);
+    try {
+      const { stdout } = await runFile('tmux', [
+        'capture-pane', '-p', '-J', '-S', '-20000', '-t', `=${session.name}:`
+      ], { env: SPAWN_ENV, encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
+      return { name: session.name, text: stdout, capturedAt: new Date().toISOString() };
+    } catch (_) {
+      throw new Error('History is unavailable: the tmux pane may have exited / 暂无历史输出，终端可能尚未连接或已退出');
+    }
   }
 
   getSession(name) {

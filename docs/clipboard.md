@@ -22,6 +22,9 @@ This optional user-wide profile disables tmux mouse capture, raises history for 
 
 ## 历史输出
 
+终端内向上滚动或点击「历史输出」可打开浏览器原生滚动视图，使用滚轮、滚动条或手机滑动查看，文字可以直接拖选复制。此视图从 tmux 捕获当前窗格的历史与可见输出，不会向 Codex/其他命令行程序发送上下键，也不会改变共享会话模式。点击「刷新」更新快照；「回到终端」或 Esc 返回交互界面。已经被应用覆盖或被 tmux 丢弃的内容无法恢复。
+
+
 ttyd 使用 `scrollback=10000`。刷新或切换导致 iframe 重建时，浏览器缓冲可能丢失。tmux 历史与浏览器滚动条不同；默认 tmux 前缀下按 Ctrl+B 后按 `[` 进入复制模式，`q` 退出。长期日志应写入文件。
 
 ## 手机与故障排查

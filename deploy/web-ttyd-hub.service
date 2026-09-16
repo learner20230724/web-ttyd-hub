@@ -12,6 +12,8 @@ Environment=HOST=127.0.0.1
 Environment=PORT=3000
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/node server/index.js
+# Preserve tmux workloads across Hub restarts; Node cleans up its ttyd children.
+KillMode=process
 Restart=on-failure
 RestartSec=3
 

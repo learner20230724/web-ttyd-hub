@@ -40,6 +40,10 @@ Open `http://localhost:3000`. The example uses loopback; configure authenticated
 
 Configuration: `HOST` defaults to `0.0.0.0` in code, overridden to `127.0.0.1` in the example. `PORT` defaults to 3000; `TTYD_PORT_RANGE_START` / `TTYD_PORT_RANGE_END` default to 7681 / 7780.
 
+## Scroll history without sending arrow keys
+
+Wheel up inside the terminal to open a native, selectable **History** view. Scroll with the wheel, scrollbar or touch; click **Live** or press Escape to return to the still-connected terminal. The view reads the active tmux pane's retained output (up to 20,000 preceding lines) without sending keys or changing tmux modes. Refresh updates the snapshot. Wheel down at the live terminal does not send arrows; Ctrl+wheel retains browser zoom. Lost, overwritten or discarded terminal output cannot be recovered. The history endpoint inherits site authentication and uses `Cache-Control: no-store`.
+
 ## Chinese names and renaming
 
 Create sessions with Chinese text, spaces and symbols (1–80 Unicode characters after trimming; duplicate names and control characters are rejected). Empty creation names are generated automatically. Click **✎** in the sidebar to rename a running or stopped session; Enter saves and Escape cancels, with IME composition protected.

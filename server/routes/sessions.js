@@ -20,6 +20,15 @@ module.exports = function (sessionManager) {
     }
   });
 
+  router.get('/:name/history', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      res.json(await sessionManager.history(req.params.name));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   router.patch('/:name', (req, res) => {
     try {
       res.json(sessionManager.rename(req.params.name, req.body.name));

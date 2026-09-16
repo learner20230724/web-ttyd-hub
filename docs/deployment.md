@@ -9,7 +9,7 @@
 3. 检查 `deploy/web-ttyd-hub.service` 中路径与用户，将 `/usr/bin/node` 改为本机 Node 实际路径；确保服务 PATH 可找到 ttyd 和 tmux。
 4. 将模板复制到 `/etc/systemd/system/web-ttyd-hub.service`，运行 `sudo systemctl daemon-reload` 和 `sudo systemctl enable --now web-ttyd-hub`。
 
-systemd 停止服务默认会清理服务进程组；浏览器断开保活不等于服务重启保活。
+模板使用 `KillMode=process`，只终止 Hub 主进程，由 Hub 清理 ttyd，保留 tmux 和其中的任务。已有部署应先检查停止策略，默认 `control-group` 会连同任务一起终止。此策略也意味着停止 Hub 后任务继续占用资源；彻底关闭任务应先在界面删除会话。Hub 会话列表仍在内存中，重启后需要用原内部 ID 重新建立入口，不等于机器重启恢复。
 
 ## Caddy HTTPS 与认证
 
