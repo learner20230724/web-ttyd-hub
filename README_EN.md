@@ -46,6 +46,8 @@ Wheel up inside the terminal to open a native, selectable **History** view. Scro
 
 History preserves terminal ANSI styling: 16/256 colors, RGB, backgrounds, bold, dim, italic, underline and inverse. Selection copies plain text. Styles come from the retained tmux output, not inferred syntax highlighting.
 
+Typing or pasting in the history content returns to the live terminal and forwards that input, including the first character. IME input is forwarded after composition commits; copying and scrolling stay in history. Paste uses xterm’s bracketed-paste path without adding Enter.
+
 ## Session ordering and pins
 
 Drag the **⠿** handle to reorder sessions with a mouse or touch. Toggle the pin button to keep a session above ordinary sessions; reorder within each group. Focus the handle and use Up/Down for keyboard ordering, or Escape to cancel a drag. Preferences persist in this browser's localStorage and sync between same-origin tabs, not across devices. Reordering does not switch the selected session or recreate its terminal.

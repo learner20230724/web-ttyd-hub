@@ -24,6 +24,9 @@ const historyText = ref('');
 const historyRuns = computed(() => ansiToRuns(historyText.value));
 const historyLoading = ref(false);
 const historyError = ref('');
+const historyRevision = ref(0);
+let composing = false;
+let compositionScroll = 0;
 let detachWheel = () => {};
 let requestController = null;
 
@@ -47,7 +50,7 @@ async function openHistory(fromWheel = false) {
       const pane = historyPane.value;
       // Start near the latest output; the first wheel-up reveals the preceding screen.
       pane.scrollTop = pane.scrollHeight - pane.clientHeight - (fromWheel ? pane.clientHeight * 0.6 : 0);
-      pane.focus();
+      pane.focus({ preventScroll: true });
     }
   } catch (err) {
     if (!controller.signal.aborted) historyError.value = err.message;
@@ -56,11 +59,69 @@ async function openHistory(fromWheel = false) {
   }
 }
 
+function terminalInput(text) {
+  if (!historyOpen.value || !text) return false;
+  const term = terminalFrame.value?.contentWindow?.term;
+  if (!term?.paste || term.options?.disableStdin || currentSession.value?.status !== 'running') {
+    historyError.value = '终端尚未就绪，请回到终端连接后再输入。';
+    return false;
+  }
+  // Use xterm's own paste path, including bracketed-paste handling for multiline text.
+  // Never synthesize individual key events or add an Enter after pasted content.
+  term.paste(text);
+  closeHistory();
+  return true;
+}
+
+function historyBeforeInput(event) {
+  if (!historyOpen.value) { event.preventDefault(); return; }
+  if (composing || event.isComposing || event.inputType === 'insertCompositionText') return;
+  event.preventDefault(); // Keep the snapshot immutable (including deletion/formatting).
+  if (event.inputType === 'insertText' || event.inputType === 'insertReplacementText') {
+    terminalInput(event.data);
+  }
+}
+
+function historyPaste(event) {
+  event.preventDefault();
+  const text = event.clipboardData?.getData('text/plain');
+  if (text) terminalInput(text);
+}
+
+function historyCompositionStart() {
+  composing = true;
+  compositionScroll = historyPane.value?.scrollTop || 0;
+}
+
+function historyCompositionEnd(event) {
+  composing = false;
+  if (!historyOpen.value) return;
+  // The browser temporarily owns the editable DOM during IME composition.
+  // A fresh pre restores the snapshot after cancellation or an unavailable terminal.
+  if (!terminalInput(event.data)) {
+    historyRevision.value++;
+    nextTick(() => {
+      historyPane.value?.focus({ preventScroll: true });
+      if (historyPane.value) historyPane.value.scrollTop = compositionScroll;
+    });
+  }
+}
+
+function historyKeydown(event) {
+  if (event.key === 'Escape' && !composing && !event.isComposing) {
+    event.preventDefault();
+    closeHistory();
+  }
+}
+
 function closeHistory() {
   requestController?.abort();
   historyLoading.value = false;
   historyOpen.value = false;
-  terminalFrame.value?.contentWindow?.focus();
+  composing = false;
+  const win = terminalFrame.value?.contentWindow;
+  if (win?.term?.focus) win.term.focus();
+  else win?.focus();
 }
 
 function bindWheel() {
@@ -85,6 +146,7 @@ watch(iframeSrc, () => {
   historyLoading.value = false;
   historyText.value = '';
   historyError.value = '';
+  composing = false;
 });
 
 onBeforeUnmount(() => { detachWheel(); requestController?.abort(); });
@@ -125,15 +187,20 @@ onBeforeUnmount(() => { detachWheel(); requestController?.abort(); });
     <button v-if="currentSession && !historyOpen" class="history-toggle" @click="openHistory(false)">
       历史输出 / History
     </button>
-    <section v-if="historyOpen" class="history-panel" aria-label="历史输出 / Terminal history" @keydown.esc="closeHistory">
+    <section v-if="historyOpen" class="history-panel" aria-label="历史输出 / Terminal history" @keydown="historyKeydown">
       <header class="history-toolbar">
-        <span>历史输出 · 保留颜色、可拖选复制</span>
+        <span>历史输出 · 输入或粘贴即可返回终端</span>
         <button :disabled="historyLoading" @click="openHistory(false)">刷新 / Refresh</button>
         <button @click="closeHistory">回到终端 / Live</button>
       </header>
       <p v-if="historyLoading" class="history-notice" role="status">正在读取历史输出…</p>
       <p v-if="historyError" class="history-notice" role="alert">{{ historyError }}</p>
-      <pre ref="historyPane" class="history-output" tabindex="0" aria-label="历史内容 / History content"><span v-for="(run, index) in historyRuns" :key="index" :style="run.style">{{ run.text }}</span></pre>
+      <pre :key="historyRevision" ref="historyPane" class="history-output" tabindex="0"
+        contenteditable="true" spellcheck="false" autocapitalize="off" autocorrect="off"
+        aria-label="历史内容，输入或粘贴返回终端 / History content"
+        @beforeinput="historyBeforeInput" @paste="historyPaste"
+        @compositionstart="historyCompositionStart" @compositionend="historyCompositionEnd"
+        @drop.prevent @cut.prevent><span v-for="(run, index) in historyRuns" :key="index" :style="run.style">{{ run.text }}</span></pre>
     </section>
 
   </div>
