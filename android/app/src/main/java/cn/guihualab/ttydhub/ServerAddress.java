@@ -30,5 +30,9 @@ public final class ServerAddress {
             return a.getScheme().equalsIgnoreCase(b.getScheme()) && a.getHost().equalsIgnoreCase(b.getHost()) && port(a) == port(b);
         } catch (Exception e) { return false; }
     }
+    public static String authScope(String address, String realm) {
+        URI uri = URI.create(address);
+        return uri.getScheme().toLowerCase(Locale.ROOT) + "://" + uri.getHost().toLowerCase(Locale.ROOT) + ":" + port(uri) + "/" + (realm == null ? "" : realm);
+    }
     private static int port(URI uri) { return uri.getPort() >= 0 ? uri.getPort() : "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80; }
 }

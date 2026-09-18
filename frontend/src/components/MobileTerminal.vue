@@ -4,11 +4,28 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { ansiToRuns } from '../utils/ansi.mjs'
 import { useSessionStore } from '../stores/sessions'
+const props = defineProps({ showExecution: Boolean, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const content = ref({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
 const pane = ref(null), follow = ref(true)
 const drafts = new Map()
+const pendingBySession = ref({})
+const transcriptIds = new Map()
+const pendingMessages = computed(() => pendingBySession.value[store.current] || [])
+function reconcilePending(name, messages) {
+  if (!messages) return
+  const pending = pendingBySession.value[name] || []
+  const matched = new Set()
+  pendingBySession.value[name] = pending.filter(item => {
+    const message = messages.find(m => m.role === 'user' && !matched.has(m.id) && !item.before.includes(m.id) && m.text.trim() === item.text.trim())
+    if (message) { matched.add(message.id); return false }
+    item.before = [...new Set([...item.before, ...messages.map(m => m.id)])]
+    return true
+  })
+  transcriptIds.set(name, messages.map(m => m.id))
+}
+function dismissPending(id) { pendingBySession.value[store.current] = pendingMessages.value.filter(item => item.id !== id) }
 const messages = computed(() => (content.value.messages || []).map(m => ({ ...m, html: DOMPurify.sanitize(marked.parse(m.text), { FORBID_TAGS: ['img'], FORBID_ATTR: ['style'] }) })))
 const runs = computed(() => ansiToRuns(content.value.ansi || content.value.text || ''))
 let controller, timer, disposed = false
@@ -22,9 +39,17 @@ async function refresh() {
   controller?.abort(); const c = new AbortController(); controller = c
   try {
     const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/mobile`, { signal: c.signal })
-    const data = await res.json()
-    delete data.capturedAt
+    let data = await res.json()
     if (!res.ok) throw new Error(data.error)
+    if (c.signal.aborted || session.value?.name !== name) return
+    reconcilePending(name, data.messages)
+    if (props.showExecution) {
+      // Read the shared pane without attaching a phone-sized terminal client.
+      const history = await fetch(`/api/sessions/${encodeURIComponent(name)}/history`, { signal: c.signal })
+      data = await history.json()
+      if (!history.ok) throw new Error(data.error)
+    }
+    delete data.capturedAt
     if (c.signal.aborted || session.value?.name !== name) return
     // Don't replace DOM when unchanged: preserve selection, copying and reading position.
     if (JSON.stringify(content.value) !== JSON.stringify(data)) {
@@ -40,32 +65,56 @@ watch(() => store.current, (name, previous) => {
   draft.value = drafts.get(name) || ''; content.value = {}; error.value = ''; follow.value = true; more.value = false
   controller?.abort(); refresh()
 }, { immediate: true })
+watch(() => props.showExecution, () => {
+  controller?.abort(); content.value = {}; follow.value = true; refresh()
+})
+watch(() => props.fontSize, async () => { if (follow.value) await bottom() })
 async function send(key = 'Enter', withText = true) {
   if (sending.value || !session.value) return
   const name = session.value.name, text = withText ? draft.value : ''
   sending.value = true; error.value = ''
+  const pending = text && key === 'Enter' ? { id: `${Date.now()}-${Math.random()}`, text, status: 'sending', before: transcriptIds.get(name) || [] } : null
+  if (pending) {
+    pendingBySession.value[name] = [...(pendingBySession.value[name] || []), pending]
+    await bottom()
+  }
   try {
     const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, key }) })
     const data = await res.json(); if (!res.ok) throw new Error(data.error)
+    if (pending) {
+      const item = pendingBySession.value[name]?.find(item => item.id === pending.id)
+      if (item) item.status = 'delivered'
+    }
     if (withText) { drafts.delete(name); if (store.current === name && draft.value === text) draft.value = '' }
     if (store.current === name) { await bottom(); refresh() }
-  } catch (e) { error.value = `未确认发送成功，请检查终端后重试：${e.message}` }
+  } catch (e) {
+    const item = pending && pendingBySession.value[name]?.find(item => item.id === pending.id)
+    if (item) item.status = 'uncertain'
+    error.value = `未确认发送成功，请检查终端后重试：${e.message}`
+  }
   finally { sending.value = false }
 }
 onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort() })
 </script>
 <template>
-  <section class="mobile-terminal">
+  <section class="mobile-terminal" :style="{ '--reading-size': `${fontSize}px` }">
     <template v-if="session">
       <div class="mobile-session-title">{{ session.displayName || session.name }}<span>{{ session.activity?.busy ? '正在回答…' : session.status === 'running' ? '已连接' : '已停止' }}</span></div>
       <div ref="pane" class="mobile-reading" @scroll.passive="scrolled">
-        <template v-if="messages.length">
+        <template v-if="!showExecution && messages.length">
           <article v-for="message in messages" :key="message.id" :class="['message', message.role]">
             <div class="speaker">{{ message.role === 'user' ? '你' : 'Codex' }}</div>
             <div class="markdown" v-html="message.html"></div>
           </article>
         </template>
         <pre v-else class="mobile-output"><span v-for="(run, i) in runs" :key="i" :style="run.style">{{ run.text }}</span></pre>
+        <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" role="status">
+          <div class="pending-text">{{ item.text }}</div>
+          <div class="pending-status">
+            <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? '已送达终端 · 等待 Codex 接收，通常在下一次工具调用后' : '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
+            <button v-if="item.status !== 'sending'" type="button" aria-label="关闭发送提示" @click="dismissPending(item.id)">×</button>
+          </div>
+        </article>
       </div>
       <button v-if="!follow" class="latest" @click="bottom">↓ 回到最新</button>
       <p v-if="error" class="mobile-error" role="alert">{{ error }}</p>
@@ -84,20 +133,25 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
 .mobile-session-title { padding:10px 16px; font-size:14px; border-bottom:1px solid #263143; overflow-wrap:anywhere }
 .mobile-session-title span { float:right; color:#91a0b7; font-size:12px; margin-left:8px }
 .mobile-reading { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px; touch-action:pan-y; }
-.message { margin:0 0 24px; line-height:1.75; font-size:16px; overflow-wrap:anywhere; user-select:text }
+.message { margin:0 0 24px; line-height:1.75; font-size:var(--reading-size); overflow-wrap:anywhere; user-select:text }
+.pending-message { margin:16px 0; padding:12px 14px; border:1px dashed #52729b; border-radius:14px; background:#18273d; }
+.pending-text { font-size:var(--reading-size); white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.6; }
+.pending-status { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px; font-size:12px; color:#93c5fd; }
+.pending-status button { min-height:32px; min-width:32px; padding:0; background:transparent; font-size:20px; }
+.pending-message.uncertain { border-color:#fda4af; }.uncertain .pending-status { color:#fda4af; }
 .message.user { background:#1c2a40; border-radius:14px; padding:12px 14px; }
 .speaker { color:#7dd3fc; font-size:12px; font-weight:600; margin-bottom:8px }
 .user .speaker { color:#c4b5fd }
 .markdown :deep(p) { margin:0 0 12px; white-space:pre-wrap }
-.markdown :deep(pre) { background:#060b13; padding:12px; border-radius:8px; overflow-x:auto; white-space:pre; font:13px/1.6 monospace; margin:12px 0 }
+.markdown :deep(pre) { background:#060b13; padding:12px; border-radius:8px; overflow-x:auto; white-space:pre; font:calc(var(--reading-size) * .85)/1.6 monospace; margin:12px 0 }
 .markdown :deep(code) { color:#a5e7d4; font-family:monospace }
 .markdown :deep(strong) { color:#f8d58b }
 .markdown :deep(a) { color:#7dd3fc; text-decoration:underline }
 .markdown :deep(ul), .markdown :deep(ol) { padding-left:24px; margin:10px 0 }
-.markdown :deep(h1), .markdown :deep(h2), .markdown :deep(h3) { font-size:18px; margin:18px 0 10px }
+.markdown :deep(h1), .markdown :deep(h2), .markdown :deep(h3) { font-size:calc(var(--reading-size) * 1.125); margin:18px 0 10px }
 .markdown :deep(table) { display:block; overflow-x:auto; border-collapse:collapse }
 .markdown :deep(td), .markdown :deep(th) { padding:6px; border:1px solid #344259 }
-.mobile-output { margin:0; font:14px/1.65 monospace; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text }
+.mobile-output { margin:0; font:var(--reading-size)/1.65 monospace; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text }
 .composer { padding:10px 12px; border-top:1px solid #263143; background:#131c2a; }
 .compose-row { display:flex; gap:8px; align-items:center }
 textarea { flex:1; min-width:0; resize:none; max-height:160px; font:16px/1.5 sans-serif; background:#1d293b; color:#f1f5f9; border:1px solid #40516b; border-radius:12px; padding:10px; }

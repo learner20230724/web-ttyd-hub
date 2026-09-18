@@ -12,6 +12,10 @@ public class ServerAddressTest {
         check(!ServerAddress.sameOrigin("https://example.com/", "http://example.com/"));
         check(!ServerAddress.sameOrigin("https://example.com/", "https://example.com:8443/"));
         check(!ServerAddress.sameOrigin("https://example.com/", "intent://test"));
+        check(ServerAddress.authScope("https://EXAMPLE.com/", "hub").equals(ServerAddress.authScope("https://example.com:443/a", "hub")));
+        check(!ServerAddress.authScope("http://example.com/", "hub").equals(ServerAddress.authScope("https://example.com/", "hub")));
+        check(!ServerAddress.authScope("https://example.com:8443/", "hub").equals(ServerAddress.authScope("https://example.com/", "hub")));
+        check(!ServerAddress.authScope("https://example.com/", "other").equals(ServerAddress.authScope("https://example.com/", "hub")));
         System.out.println("PASS: server URL validation and navigation origin policy");
     }
     private static void check(boolean value) { if (!value) throw new AssertionError(); }

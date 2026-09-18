@@ -44,9 +44,13 @@ public class MainActivity extends Activity {
     private AlertDialog loginDialog;
     private final List<HttpAuthHandler> authRequests = new ArrayList<>();
     private boolean pageFailed;
+    private LoginVault loginVault;
+    private final java.util.Set<String> attemptedLogins = new java.util.HashSet<>();
+    private String loginScope;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        loginVault = new LoginVault(this);
         preferences = getSharedPreferences("connection", MODE_PRIVATE);
         server = preferences.getString("server", "");
         if (server.isEmpty()) showConnection(); else openServer(server);
@@ -110,7 +114,7 @@ public class MainActivity extends Activity {
         intro.setPadding(0, dp(12), 0, dp(28)); form.addView(intro);
         EditText address = input("https://你的服务器地址", false);
         address.setText(server); form.addView(address);
-        TextView explanation = label("支持域名或 IP:端口。建议使用 HTTPS；HTTP 连接不加密。只保存地址，登录密码不会写入本地设置。", 13);
+        TextView explanation = label("支持域名或 IP:端口。建议使用 HTTPS；HTTP 连接不加密。账号密码在本机加密保存，下次自动登录。", 13);
         explanation.setPadding(0,dp(12),0,dp(18)); form.addView(explanation);
         Button connect = button("连接服务器", v -> {
             try {
@@ -127,6 +131,7 @@ public class MainActivity extends Activity {
     @SuppressLint("SetJavaScriptEnabled")
     private void openServer(String address) {
         destroyWeb();
+        attemptedLogins.clear();
         LinearLayout outer = column(); setRoot(outer);
         progress = new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
         outer.addView(progress,new LinearLayout.LayoutParams(-1,dp(3)));
@@ -165,8 +170,22 @@ public class MainActivity extends Activity {
                 }
                 return true;
             }
+            @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                if ((url.startsWith("https://") || url.startsWith("http://")) && !ServerAddress.sameOrigin(server, url)) {
+                    return new WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", java.util.Collections.emptyMap(), new java.io.ByteArrayInputStream(new byte[0]));
+                }
+                return null;
+            }
             @Override public void onReceivedHttpAuthRequest(WebView v,HttpAuthHandler handler,String host,String realm) {
-                if (!Uri.parse(server).getHost().equalsIgnoreCase(host)) { handler.cancel(); return; }
+                if (!Uri.parse(server).getHost().equalsIgnoreCase(host) || !ServerAddress.sameOrigin(server, v.getUrl())) { handler.cancel(); return; }
+                String scope = ServerAddress.authScope(server, realm);
+                if (attemptedLogins.add(scope)) {
+                    String[] saved = loginVault.load(scope);
+                    if (saved != null) { handler.proceed(saved[0], saved[1]); return; }
+                } else loginVault.remove(scope);
+                if (loginDialog != null && !scope.equals(loginScope)) { handler.cancel(); return; }
+                loginScope = scope;
                 promptLogin(handler);
             }
             @Override public void onReceivedSslError(WebView v,SslErrorHandler handler,SslError error) {
@@ -192,6 +211,8 @@ public class MainActivity extends Activity {
             .setPositiveButton("登录",(dialog,which)-> {
                 String user = username.getText().toString(), pass = password.getText().toString();
                 List<HttpAuthHandler> pending = new ArrayList<>(authRequests); authRequests.clear(); loginDialog = null;
+                try { loginVault.save(loginScope, user, pass); }
+                catch (Exception e) { notice("本次可登录，但无法保存密码，下次需要重新输入"); }
                 for (HttpAuthHandler h : pending) h.proceed(user,pass);
                 password.setText("");
             }).setNegativeButton("取消",(dialog,which)->cancelLogin()).setOnCancelListener(dialog->cancelLogin()).create();
@@ -206,10 +227,14 @@ public class MainActivity extends Activity {
     private boolean canControl() { return web != null && ServerAddress.sameOrigin(server,web.getUrl()); }
     private void connectionMenu() {
         new AlertDialog.Builder(this).setTitle("连接选项")
-            .setItems(new String[]{"重新加载", "更换服务器", "返回桌面"}, (dialog, which) -> {
-                if (which == 0 && web != null) web.reload();
+            .setItems(new String[]{"重新加载", "更换服务器", "清除已保存的登录", "返回桌面"}, (dialog, which) -> {
+                if (which == 0 && web != null) { attemptedLogins.clear(); web.reload(); }
                 else if (which == 1) showConnection();
-                else moveTaskToBack(true);
+                else if (which == 2) {
+                    loginVault.clear();
+                    android.webkit.WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword();
+                    showConnection(); notice("已清除保存的登录信息");
+                } else moveTaskToBack(true);
             }).setNegativeButton("取消", null).show();
     }
     @Override public void onBackPressed() {
