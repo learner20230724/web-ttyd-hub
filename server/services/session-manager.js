@@ -62,6 +62,7 @@ class SessionManager extends EventEmitter {
     this.nameCounter = 0;
     this.activity = new CodexActivity(this);
     this.inputQueues = new Map();
+    this.paneStarts = new Map();
     this.state = stateFile ? new (require('./session-state'))(stateFile) : null;
     this.restoring = false;
     this.closing = false;
@@ -323,13 +324,19 @@ class SessionManager extends EventEmitter {
   async ensurePane(name) {
     const session = this.getSession(name);
     if (session.status !== 'running') throw new Error('会话已停止');
-    try { await runFile('tmux', ['has-session', '-t', `=${name}`]); }
-    catch {
-      const args = ['new-session', '-d', '-s', name, '-x', '120', '-y', '40'];
-      const shell = this.resolveShell(session.shell);
-      if (shell) args.push(shell);
-      await runFile('tmux', args);
-    }
+    if (this.paneStarts.has(name)) return this.paneStarts.get(name);
+    const task = (async () => {
+      try { await runFile('tmux', ['has-session', '-t', `=${name}`]); }
+      catch {
+        const args = ['new-session', '-d', '-s', name, '-x', '120', '-y', '40'];
+        const shell = this.resolveShell(session.shell);
+        if (shell) args.push(shell);
+        await runFile('tmux', args);
+      }
+    })();
+    this.paneStarts.set(name, task);
+    try { await task; }
+    finally { if (this.paneStarts.get(name) === task) this.paneStarts.delete(name); }
   }
 
   async mobile(name, full = false) {

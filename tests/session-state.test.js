@@ -24,7 +24,7 @@ test('Real Hub restart restores stable IDs, Unicode names and stopped status wit
  const stop=async()=>{const exit=once(child,'exit');child.kill('SIGTERM');await exit;child=null};
  try {
   await start();const s=await api('',{name:'原名称',shell:'bash'});
-  await api('/'+s.name,{name:'持久名称 📌'},'PATCH');await api('/'+s.name+'/mobile');
+  await api('/'+s.name,{name:'持久名称 📌'},'PATCH');await Promise.all([api('/'+s.name+'/mobile'),api('/'+s.name+'/mobile?view=full')]);
   const pane=()=>execFileSync('tmux',['display-message','-p','-t','='+s.name+':','#{pane_id}:#{pane_pid}'],{env}).toString();
   const before=pane();const stopped=await api('',{name:'stopped-one',shell:'bash'});await api('/'+stopped.name+'/stop',{});
   await api('/'+s.name,undefined,'DELETE');
