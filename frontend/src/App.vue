@@ -15,7 +15,7 @@ const readingKey = 'web-ttyd-hub.mobile-reading.v1';
 let savedReading = {};
 try { savedReading = JSON.parse(localStorage.getItem(readingKey)) || {}; } catch {}
 const showExecution = ref(savedReading.showExecution === true);
-const readingSize = ref(Number.isFinite(savedReading.fontSize) ? Math.max(12, Math.min(24, savedReading.fontSize)) : 16);
+const readingSize = ref(Number.isFinite(savedReading.fontSize) ? Math.max(8, Math.min(24, savedReading.fontSize)) : 16);
 watch([showExecution, readingSize], () => {
   try { localStorage.setItem(readingKey, JSON.stringify({ showExecution: showExecution.value, fontSize: readingSize.value })); } catch {}
 });
@@ -79,7 +79,7 @@ function handleMobileOverlayClick() {
           :aria-pressed="showExecution" :aria-label="showExecution ? '隐藏执行过程' : '显示执行过程'"
           :title="showExecution ? '显示全部终端输出，点击只看回答' : '只看回答，点击显示全部终端输出'"
           @click="showExecution = !showExecution">{{ showExecution ? '全文' : '回答' }}</button>
-        <button type="button" class="reading-control" aria-label="缩小字体" :disabled="readingSize <= 12" @click="readingSize = Math.max(12, readingSize - 1)">A−</button>
+        <button type="button" class="reading-control" aria-label="缩小字体" :disabled="readingSize <= 8" @click="readingSize = Math.max(8, readingSize - 1)">A−</button>
         <button type="button" class="reading-control" aria-label="放大字体" :disabled="readingSize >= 24" @click="readingSize = Math.min(24, readingSize + 1)">A+</button>
       </div>
     </header>
