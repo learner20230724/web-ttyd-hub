@@ -30,7 +30,8 @@ export const useSessionStore = defineStore('sessions', () => {
   const layout = ref(normalizeLayout(null))
   const layoutError = ref('')
   try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))) } catch {}
-  const sortedSessions = computed(() => orderedSessions(sessions.value, layout.value, activityState))
+  const sortedSessions = computed(() => orderedSessions(sessions.value.filter(s => !s.archivedAt), layout.value, activityState))
+  const archivedSessions = computed(() => sessions.value.filter(s => s.archivedAt).sort((a,b) => Date.parse(b.archivedAt) - Date.parse(a.archivedAt)))
   const isPinned = name => layout.value.pinned.includes(name)
   function saveLayout(value) {
     layout.value = value
@@ -67,6 +68,7 @@ export const useSessionStore = defineStore('sessions', () => {
     const res = await fetch('/api/sessions')
     const data = await res.json()
     sessions.value = data.sessions
+    if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) current.value = null
   }
 
   async function fetchShells() {
@@ -119,8 +121,8 @@ export const useSessionStore = defineStore('sessions', () => {
     await fetchSessions()
   }
 
-  async function removeSession(name) {
-    const res = await fetch(`/api/sessions/${name}`, { method: 'DELETE' })
+  async function removeSession(name, permanent = false) {
+    const res = await fetch(`/api/sessions/${name}${permanent ? '/permanent' : ''}`, { method: 'DELETE' })
     if (!res.ok) {
       const data = await res.json()
       throw new Error(data.error)
@@ -128,6 +130,13 @@ export const useSessionStore = defineStore('sessions', () => {
     if (current.value === name) {
       current.value = null
     }
+    await fetchSessions()
+  }
+
+  async function restoreSession(name) {
+    const res = await fetch(`/api/sessions/${name}/restore`, { method: 'POST' })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error)
     await fetchSessions()
   }
 
@@ -175,6 +184,8 @@ export const useSessionStore = defineStore('sessions', () => {
     sessions,
     activityState,
     sortedSessions,
+    archivedSessions,
+    restoreSession,
     layoutError,
     isPinned,
     togglePin,

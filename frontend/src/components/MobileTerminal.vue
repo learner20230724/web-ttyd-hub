@@ -5,7 +5,7 @@ import DOMPurify from 'dompurify'
 import { terminalSegments, tableMarkdown } from '../utils/terminal-tables.mjs'
 import { ansiToRuns } from '../utils/ansi.mjs'
 import { useSessionStore } from '../stores/sessions'
-const props = defineProps({ showExecution: Boolean, fontSize: { type: Number, default: 16 } })
+const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const content = ref({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
@@ -99,6 +99,11 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
 </script>
 <template>
   <section class="mobile-terminal" :style="{ '--reading-size': `${fontSize}px` }">
+    <div v-if="navigationOpen" id="mobile-navigation" class="mobile-navigation" role="group" aria-label="终端方向键和回车">
+      <button v-for="key in ['Up', 'Down', 'Left', 'Right', 'Enter']" :key="key" type="button"
+        :aria-label="{Up:'方向键上', Down:'方向键下', Left:'方向键左', Right:'方向键右', Enter:'终端回车'}[key]"
+        :disabled="sending || session?.status !== 'running'" @click="send(key, false)">{{ {Up:'↑', Down:'↓', Left:'←', Right:'→', Enter:'↵ 回车'}[key] }}</button>
+    </div>
     <template v-if="session">
       <div class="mobile-session-title">{{ session.displayName || session.name }}<span>{{ session.activity?.busy ? '正在回答…' : session.status === 'running' ? '已连接' : '已停止' }}</span></div>
       <div ref="pane" class="mobile-reading" @scroll.passive="scrolled">
@@ -127,7 +132,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
       <button v-if="!follow" class="latest" @click="bottom">↓ 回到最新</button>
       <p v-if="error" class="mobile-error" role="alert">{{ error }}</p>
       <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
-        <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Up', 'Down', 'Left', 'Right', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || !draft" @click="send(null)">仅输入</button></div>
+        <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
           <textarea v-model="draft" aria-label="消息输入" placeholder="输入消息…" rows="2" enterkeyhint="enter"></textarea>
           <button class="send" :disabled="sending" type="submit">{{ sending ? '…' : draft ? '发送' : '回车' }}</button></div>
@@ -138,6 +143,9 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
 </template>
 <style scoped>
 .mobile-terminal { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; position:relative; background:#0e1420; color:#e5eaf2 }
+.mobile-navigation { display:flex; gap:6px; padding:8px 12px; border-bottom:1px solid #263143; flex-shrink:0; background:#131c2a; }
+.mobile-navigation button { flex:1; min-width:0; padding:6px; font-size:20px; }
+.mobile-navigation button:last-child { flex:1.5; font-size:15px; }
 .mobile-session-title { padding:10px 16px; font-size:14px; border-bottom:1px solid #263143; overflow-wrap:anywhere }
 .mobile-session-title span { float:right; color:#91a0b7; font-size:12px; margin-left:8px }
 .mobile-reading { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px; touch-action:pan-x pan-y; }

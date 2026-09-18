@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-从 [GitHub Releases](https://github.com/learner20230724/web-ttyd-hub/releases) 下载 `ttyd-hub-android-1.3.0.apk`，在手机上打开安装。首次安装可按系统提示允许该下载来源安装应用。
+优先从 [本机 IP 下载最新 APK](http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk)；[GitHub Releases](https://github.com/learner20230724/web-ttyd-hub/releases) 作为备用。下载 APK 后，在手机上打开安装。首次安装可按系统提示允许该下载来源安装应用。
 
 1. 输入你的服务器地址（完整 `https://域名` 或 `http://IP:端口`）。地址会保存，下次启动自动连接。
 2. 如果服务设置了 HTTP Basic 认证，弹窗输入与网页相同的用户名和密码。安装包没有内置服务器地址或密码，用户名与密码由 Android Keystore 的 AES-GCM 密钥加密后保存在本机；下次自动登录，密码失效时重新输入。返回键菜单可清除保存的登录。
@@ -85,6 +85,17 @@ Linux 服务通过对应 tmux 窗格的 Codex 进程打开的 rollout 文件读�
 
 ### 1.3：终端与阅读
 
-「＋」中提供 ↑ ↓ ← → 四个方向键。普通 shell 的发送提示为「已发送到终端」，仅明确检测到 Codex 的会话提示等待 Codex 接收，不再把所有终端当作 Codex。Markdown 与完整终端输出中的常见线框表格会渲染为可横向滑动的表格。
+顶部「✥」展开 ↑ ↓ ← → ↵ 五个终端按键，点击按键后保持展开，再点「✥」收起。回车不发送输入框草稿。「＋」保留 Esc、Tab、中断、仅输入。普通 shell 的发送提示为「已发送到终端」，仅明确检测到 Codex 的会话提示等待 Codex 接收，不再把所有终端当作 Codex。Markdown 与完整终端输出中的常见线框表格会渲染为可横向滑动的表格。
 
 网页字号下限为 4 px。Android WebView 默认最小字体为 8，1.3 外壳解除该限制，让网页控制字号；旧 APK 若仍无法缩到 8 以下，可覆盖安装 1.3，之后页面更新仍在线生效。会话恢复和状态排序在服务端/网页生效，无需安装 APK。
+
+### 会话菜单与归档
+
+侧栏名称使用 12px 并完整换行。点「⋯」展开置顶、修改名称、移入归档。归档位于侧栏底部，会话和任务保持运行 30 分钟，可恢复；归档中的「彻底删除」立即终止任务，到期由服务端自动清理。归档期限持久化，Hub 重启不会重新计时。旧客户端调用删除接口也只归档，避免旧界面误操作直接终止。
+
+### 固定 APK 下载
+
+用户约定：以后 APK 优先使用本机 IP＋路径，不依赖 GitHub。固定最新包：
+http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk
+
+版本文件位于同一路径 `ttyd-hub-android-X.Y.Z.apk`，附 `.sha256` 校验文件。运行 `python3 scripts/publish-apk.py android/app/build/outputs/apk/release/app-release.apk X.Y.Z`，签名验证通过后更新版本文件和固定最新包。只有该下载目录公开，Hub 会话和 API 继续要求原认证。

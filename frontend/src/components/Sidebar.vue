@@ -109,7 +109,7 @@ onBeforeUnmount(() => finishDrag());
       </button>
     </div>
 
-    <p v-if="!collapsed" class="sort-hint">拖动 ⠿ 排序 · 图钉置顶<br>置顶与普通会话分别排序</p>
+    <p v-if="!collapsed" class="sort-hint">拖动 ⠿ 排序 · ⋯ 管理会话<br>置顶与普通会话分别排序</p>
     <p v-if="store.layoutError" class="sort-hint" role="alert">{{ store.layoutError }}</p>
     <div ref="list" class="session-list" :class="{ sorting: dragging }">
       <SessionCard
@@ -123,15 +123,27 @@ onBeforeUnmount(() => finishDrag());
         @click="store.select(s.name)"
       />
 
-      <div v-if="!store.sessions.length" class="empty-hint" v-show="!collapsed">
+      <div v-if="!store.sortedSessions.length" class="empty-hint" v-show="!collapsed">
         <p>No active sessions</p>
         <p class="sub-hint">Create one to get started</p>
       </div>
     </div>
+    <details v-if="!collapsed" class="archive-section" open>
+      <summary>归档（{{ store.archivedSessions.length }}）</summary>
+      <p class="sort-hint">进程保留 30 分钟，到期自动终止</p>
+      <div class="archive-list">
+        <SessionCard v-for="s in store.archivedSessions" :key="s.name" :session="s" :collapsed="false" />
+        <p v-if="!store.archivedSessions.length" class="sort-hint">暂无归档会话</p>
+      </div>
+    </details>
   </aside>
 </template>
 
 <style scoped>
+.archive-section { flex-shrink:0; max-height:40%; overflow:auto; border-top:1px solid var(--border-color); padding:8px; }
+.archive-section summary { cursor:pointer; font-size:12px; color:var(--text-secondary); padding:8px; }
+.archive-list { display:flex; flex-direction:column; gap:4px; }
+
 .sort-hint { margin: 0; padding: 4px 16px 8px; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
 .sorting { user-select: none; }
 .session-card.dragging { opacity: 0.45; }

@@ -65,7 +65,9 @@ class SessionManager extends EventEmitter {
     this.state = stateFile ? new (require('./session-state'))(stateFile) : null;
     this.restoring = false;
     this.closing = false;
-    for (const event of ['session:created', 'session:renamed', 'session:stopped', 'session:deleted', 'session:exited', 'session:identity']) {
+    this.archiveSweep = setInterval(() => { if (!this.restoring && !this.closing) this.purgeExpired().catch(err => console.error('Archive cleanup failed:', err.message)); }, 1000);
+    this.archiveSweep.unref();
+    for (const event of ['session:created', 'session:renamed', 'session:stopped', 'session:deleted', 'session:exited', 'session:identity', 'session:archived', 'session:restored']) {
       this.on(event, () => { if (this.state && !this.restoring && !this.closing) this.state.save(this.list()); });
     }
   }
@@ -77,10 +79,12 @@ class SessionManager extends EventEmitter {
     try {
       for (const saved of records) {
         this.sessions.set(saved.name, { name: saved.name, displayName: saved.displayName,
-          shell: saved.shell, createdAt: saved.createdAt, codexThreadId: saved.codexThreadId || null,
+          shell: saved.shell, createdAt: saved.createdAt, archivedAt: saved.archivedAt || null, expiresAt: saved.expiresAt || null, codexThreadId: saved.codexThreadId || null,
           status: 'stopped', port: null, pid: null, process: null });
       }
-      for (const saved of records) if (saved.status === 'running') await this.restart(saved.name);
+      await this.purgeExpired();
+      for (const saved of records) if (saved.status === 'running' && this.sessions.has(saved.name)) await this.restart(saved.name);
+      this.state.save(this.list());
     } finally { this.restoring = false; }
   }
 
@@ -208,6 +212,32 @@ class SessionManager extends EventEmitter {
     session.port = null;
     this.emit('session:stopped', this.serialize(session));
     return this.serialize(session);
+  }
+
+  archive(name) {
+    const session = this.getSession(name);
+    if (!session.archivedAt) {
+      session.archivedAt = new Date().toISOString();
+      session.expiresAt = new Date(Date.parse(session.archivedAt) + 30 * 60 * 1000).toISOString();
+      this.emit('session:archived', this.serialize(session));
+    }
+    return this.serialize(session);
+  }
+
+  restoreArchived(name) {
+    const session = this.getSession(name);
+    if (!session.archivedAt) throw new Error('会话不在归档中');
+    if (Date.parse(session.expiresAt) <= Date.now()) throw new Error('归档已到期');
+    session.archivedAt = null;
+    session.expiresAt = null;
+    this.emit('session:restored', this.serialize(session));
+    return this.serialize(session);
+  }
+
+  async purgeExpired(now = Date.now()) {
+    for (const session of this.sessions.values()) {
+      if (session.archivedAt && Date.parse(session.expiresAt) <= now) await this.remove(session.name);
+    }
   }
 
   async remove(name) {
@@ -369,6 +399,7 @@ class SessionManager extends EventEmitter {
 
   cleanup() {
     this.closing = true;
+    clearInterval(this.archiveSweep);
     this.activity.close();
     for (const session of this.sessions.values()) {
       if (session.status === 'running' && session.process) {

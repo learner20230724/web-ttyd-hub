@@ -65,9 +65,20 @@ module.exports = function (sessionManager) {
     }
   });
 
+  router.post('/:name/restore', (req, res) => {
+    try { res.json(sessionManager.restoreArchived(req.params.name)); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  router.delete('/:name/permanent', async (req, res) => {
+    try {
+      if (!sessionManager.getSession(req.params.name).archivedAt) throw new Error('请先将会话移入归档');
+      res.json(await sessionManager.remove(req.params.name));
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
   router.delete('/:name', async (req, res) => {
     try {
-      const result = await sessionManager.remove(req.params.name);
+      const result = sessionManager.archive(req.params.name);
       res.json(result);
     } catch (err) {
       res.status(400).json({ error: err.message });

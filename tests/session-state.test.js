@@ -27,9 +27,31 @@ test('Real Hub restart restores stable IDs, Unicode names and stopped status wit
   await api('/'+s.name,{name:'持久名称 📌'},'PATCH');await api('/'+s.name+'/mobile');
   const pane=()=>execFileSync('tmux',['display-message','-p','-t','='+s.name+':','#{pane_id}:#{pane_pid}'],{env}).toString();
   const before=pane();const stopped=await api('',{name:'stopped-one',shell:'bash'});await api('/'+stopped.name+'/stop',{});
+  await api('/'+s.name,undefined,'DELETE');
+  assert.equal(pane(),before);
+  const expiry=(await api()).sessions.find(x=>x.name===s.name).expiresAt;
   await stop();await start();let list=(await api()).sessions;
   assert.equal(list.find(x=>x.name===s.name).displayName,'持久名称 📌');assert.equal(list.find(x=>x.name===s.name).createdAt,s.createdAt);
   assert.equal(list.find(x=>x.name===stopped.name).status,'stopped');assert.equal(pane(),before);
-  await api('/'+stopped.name,undefined,'DELETE');await stop();await start();assert.equal((await api()).sessions.length,1);
+  assert.equal(list.find(x=>x.name===s.name).expiresAt,expiry);
+  await api('/'+s.name+'/restore',{});assert.equal(pane(),before);assert.equal((await api()).sessions.find(x=>x.name===s.name).archivedAt,null);
+  await api('/'+stopped.name,undefined,'DELETE');await api('/'+stopped.name+'/permanent',undefined,'DELETE');await stop();await start();assert.equal((await api()).sessions.length,1);
+  await api('/'+s.name,undefined,'DELETE');assert.equal(pane(),before);
+  await api('/'+s.name+'/permanent',undefined,'DELETE');assert.equal((await api()).sessions.length,0);
+  assert.throws(()=>execFileSync('tmux',['has-session','-t','='+s.name],{env,stdio:'ignore'}));
  }finally{if(child)await stop();try{execFileSync('tmux',['kill-server'],{env,stdio:'ignore'})}catch{}fs.rmSync(dir,{recursive:true,force:true})}
+});
+
+test('Archive is idempotent, exact 30 minute expiry and restore cancels scheduled cleanup', async()=>{
+ const Manager=require('../server/services/session-manager');const m=new Manager(19680,19690);
+ try {
+  m.sessions.set('sample',{name:'sample',displayName:'Sample',status:'stopped',createdAt:new Date().toISOString(),shell:null});
+  const first=m.archive('sample');const expiry=first.expiresAt;
+  assert.equal(Date.parse(expiry)-Date.parse(first.archivedAt),1800000);
+  assert.equal(m.archive('sample').expiresAt,expiry);
+  const removed=[];m.remove=async name=>{removed.push(name);m.sessions.delete(name)};
+  await m.purgeExpired(Date.parse(expiry)-1);assert.deepEqual(removed,[]);
+  m.restoreArchived('sample');await m.purgeExpired(Date.parse(expiry)+1);assert.deepEqual(removed,[]);
+  const next=m.archive('sample');await m.purgeExpired(Date.parse(next.expiresAt));assert.deepEqual(removed,['sample']);
+ }finally{m.cleanup()}
 });

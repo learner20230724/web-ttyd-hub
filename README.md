@@ -115,10 +115,18 @@ npm start
 
 会话左侧转圈表示 Codex 正在回答；完成但未查看显示绿点，前台打开后变灰。状态来自 Linux 上当前窗格 Codex 进程的明确 turn 事件；不靠静默时间猜测。普通终端及无法识别的 Codex 版本不显示虚假的忙碌状态。已读按设备保存。
 
-[下载 Android APK](https://github.com/learner20230724/web-ttyd-hub/releases/latest) · [手机使用与兼容说明](android/README.md)
+[IP 直链下载 Android APK](http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk) · [手机使用与兼容说明](android/README.md)
 
 ## 会话恢复与动态排序
 
 Hub 自动保存稳定会话 ID、中文显示名、shell、创建时间、运行/停止状态，以及检测到的 Codex thread ID。默认文件是 `data/sessions.json`，可用 `HUB_STATE_FILE` 指定独立路径；原子替换、权限 0600，同时保留上一份 `.bak`。该目录已排除 Git，迁移时单独备份，不能放进公开仓库。服务启动自动恢复名称和列表并重新连接已有 tmux；保留 `KillMode=process`，重启 Hub 不终止任务。状态文件损坏时拒绝启动和覆盖，请人工核对并从 `.bak` 恢复。整台机器重启后只能恢复会话列表，不能复活丢失的进程；记录的 Codex thread ID 可用于手动恢复对话。
 
 会话列表按置顶分组，组内按「完成未读绿点 → 正在回答 → 灰色」实时排序，同状态沿用拖动顺序。当前打开的会话不会因排序而切换。手机阅读字号支持 4–24 px，设置自动保存，在线更新无需新 APK。
+
+## 归档保护与手机快捷操作
+
+普通删除现在移入侧栏底部归档：原进程继续运行，保留 30 分钟。期间可恢复，归档中再次明确选择彻底删除才立即终止任务；到期自动清理，重启不重新计时。`DELETE /api/sessions/:name` 为归档，`POST /:name/restore` 恢复，`DELETE /:name/permanent` 仅允许删除已归档会话。旧版客户端的删除请求也受到归档保护。
+
+会话卡片仅显示一个「⋯」操作菜单，名称以 12px 完整换行。手机顶部「✥」控制常驻的五键面板（↑ ↓ ← → ↵），连续按键不会收起，回车不发送草稿。以上功能在线更新，无需新的 APK。
+
+APK 固定最新下载：[本机 IP 下载](http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk)，GitHub Release 作为备用。发布方法见 `android/README.md` 和 `scripts/publish-apk.py`。

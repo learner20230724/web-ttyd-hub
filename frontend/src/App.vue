@@ -14,6 +14,7 @@ const toastRef = ref(null);
 const readingKey = 'web-ttyd-hub.mobile-reading.v1';
 let savedReading = {};
 try { savedReading = JSON.parse(localStorage.getItem(readingKey)) || {}; } catch {}
+const navigationOpen = ref(false);
 const showExecution = ref(savedReading.showExecution === true);
 const readingSize = ref(Number.isFinite(savedReading.fontSize) ? Math.max(4, Math.min(24, savedReading.fontSize)) : 16);
 watch([showExecution, readingSize], () => {
@@ -75,6 +76,9 @@ function handleMobileOverlayClick() {
       </div>
 
       <div v-if="isMobile" class="reading-controls" aria-label="手机阅读设置">
+        <button type="button" class="reading-control navigation-toggle" :class="{ selected: navigationOpen }"
+          aria-label="方向键与回车" :aria-expanded="navigationOpen" aria-controls="mobile-navigation"
+          @click="navigationOpen = !navigationOpen">✥</button>
         <button type="button" class="reading-control" :class="{ selected: showExecution }"
           :aria-pressed="showExecution" :aria-label="showExecution ? '隐藏执行过程' : '显示执行过程'"
           :title="showExecution ? '显示全部终端输出，点击只看回答' : '只看回答，点击显示全部终端输出'"
@@ -97,7 +101,7 @@ function handleMobileOverlayClick() {
         @create="showCreateDialog = true"
       />
 
-      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" />
+      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen" />
       <TerminalView v-else @create="showCreateDialog = true" />
     </div>
 
@@ -109,6 +113,7 @@ function handleMobileOverlayClick() {
 <style scoped>
 .reading-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }
 .reading-control { min-width:36px; min-height:40px; padding:4px 6px; border:0; border-radius:7px; background:transparent; color:var(--text-secondary); font-size:13px; cursor:pointer; }
+.navigation-toggle { font-size:20px; }
 .reading-control.selected { color:#7dd3fc; background:#19344b; }
 .reading-control:disabled { opacity:.35; cursor:default; }
 @media (max-width: 767px) {

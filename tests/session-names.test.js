@@ -116,6 +116,7 @@ test('Chinese creation and rename preserve the live terminal, broadcast, and lif
     assert.equal((await api(url, 'PATCH', { name: '已停止的中文会话' })).status, 200);
     assert.equal((await api(url + '/restart', 'POST', {})).data.displayName, '已停止的中文会话');
     assert.equal((await api(url, 'DELETE')).status, 200);
+    assert.equal((await api(url + '/permanent', 'DELETE')).status, 200);
     await pause(150);
     const legacy = await api('/api/sessions', 'POST', { name: 'legacy-name', shell: 'bash' });
     assert.equal(legacy.status, 201);
