@@ -99,10 +99,10 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
 </script>
 <template>
   <section class="mobile-terminal" :style="{ '--reading-size': `${fontSize}px` }">
-    <div v-if="navigationOpen" id="mobile-navigation" class="mobile-navigation" role="group" aria-label="终端方向键和回车">
-      <button v-for="key in ['Up', 'Down', 'Left', 'Right', 'Enter']" :key="key" type="button"
-        :aria-label="{Up:'方向键上', Down:'方向键下', Left:'方向键左', Right:'方向键右', Enter:'终端回车'}[key]"
-        :disabled="sending || session?.status !== 'running'" @click="send(key, false)">{{ {Up:'↑', Down:'↓', Left:'←', Right:'→', Enter:'↵ 回车'}[key] }}</button>
+    <div v-if="navigationOpen" id="mobile-navigation" class="mobile-navigation" role="group" aria-label="终端方向键、回车和组合键">
+      <button v-for="key in ['Up', 'Down', 'Left', 'Right', 'Enter', 'S-Left']" :key="key" type="button" :class="{ 'wide-key': key === 'Enter' || key === 'S-Left' }"
+        :aria-label="{Up:'方向键上', Down:'方向键下', Left:'方向键左', Right:'方向键右', Enter:'终端回车', 'S-Left':'Shift 加左方向键'}[key]"
+        :disabled="sending || session?.status !== 'running'" @click="send(key, false)">{{ {Up:'↑', Down:'↓', Left:'←', Right:'→', Enter:'↵ 回车', 'S-Left':'Shift+←'}[key] }}</button>
     </div>
     <template v-if="session">
       <div class="mobile-session-title">{{ session.displayName || session.name }}<span>{{ session.activity?.busy ? '正在回答…' : session.status === 'running' ? '已连接' : '已停止' }}</span></div>
@@ -145,7 +145,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
 .mobile-terminal { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; position:relative; background:#0e1420; color:#e5eaf2 }
 .mobile-navigation { display:flex; gap:6px; padding:8px 12px; border-bottom:1px solid #263143; flex-shrink:0; background:#131c2a; }
 .mobile-navigation button { flex:1; min-width:0; padding:6px; font-size:20px; }
-.mobile-navigation button:last-child { flex:1.5; font-size:15px; }
+.mobile-navigation button.wide-key { flex:1.6; font-size:13px; white-space:nowrap; }
 .mobile-session-title { padding:10px 16px; font-size:14px; border-bottom:1px solid #263143; overflow-wrap:anywhere }
 .mobile-session-title span { float:right; color:#91a0b7; font-size:12px; margin-left:8px }
 .mobile-reading { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px; touch-action:pan-x pan-y; }

@@ -341,7 +341,7 @@ class SessionManager extends EventEmitter {
 
   input(name, { text, key }) {
     this.getSession(name);
-    if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
+    if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'S-Left', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
     if (text != null && (typeof text !== 'string' || Buffer.byteLength(text) > 64000 || /[\x00-\x08\x0b-\x1f\x7f]/.test(text))) throw new Error('输入文字无效或超过 64 KB');
     const previous = this.inputQueues.get(name) || Promise.resolve();
     const task = previous.catch(() => {}).then(async () => {
