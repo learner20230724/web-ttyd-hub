@@ -15,6 +15,7 @@ const editing = ref(false);
 const draft = ref('');
 const error = ref('');
 const saving = ref(false);
+const removing = ref(false);
 const nameInput = ref(null);
 
 async function startRename() {
@@ -49,17 +50,20 @@ async function saveRename() {
 
 function onClose(e, name) {
   e.stopPropagation();
+  error.value = '';
   confirming.value = true;
 }
 
 async function confirmRemove(e, name) {
   e.stopPropagation();
+  if (removing.value) return;
+  removing.value = true;
   try {
     await store.removeSession(name);
+    confirming.value = false;
   } catch (err) {
-    console.error(err);
-  }
-  confirming.value = false;
+    error.value = err.message;
+  } finally { removing.value = false; }
 }
 
 function cancelRemove(e) {
@@ -100,7 +104,7 @@ function cancelRemove(e) {
         <button
           v-if="!confirming && !editing"
           class="close-btn"
-          title="Delete session"
+          type="button" title="删除会话（终止进程）" aria-label="删除会话（终止进程）"
           @click="onClose($event, session.name)"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -119,10 +123,13 @@ function cancelRemove(e) {
         </div>
         <p v-if="error" role="alert">{{ error }}</p>
       </div>
-      <div v-else-if="confirming" class="confirm-bar">
-        <span class="confirm-text">Delete?</span>
-        <button class="confirm-yes" @click="confirmRemove($event, session.name)">Yes</button>
-        <button class="confirm-no" @click="cancelRemove($event)">No</button>
+      <div v-else-if="confirming" class="confirm-bar" @click.stop>
+        <p class="confirm-text">删除「{{ session.displayName || session.name }}」？这会终止该终端及其中运行的任务，不是重命名或隐藏。</p>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-no" :disabled="removing" @click="cancelRemove($event)">取消，保留会话</button>
+          <button type="button" class="confirm-yes" :disabled="removing" @click="confirmRemove($event, session.name)">{{ removing ? '正在删除…' : '终止任务并删除' }}</button>
+        </div>
+        <p v-if="error" role="alert">{{ error }}</p>
       </div>
       <div v-else class="session-info">
         <span class="pid">PID: {{ session.pid }}</span>
@@ -170,7 +177,7 @@ function cancelRemove(e) {
   padding: 10px 8px;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s;
   border: 1px solid transparent;
   color: var(--text-secondary);
 }
@@ -227,7 +234,7 @@ function cancelRemove(e) {
 }
 
 .close-btn {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   background: none;
@@ -237,9 +244,6 @@ function cancelRemove(e) {
   padding: 2px;
   border-radius: 4px;
   flex-shrink: 0;
-}
-.session-card:hover .close-btn {
-  display: flex;
 }
 .close-btn:hover {
   background: var(--bg-tertiary);
@@ -254,16 +258,16 @@ function cancelRemove(e) {
 }
 
 .confirm-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: grid;
+  gap: 10px;
   font-size: 12px;
 }
 
-.confirm-text {
-  color: var(--danger);
-  font-weight: 500;
-}
+.confirm-text { color: var(--danger); font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.confirm-actions { display: flex; flex-direction: column; gap: 8px; }
+.confirm-actions button { min-height: 40px; padding: 8px; }
+.card-top > button { flex: 0 0 36px; width: 36px; height: 40px; }
+
 
 .confirm-yes,
 .confirm-no {
