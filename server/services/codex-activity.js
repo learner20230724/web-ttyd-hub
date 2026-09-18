@@ -59,6 +59,11 @@ class CodexActivity {
           this.states.delete(session.name);
           session.activity = { available: false, busy: false, completed: session.activity?.completed || null };
         } else {
+          const threadId = path.match(/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i)?.[1];
+          if (threadId && threadId !== session.codexThreadId) {
+            session.codexThreadId = threadId;
+            this.manager.emit('session:identity', this.manager.serialize(session));
+          }
           let state = this.states.get(session.name);
           const stat = await fs.stat(path);
           if (!state || state.path !== path || stat.size < state.offset) {

@@ -116,3 +116,9 @@ npm start
 会话左侧转圈表示 Codex 正在回答；完成但未查看显示绿点，前台打开后变灰。状态来自 Linux 上当前窗格 Codex 进程的明确 turn 事件；不靠静默时间猜测。普通终端及无法识别的 Codex 版本不显示虚假的忙碌状态。已读按设备保存。
 
 [下载 Android APK](https://github.com/learner20230724/web-ttyd-hub/releases/latest) · [手机使用与兼容说明](android/README.md)
+
+## 会话恢复与动态排序
+
+Hub 自动保存稳定会话 ID、中文显示名、shell、创建时间、运行/停止状态，以及检测到的 Codex thread ID。默认文件是 `data/sessions.json`，可用 `HUB_STATE_FILE` 指定独立路径；原子替换、权限 0600，同时保留上一份 `.bak`。该目录已排除 Git，迁移时单独备份，不能放进公开仓库。服务启动自动恢复名称和列表并重新连接已有 tmux；保留 `KillMode=process`，重启 Hub 不终止任务。状态文件损坏时拒绝启动和覆盖，请人工核对并从 `.bak` 恢复。整台机器重启后只能恢复会话列表，不能复活丢失的进程；记录的 Codex thread ID 可用于手动恢复对话。
+
+会话列表按置顶分组，组内按「完成未读绿点 → 正在回答 → 灰色」实时排序，同状态沿用拖动顺序。当前打开的会话不会因排序而切换。手机阅读字号支持 4–24 px，设置自动保存，在线更新无需新 APK。

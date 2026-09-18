@@ -147,6 +147,7 @@ public class MainActivity extends Activity {
         settings.setUseWideViewPort(true); settings.setLoadWithOverviewMode(true);
         settings.setBuiltInZoomControls(true); settings.setDisplayZoomControls(false);
         settings.setTextZoom(100);
+        settings.setMinimumFontSize(1); settings.setMinimumLogicalFontSize(1);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);
         web.setWebChromeClient(new WebChromeClient() {
             @Override public void onProgressChanged(WebView view,int value) {

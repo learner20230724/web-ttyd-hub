@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { terminalSegments, tableMarkdown } from '../utils/terminal-tables.mjs'
 import { ansiToRuns } from '../utils/ansi.mjs'
 import { useSessionStore } from '../stores/sessions'
 const props = defineProps({ showExecution: Boolean, fontSize: { type: Number, default: 16 } })
@@ -26,8 +27,8 @@ function reconcilePending(name, messages) {
   transcriptIds.set(name, messages.map(m => m.id))
 }
 function dismissPending(id) { pendingBySession.value[store.current] = pendingMessages.value.filter(item => item.id !== id) }
-const messages = computed(() => (content.value.messages || []).map(m => ({ ...m, html: DOMPurify.sanitize(marked.parse(m.text), { FORBID_TAGS: ['img'], FORBID_ATTR: ['style'] }) })))
-const runs = computed(() => ansiToRuns(content.value.ansi || content.value.text || ''))
+const messages = computed(() => (content.value.messages || []).map(m => ({ ...m, html: DOMPurify.sanitize(marked.parse(tableMarkdown(m.text)), { FORBID_TAGS: ['img'], FORBID_ATTR: ['style'] }) })))
+const outputSegments = computed(() => terminalSegments(content.value.ansi || content.value.text || '').map(s => s.type === 'text' ? { ...s, runs: ansiToRuns(s.text) } : s))
 let controller, timer, disposed = false
 function scrolled() { const p = pane.value; if (p) follow.value = p.scrollHeight - p.scrollTop - p.clientHeight < 70 }
 async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight }
@@ -73,7 +74,7 @@ async function send(key = 'Enter', withText = true) {
   if (sending.value || !session.value) return
   const name = session.value.name, text = withText ? draft.value : ''
   sending.value = true; error.value = ''
-  const pending = text && key === 'Enter' ? { id: `${Date.now()}-${Math.random()}`, text, status: 'sending', before: transcriptIds.get(name) || [] } : null
+  const pending = text && key === 'Enter' ? { id: `${Date.now()}-${Math.random()}`, text, codex: session.value.activity?.available === true, status: 'sending', before: transcriptIds.get(name) || [] } : null
   if (pending) {
     pendingBySession.value[name] = [...(pendingBySession.value[name] || []), pending]
     await bottom()
@@ -107,11 +108,18 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
             <div class="markdown" v-html="message.html"></div>
           </article>
         </template>
-        <pre v-else class="mobile-output"><span v-for="(run, i) in runs" :key="i" :style="run.style">{{ run.text }}</span></pre>
+        <div v-else class="terminal-segments">
+          <template v-for="(segment, index) in outputSegments" :key="index">
+            <div v-if="segment.type === 'table'" class="terminal-table" role="region" aria-label="终端表格，可左右滑动" tabindex="0">
+              <table><tbody><tr v-for="(row, r) in segment.rows" :key="r"><td v-for="(cell, c) in row" :key="c">{{ cell }}</td></tr></tbody></table>
+            </div>
+            <pre v-else class="mobile-output"><span v-for="(run, i) in segment.runs" :key="i" :style="run.style">{{ run.text }}</span></pre>
+          </template>
+        </div>
         <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" role="status">
           <div class="pending-text">{{ item.text }}</div>
           <div class="pending-status">
-            <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? '已送达终端 · 等待 Codex 接收，通常在下一次工具调用后' : '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
+            <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? (item.codex ? '已送达终端 · 等待 Codex 接收，通常在下一次工具调用后' : '已发送到终端') : '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
             <button v-if="item.status !== 'sending'" type="button" aria-label="关闭发送提示" @click="dismissPending(item.id)">×</button>
           </div>
         </article>
@@ -119,7 +127,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
       <button v-if="!follow" class="latest" @click="bottom">↓ 回到最新</button>
       <p v-if="error" class="mobile-error" role="alert">{{ error }}</p>
       <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
-        <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Up', 'Down', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || !draft" @click="send(null)">仅输入</button></div>
+        <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Up', 'Down', 'Left', 'Right', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
           <textarea v-model="draft" aria-label="消息输入" placeholder="输入消息…" rows="2" enterkeyhint="enter"></textarea>
           <button class="send" :disabled="sending" type="submit">{{ sending ? '…' : draft ? '发送' : '回车' }}</button></div>
@@ -132,7 +140,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
 .mobile-terminal { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; position:relative; background:#0e1420; color:#e5eaf2 }
 .mobile-session-title { padding:10px 16px; font-size:14px; border-bottom:1px solid #263143; overflow-wrap:anywhere }
 .mobile-session-title span { float:right; color:#91a0b7; font-size:12px; margin-left:8px }
-.mobile-reading { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px; touch-action:pan-y; }
+.mobile-reading { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px; touch-action:pan-x pan-y; }
 .message { margin:0 0 24px; line-height:1.75; font-size:var(--reading-size); overflow-wrap:anywhere; user-select:text }
 .pending-message { margin:16px 0; padding:12px 14px; border:1px dashed #52729b; border-radius:14px; background:#18273d; }
 .pending-text { font-size:var(--reading-size); white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.6; }
@@ -149,8 +157,12 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
 .markdown :deep(a) { color:#7dd3fc; text-decoration:underline }
 .markdown :deep(ul), .markdown :deep(ol) { padding-left:24px; margin:10px 0 }
 .markdown :deep(h1), .markdown :deep(h2), .markdown :deep(h3) { font-size:calc(var(--reading-size) * 1.125); margin:18px 0 10px }
-.markdown :deep(table) { display:block; overflow-x:auto; border-collapse:collapse }
-.markdown :deep(td), .markdown :deep(th) { padding:6px; border:1px solid #344259 }
+.markdown :deep(table) { display:block; max-width:100%; overflow-x:auto; border-collapse:collapse; touch-action:pan-x pan-y; margin:12px 0; }
+.markdown :deep(td), .markdown :deep(th) { padding:8px 10px; border:1px solid #344259; min-width:5em; white-space:nowrap }
+.terminal-table { max-width:100%; overflow-x:auto; margin:12px 0; touch-action:pan-x pan-y; font-size:var(--reading-size); }
+.terminal-table table { border-collapse:collapse; min-width:100%; }
+.terminal-table td { padding:8px 10px; border:1px solid #344259; white-space:nowrap; line-height:1.6; }
+.terminal-table tr:first-child { background:#1c2a40; color:#7dd3fc; }
 .mobile-output { margin:0; font:var(--reading-size)/1.65 monospace; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text }
 .composer { padding:10px 12px; border-top:1px solid #263143; background:#131c2a; }
 .compose-row { display:flex; gap:8px; align-items:center }

@@ -30,7 +30,7 @@ export const useSessionStore = defineStore('sessions', () => {
   const layout = ref(normalizeLayout(null))
   const layoutError = ref('')
   try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))) } catch {}
-  const sortedSessions = computed(() => orderedSessions(sessions.value, layout.value))
+  const sortedSessions = computed(() => orderedSessions(sessions.value, layout.value, activityState))
   const isPinned = name => layout.value.pinned.includes(name)
   function saveLayout(value) {
     layout.value = value

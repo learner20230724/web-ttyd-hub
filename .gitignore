@@ -15,3 +15,6 @@ android/**/build/
 android/local.properties
 *.jks
 *.keystore
+
+# Local session identities and recovery snapshots (never publish)
+/data/

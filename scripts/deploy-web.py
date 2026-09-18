@@ -27,10 +27,12 @@ for attempt in range(100):
     try: api(); break
     except Exception: time.sleep(.1)
 else: raise SystemExit(f'Server failed to start; recovery snapshot: {backup}')
-# Restore stable IDs before labels; create only launches ttyd, keeping existing tmux panes.
-for session in sessions:
+# New servers restore themselves. Only migrate entries absent from durable state.
+restored = {s['name'] for s in api()['sessions']}
+missing = [s for s in sessions if s['name'] not in restored]
+for session in missing:
     api(data={'name':session['name'], 'shell':session.get('shell')}, method='POST')
-for session in sessions:
+for session in missing:
     name = session['name']
     if session.get('displayName', name) != name: api('/' + name, {'name':session['displayName']}, 'PATCH')
     if session['status'] != 'running': api('/' + name + '/stop', {}, 'POST')

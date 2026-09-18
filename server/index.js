@@ -17,7 +17,7 @@ const server = http.createServer(app);
 
 app.use(express.json());
 
-const sessionManager = new SessionManager(TTYD_PORT_START, TTYD_PORT_END);
+const sessionManager = new SessionManager(TTYD_PORT_START, TTYD_PORT_END, process.env.HUB_STATE_FILE || path.join(process.env.TMUX_TMPDIR || path.join(__dirname, '..', 'data'), 'sessions.json'));
 
 function resolveRunningSession(name) {
   if (!name) return null;
@@ -91,8 +91,14 @@ server.on('upgrade', (req, socket, head) => {
   ttydProxy.upgrade(req, socket, head);
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Web TTYd Hub running at http://${HOST}:${PORT}`);
+sessionManager.restore().then(() => {
+  server.listen(PORT, HOST, () => {
+    console.log(`Web TTYd Hub running at http://${HOST}:${PORT}`);
+  });
+}).catch(err => {
+  console.error('Session restore failed:', err.message);
+  sessionManager.cleanup();
+  process.exit(1);
 });
 
 // Cleanup on exit

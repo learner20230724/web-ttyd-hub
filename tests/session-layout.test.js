@@ -24,3 +24,12 @@ test('Malformed stored preferences are normalized without losing valid IDs', asy
   assert.deepEqual(normalizeLayout(null), { order: [], pinned: [] });
   assert.deepEqual(normalizeLayout({ order: ['a', 12, 'a', 'b'], pinned: false }), { order: ['a', 'b'], pinned: [] });
 });
+test('Unread green, busy, idle order updates while preserving pinned priority and same-status manual order', async () => {
+  const { orderedSessions } = await modulePromise;
+  const layout = { order: ['d','c','b','a'], pinned: ['a'] };
+  const states = { a:'idle', b:'unread', c:'busy', d:'idle' };
+  const order = () => orderedSessions(sessions, layout, s => states[s.name]).map(s => s.name);
+  assert.deepEqual(order(), ['a','b','c','d']);
+  states.b = 'idle'; assert.deepEqual(order(), ['a','c','d','b']);
+  states.d = 'unread'; assert.deepEqual(order(), ['a','d','c','b']);
+});

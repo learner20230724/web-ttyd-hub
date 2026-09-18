@@ -54,7 +54,7 @@ function waitForPort(port, host = '127.0.0.1', timeout = 5000) {
 }
 
 class SessionManager extends EventEmitter {
-  constructor(portRangeStart, portRangeEnd) {
+  constructor(portRangeStart, portRangeEnd, stateFile = null) {
     super();
     this.sessions = new Map();
     this.portManager = new PortManager(portRangeStart, portRangeEnd);
@@ -62,6 +62,26 @@ class SessionManager extends EventEmitter {
     this.nameCounter = 0;
     this.activity = new CodexActivity(this);
     this.inputQueues = new Map();
+    this.state = stateFile ? new (require('./session-state'))(stateFile) : null;
+    this.restoring = false;
+    this.closing = false;
+    for (const event of ['session:created', 'session:renamed', 'session:stopped', 'session:deleted', 'session:exited', 'session:identity']) {
+      this.on(event, () => { if (this.state && !this.restoring && !this.closing) this.state.save(this.list()); });
+    }
+  }
+
+  async restore() {
+    if (!this.state) return;
+    const records = this.state.read();
+    this.restoring = true;
+    try {
+      for (const saved of records) {
+        this.sessions.set(saved.name, { name: saved.name, displayName: saved.displayName,
+          shell: saved.shell, createdAt: saved.createdAt, codexThreadId: saved.codexThreadId || null,
+          status: 'stopped', port: null, pid: null, process: null });
+      }
+      for (const saved of records) if (saved.status === 'running') await this.restart(saved.name);
+    } finally { this.restoring = false; }
   }
 
   generateName(shell) {
@@ -150,7 +170,7 @@ class SessionManager extends EventEmitter {
     };
 
     proc.on('exit', (code) => {
-      if (session.status === 'running') {
+      if (!this.closing && session.process === proc && session.status === 'running') {
         session.status = 'stopped';
         session.pid = null;
         session.process = null;
@@ -243,7 +263,7 @@ class SessionManager extends EventEmitter {
     session.process = proc;
 
     proc.on('exit', (code) => {
-      if (session.status === 'running') {
+      if (!this.closing && session.process === proc && session.status === 'running') {
         session.status = 'stopped';
         session.pid = null;
         session.process = null;
@@ -291,7 +311,7 @@ class SessionManager extends EventEmitter {
 
   input(name, { text, key }) {
     this.getSession(name);
-    if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
+    if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
     if (text != null && (typeof text !== 'string' || Buffer.byteLength(text) > 64000 || /[\x00-\x08\x0b-\x1f\x7f]/.test(text))) throw new Error('输入文字无效或超过 64 KB');
     const previous = this.inputQueues.get(name) || Promise.resolve();
     const task = previous.catch(() => {}).then(async () => {
@@ -348,6 +368,7 @@ class SessionManager extends EventEmitter {
   }
 
   cleanup() {
+    this.closing = true;
     this.activity.close();
     for (const session of this.sessions.values()) {
       if (session.status === 'running' && session.process) {
