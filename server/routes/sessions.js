@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const contentResponse = require('../services/content-response');
 
 module.exports = function (sessionManager) {
   router.get('/shells', (req, res) => {
@@ -23,7 +24,7 @@ module.exports = function (sessionManager) {
   router.get('/:name/history', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
-      res.json(await sessionManager.history(req.params.name));
+      contentResponse(req, res, await sessionManager.history(req.params.name));
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -31,7 +32,7 @@ module.exports = function (sessionManager) {
 
   router.get('/:name/mobile', async (req, res) => {
     res.set('Cache-Control', 'no-store');
-    try { res.json(await sessionManager.mobile(req.params.name)); }
+    try { contentResponse(req, res, await sessionManager.mobile(req.params.name, req.query.view === 'full')); }
     catch (err) { res.status(400).json({ error: err.message }); }
   });
   router.post('/:name/input', async (req, res) => {

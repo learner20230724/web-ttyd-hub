@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, shallowRef, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { contentKey, peekContent, loadContent, fetchContent } from '../utils/session-content.mjs'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { terminalSegments, tableMarkdown } from '../utils/terminal-tables.mjs'
@@ -8,7 +9,7 @@ import { useSessionStore } from '../stores/sessions'
 const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
-const content = ref({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
+const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
 const pane = ref(null), follow = ref(true)
 const drafts = new Map()
 const pendingBySession = ref({})
@@ -27,48 +28,84 @@ function reconcilePending(name, messages) {
   transcriptIds.set(name, messages.map(m => m.id))
 }
 function dismissPending(id) { pendingBySession.value[store.current] = pendingMessages.value.filter(item => item.id !== id) }
-const messages = computed(() => (content.value.messages || []).map(m => ({ ...m, html: DOMPurify.sanitize(marked.parse(tableMarkdown(m.text)), { FORBID_TAGS: ['img'], FORBID_ATTR: ['style'] }) })))
-const outputSegments = computed(() => terminalSegments(content.value.ansi || content.value.text || '').map(s => s.type === 'text' ? { ...s, runs: ansiToRuns(s.text) } : s))
-let controller, timer, disposed = false
-function scrolled() { const p = pane.value; if (p) follow.value = p.scrollHeight - p.scrollTop - p.clientHeight < 70 }
-async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight }
-async function refresh() {
-  clearTimeout(timer)
-  if (disposed) return
-  const name = session.value?.name
-  if (!name || session.value.status !== 'running' || document.hidden) { timer = setTimeout(refresh, 1200); return }
-  controller?.abort(); const c = new AbortController(); controller = c
-  try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/mobile`, { signal: c.signal })
-    let data = await res.json()
-    if (!res.ok) throw new Error(data.error)
-    if (c.signal.aborted || session.value?.name !== name) return
-    reconcilePending(name, data.messages)
-    if (props.showExecution) {
-      // Read the shared pane without attaching a phone-sized terminal client.
-      const history = await fetch(`/api/sessions/${encodeURIComponent(name)}/history`, { signal: c.signal })
-      data = await history.json()
-      if (!history.ok) throw new Error(data.error)
-    }
-    delete data.capturedAt
-    if (c.signal.aborted || session.value?.name !== name) return
-    // Don't replace DOM when unchanged: preserve selection, copying and reading position.
-    if (JSON.stringify(content.value) !== JSON.stringify(data)) {
-      content.value = data
-      if (follow.value && !window.getSelection()?.toString()) await bottom()
-    }
-    error.value = ''
-  } catch (e) { if (!c.signal.aborted) error.value = e.message }
-  finally { if (controller === c && !disposed) timer = setTimeout(refresh, 1200) }
-}
-watch(() => store.current, (name, previous) => {
-  if (previous) drafts.set(previous, draft.value)
-  draft.value = drafts.get(name) || ''; content.value = {}; error.value = ''; follow.value = true; more.value = false
-  controller?.abort(); refresh()
-}, { immediate: true })
-watch(() => props.showExecution, () => {
-  controller?.abort(); content.value = {}; follow.value = true; refresh()
+const renderedMessages = new Map(), renderedOutput = new WeakMap()
+const messages = computed(() => (content.value.messages || []).map(m => {
+  const key = `${m.role}:${m.id}`
+  const old = renderedMessages.get(key)
+  if (old?.text === m.text) return old
+  const rendered = markRaw({ ...m, html: DOMPurify.sanitize(marked.parse(tableMarkdown(m.text)), { FORBID_TAGS: ['img'], FORBID_ATTR: ['style'] }) })
+  renderedMessages.set(key, rendered)
+  if (renderedMessages.size > 1200) renderedMessages.delete(renderedMessages.keys().next().value)
+  return rendered
+}))
+const outputSegments = computed(() => {
+  const data = content.value
+  if (!renderedOutput.has(data)) renderedOutput.set(data, markRaw(terminalSegments(data.ansi || data.text || '').map(s => s.type === 'text' ? { ...s, runs: ansiToRuns(s.text) } : s)))
+  return renderedOutput.get(data)
 })
+const positions = new Map()
+let timer, disposed = false, epoch = 0, visibleKey = null, switching = false
+function scrolled() {
+  const p = pane.value
+  if (!p || switching) return
+  follow.value = p.scrollHeight - p.scrollTop - p.clientHeight < 70
+  if (visibleKey) positions.set(visibleKey, { top:p.scrollTop, follow:follow.value })
+}
+async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight }
+async function display(entry, first = false) {
+  if (!entry || entry.data === content.value) return
+  content.value = markRaw(entry.data)
+  const key = visibleKey
+  await nextTick()
+  if (key !== visibleKey || !pane.value) return
+  const position = positions.get(key)
+  if (first && position && !position.follow) pane.value.scrollTop = position.top
+  else if (follow.value && !window.getSelection()?.toString()) pane.value.scrollTop = pane.value.scrollHeight
+}
+async function refresh(token = epoch) {
+  if (disposed || token !== epoch) return
+  clearTimeout(timer)
+  const selected = session.value, view = props.showExecution ? 'full' : 'answer'
+  if (!selected || document.hidden) { timer = setTimeout(() => refresh(token), 1200); return }
+  try {
+    const entry = await fetchContent(selected, view)
+    if (disposed || token !== epoch) return
+    if (view === 'answer') reconcilePending(selected.name, entry.data.messages)
+    await display(entry)
+    error.value = ''
+    if (view === 'full' && pendingMessages.value.some(item => item.codex)) {
+      void fetchContent(selected, 'answer').then(answer => { if (token === epoch) reconcilePending(selected.name, answer.data.messages) }).catch(() => {})
+    }
+  } catch (e) {
+    if (token === epoch) error.value = Object.keys(content.value).length ? '正在显示缓存，暂时无法更新。' : e.message
+  } finally { if (!disposed && token === epoch) { clearTimeout(timer); timer = setTimeout(() => refresh(token), 1200) } }
+}
+watch([() => store.current, () => props.showExecution], async ([name, full], previous) => {
+  const previousName = previous?.[0]
+  if (visibleKey && pane.value) positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
+  if (previousName && name !== previousName) drafts.set(previousName, draft.value)
+  if (name !== previousName) { draft.value = drafts.get(name) || ''; more.value = false }
+  const token = ++epoch, selected = session.value
+  clearTimeout(timer); error.value = ''; switching = true
+  const view = full ? 'full' : 'answer'
+  visibleKey = selected ? contentKey(selected, view) : null
+  follow.value = positions.get(visibleKey)?.follow ?? true
+  const cached = selected ? peekContent(selected, view) : null
+  content.value = {} // A different session must never display the previous session's text.
+  if (cached) await display(cached, true)
+  if (!selected) { switching = false; return }
+  // Start current view and the other view independently; never wait for one to fetch the other.
+  void refresh(token)
+  const other = full ? 'answer' : 'full'
+  void fetchContent(selected, other).then(entry => {
+    if (token === epoch && other === 'answer') reconcilePending(name, entry.data.messages)
+  }).catch(() => {})
+  if (!cached) {
+    const stored = await loadContent(selected, view)
+    if (token === epoch && !Object.keys(content.value).length) await display(stored, true)
+  }
+  if (token === epoch) { await nextTick(); switching = false }
+}, { immediate: true })
 watch(() => props.fontSize, async () => { if (follow.value) await bottom() })
 async function send(key = 'Enter', withText = true) {
   if (sending.value || !session.value) return
@@ -95,7 +132,7 @@ async function send(key = 'Enter', withText = true) {
   }
   finally { sending.value = false }
 }
-onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort() })
+onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer) })
 </script>
 <template>
   <section class="mobile-terminal" :style="{ '--reading-size': `${fontSize}px` }">

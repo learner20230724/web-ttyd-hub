@@ -1,3 +1,4 @@
+import { pruneContent } from '../utils/session-content.mjs'
 import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose, watch } from 'vue'
 import { LAYOUT_KEY, normalizeLayout, orderedSessions, moveSession } from '../utils/session-layout.mjs'
@@ -67,6 +68,7 @@ export const useSessionStore = defineStore('sessions', () => {
   async function fetchSessions() {
     const res = await fetch('/api/sessions')
     const data = await res.json()
+    void pruneContent(data.sessions)
     sessions.value = data.sessions
     if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) current.value = null
   }

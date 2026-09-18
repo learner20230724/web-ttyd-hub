@@ -101,6 +101,12 @@ test('Chinese creation and rename preserve the live terminal, broadcast, and lif
     assert.equal(history.status, 200);
     assert.ok(history.data.text.includes('HUB_RENAME_STILL_ALIVE'));
     assert.equal(history.data.name, session.name);
+    const conditional = await fetch(base + url + '/history');
+    const etag = conditional.headers.get('etag');
+    assert.ok(etag);
+    const unchanged = await fetch(base + url + '/history', { headers: { 'If-None-Match': etag } });
+    assert.equal(unchanged.status, 304);
+    assert.equal(await unchanged.text(), '');
     assert.ok(history.data.ansi.includes('\x1b['));
     assert.ok(!history.data.text.includes('\x1b'));
     assert.ok(history.data.text.includes('HUB_COLOR'));

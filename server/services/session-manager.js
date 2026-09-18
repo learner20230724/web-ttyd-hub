@@ -332,8 +332,9 @@ class SessionManager extends EventEmitter {
     }
   }
 
-  async mobile(name) {
+  async mobile(name, full = false) {
     await this.ensurePane(name);
+    if (full) return this.history(name);
     const messages = this.activity.messages(name);
     if (messages?.length) return { messages, activity: this.getSession(name).activity };
     return { ...await this.history(name), activity: this.getSession(name).activity };

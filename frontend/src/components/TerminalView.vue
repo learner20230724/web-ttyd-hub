@@ -2,6 +2,7 @@
 import { computed, ref, watch, nextTick, onBeforeUnmount } from "vue";
 import { useSessionStore } from "../stores/sessions";
 
+import { peekContent, loadContent, fetchContent } from "../utils/session-content.mjs";
 import { ansiToRuns } from "../utils/ansi.mjs";
 
 const store = useSessionStore();
@@ -40,21 +41,31 @@ async function openHistory(fromWheel = false) {
   requestController?.abort();
   const controller = new AbortController();
   requestController = controller;
-  try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(name)}/history`, { signal: controller.signal });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
-    if (controller.signal.aborted || currentSession.value?.name !== name) return;
-    historyText.value = data.ansi ?? data.text;
-    await nextTick();
-    if (historyPane.value) {
+  const selected = currentSession.value;
+  const cached = peekContent(selected, 'full');
+  let shown = false;
+  async function show(entry) {
+    if (!entry || controller.signal.aborted || currentSession.value?.name !== name) return;
+    const text = entry.data.ansi ?? entry.data.text ?? '';
+    if (historyText.value !== text) historyText.value = text;
+    if (!shown) {
+      shown = true;
+      await nextTick();
+      if (controller.signal.aborted) return;
       const pane = historyPane.value;
-      // Start near the latest output; the first wheel-up reveals the preceding screen.
-      pane.scrollTop = pane.scrollHeight - pane.clientHeight - (fromWheel ? pane.clientHeight * 0.6 : 0);
-      pane.focus({ preventScroll: true });
+      if (pane) {
+        pane.scrollTop = pane.scrollHeight - pane.clientHeight - (fromWheel ? pane.clientHeight * 0.6 : 0);
+        pane.focus({ preventScroll: true });
+      }
     }
+  }
+  historyText.value = '';
+  if (cached) await show(cached);
+  else void loadContent(selected, 'full').then(entry => { if (!shown) show(entry); });
+  try {
+    await show(await fetchContent(selected, 'full', { mobile:false }));
   } catch (err) {
-    if (!controller.signal.aborted) historyError.value = err.message;
+    if (!controller.signal.aborted) historyError.value = shown ? '正在显示缓存，暂时无法更新。' : err.message;
   } finally {
     if (requestController === controller) historyLoading.value = false;
   }
@@ -222,7 +233,7 @@ onBeforeUnmount(() => { detachWheel(); requestController?.abort(); });
         <button :disabled="historyLoading" @click="openHistory(false)">刷新 / Refresh</button>
         <button data-action="close-history" @click="closeHistory">回到终端 / Live</button>
       </header>
-      <p v-if="historyLoading" class="history-notice" role="status">正在读取历史输出…</p>
+      <p v-if="historyLoading && !historyText" class="history-notice" role="status">正在读取历史输出…</p>
       <p v-if="historyError" class="history-notice" role="alert">{{ historyError }}</p>
       <pre :key="historyRevision" ref="historyPane" class="history-output" tabindex="0"
         :inputmode="touchDevice ? 'none' : 'text'" contenteditable="true" spellcheck="false" autocapitalize="off" autocorrect="off"
