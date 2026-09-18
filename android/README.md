@@ -99,3 +99,9 @@ Linux 服务通过对应 tmux 窗格的 Codex 进程打开的 rollout 文件读�
 http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk
 
 版本文件位于同一路径 `ttyd-hub-android-X.Y.Z.apk`，附 `.sha256` 校验文件。运行 `python3 scripts/publish-apk.py android/app/build/outputs/apk/release/app-release.apk X.Y.Z`，签名验证通过后更新版本文件和固定最新包。只有该下载目录公开，Hub 会话和 API 继续要求原认证。
+
+### 1.4：APP 内点击下载链接
+
+修复同源 IP 下载地址被留在 WebView、点击 APK 无反应的问题。用户点击 HTTP(S) APK 链接时，先交给系统浏览器，不再按普通 Hub 页面加载；其他附件由 WebView DownloadListener 接管并打开浏览器。终端页面仍在 APP 内，账号密码不附加到外部浏览器链接。
+
+旧版没有原生下载处理，获取 1.4 修复包需将固定下载地址复制到手机浏览器一次，再覆盖安装；更新后正常点击下载。无需卸载，不改包名和签名。

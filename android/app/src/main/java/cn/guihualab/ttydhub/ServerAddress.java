@@ -30,6 +30,17 @@ public final class ServerAddress {
             return a.getScheme().equalsIgnoreCase(b.getScheme()) && a.getHost().equalsIgnoreCase(b.getHost()) && port(a) == port(b);
         } catch (Exception e) { return false; }
     }
+    public static boolean isWebUrl(String address) {
+        try {
+            URI uri = new URI(address);
+            return uri.getHost() != null && uri.getUserInfo() == null &&
+                ("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()));
+        } catch (Exception e) { return false; }
+    }
+    public static boolean isApkDownload(String address) {
+        if (!isWebUrl(address)) return false;
+        return URI.create(address).getPath().toLowerCase(Locale.ROOT).endsWith(".apk");
+    }
     public static String authScope(String address, String realm) {
         URI uri = URI.create(address);
         return uri.getScheme().toLowerCase(Locale.ROOT) + "://" + uri.getHost().toLowerCase(Locale.ROOT) + ":" + port(uri) + "/" + (realm == null ? "" : realm);

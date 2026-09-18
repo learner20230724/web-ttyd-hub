@@ -16,6 +16,12 @@ public class ServerAddressTest {
         check(!ServerAddress.authScope("http://example.com/", "hub").equals(ServerAddress.authScope("https://example.com/", "hub")));
         check(!ServerAddress.authScope("https://example.com:8443/", "hub").equals(ServerAddress.authScope("https://example.com/", "hub")));
         check(!ServerAddress.authScope("https://example.com/", "other").equals(ServerAddress.authScope("https://example.com/", "hub")));
+        check(ServerAddress.isApkDownload("http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk"));
+        check(ServerAddress.isApkDownload("https://example.com/App.APK?download=1"));
+        check(!ServerAddress.isApkDownload("https://example.com/terminal/a"));
+        check(!ServerAddress.isApkDownload("file:///private/app.apk"));
+        check(!ServerAddress.isWebUrl("intent://download"));
+        check(!ServerAddress.isWebUrl("https://user:password@example.com/a.apk"));
         System.out.println("PASS: server URL validation and navigation origin policy");
     }
     private static void check(boolean value) { if (!value) throw new AssertionError(); }

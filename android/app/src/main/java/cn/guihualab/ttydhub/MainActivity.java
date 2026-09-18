@@ -149,6 +149,7 @@ public class MainActivity extends Activity {
         settings.setTextZoom(100);
         settings.setMinimumFontSize(1); settings.setMinimumLogicalFontSize(1);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);
+        web.setDownloadListener((url, userAgent, disposition, mimeType, length) -> openInBrowser(url));
         web.setWebChromeClient(new WebChromeClient() {
             @Override public void onProgressChanged(WebView view,int value) {
                 progress.setProgress(value); progress.setVisibility(value == 100 ? View.GONE : View.VISIBLE);
@@ -164,11 +165,11 @@ public class MainActivity extends Activity {
             }
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                if (ServerAddress.sameOrigin(server,url)) return false;
-                if (request.isForMainFrame() && request.hasGesture() && (url.startsWith("https://") || url.startsWith("http://"))) {
-                    try { startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url))); }
-                    catch (android.content.ActivityNotFoundException e) { notice("没有可用的浏览器"); }
+                if (request.isForMainFrame() && request.hasGesture() && ServerAddress.isApkDownload(url)) {
+                    openInBrowser(url); return true;
                 }
+                if (ServerAddress.sameOrigin(server,url)) return false;
+                if (request.isForMainFrame() && request.hasGesture()) openInBrowser(url);
                 return true;
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) {
@@ -200,6 +201,14 @@ public class MainActivity extends Activity {
             }
         });
         web.loadUrl(address);
+    }
+    private void openInBrowser(String url) {
+        if (!ServerAddress.isWebUrl(url)) { notice("无法打开此下载地址"); return; }
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            intent.addCategory(Intent.CATEGORY_BROWSABLE);
+            startActivity(intent);
+        } catch (android.content.ActivityNotFoundException e) { notice("没有可用的浏览器，请复制链接到浏览器下载"); }
     }
     private void promptLogin(HttpAuthHandler handler) {
         authRequests.add(handler);
