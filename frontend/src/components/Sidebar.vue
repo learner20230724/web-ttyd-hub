@@ -109,7 +109,6 @@ onBeforeUnmount(() => finishDrag());
       </button>
     </div>
 
-    <p v-if="!collapsed" class="sort-hint">拖动 ⠿ 排序 · ⋯ 管理会话<br>置顶与普通会话分别排序</p>
     <p v-if="store.layoutError" class="sort-hint" role="alert">{{ store.layoutError }}</p>
     <div ref="list" class="session-list" :class="{ sorting: dragging }">
       <SessionCard
@@ -128,7 +127,7 @@ onBeforeUnmount(() => finishDrag());
         <p class="sub-hint">Create one to get started</p>
       </div>
     </div>
-    <details v-if="!collapsed" class="archive-section" open>
+    <details v-if="!collapsed" class="archive-section">
       <summary>归档（{{ store.archivedSessions.length }}）</summary>
       <p class="sort-hint">进程保留 30 分钟，到期自动终止</p>
       <div class="archive-list">
