@@ -3,8 +3,6 @@ package cn.guihualab.ttydhub;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ClipboardManager;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
@@ -14,7 +12,6 @@ import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
-import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.inputmethod.InputMethodManager;
@@ -31,11 +28,9 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
-import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -126,21 +121,13 @@ public class MainActivity extends Activity {
             } catch (IllegalArgumentException e) { address.setError(e.getMessage()); }
         });
         form.addView(connect);
-        TextView tip = label("使用提示\n• 上下滑动历史，长按选择复制\n• 顶部「粘贴」可把剪贴板内容送入终端\n• 顶部「键盘」调出输入法\n• 关闭应用不会主动终止服务器任务", 14);
+        TextView tip = label("使用提示\n• 上下滑动历史，长按选择复制\n• 长按输入框粘贴，点击发送\n• 点击输入框调出输入法；返回键打开连接选项\n• 关闭应用不会主动终止服务器任务", 14);
         tip.setPadding(0,dp(24),0,0); form.addView(tip);
     }
     @SuppressLint("SetJavaScriptEnabled")
     private void openServer(String address) {
         destroyWeb();
         LinearLayout outer = column(); setRoot(outer);
-        LinearLayout toolbar = new LinearLayout(this); toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(8),0,dp(4),0);
-        TextView title = label("TTYd Hub", 18);
-        toolbar.addView(title,new LinearLayout.LayoutParams(0,dp(48),1)); title.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.addView(button("键盘",v->showKeyboard()));
-        toolbar.addView(button("粘贴",v->pasteClipboard()));
-        Button more = button("⋮",this::showMenu); more.setContentDescription("更多操作"); toolbar.addView(more);
-        outer.addView(toolbar);
         progress = new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
         outer.addView(progress,new LinearLayout.LayoutParams(-1,dp(3)));
         status = label("",13); status.setPadding(dp(12),dp(6),dp(12),dp(6)); status.setVisibility(View.GONE); outer.addView(status);
@@ -186,10 +173,10 @@ public class MainActivity extends Activity {
                 handler.cancel(); connectionError("服务器证书无法验证。请检查地址或证书后重试。");
             }
             @Override public void onReceivedError(WebView v,WebResourceRequest request,WebResourceError error) {
-                if (request.isForMainFrame()) connectionError("连接失败，请检查网络和服务器地址。可在右上角重试或更换服务器。");
+                if (request.isForMainFrame()) connectionError("连接失败，请检查网络和服务器地址。可在返回键菜单重试或更换服务器。");
             }
             @Override public void onReceivedHttpError(WebView v,WebResourceRequest request,WebResourceResponse response) {
-                if (request.isForMainFrame() && response.getStatusCode() >= 400) connectionError("服务器返回 " + response.getStatusCode() + "，可在右上角重试。");
+                if (request.isForMainFrame() && response.getStatusCode() >= 400) connectionError("服务器返回 " + response.getStatusCode() + "，可在返回键菜单重试。");
             }
         });
         web.loadUrl(address);
@@ -212,46 +199,24 @@ public class MainActivity extends Activity {
     }
     private void cancelLogin() {
         for (HttpAuthHandler h : authRequests) h.cancel(); authRequests.clear(); loginDialog = null;
-        connectionError("已取消登录，可在右上角重新加载或更换服务器。");
+        connectionError("已取消登录，可在返回键菜单重新加载或更换服务器。");
     }
     private void connectionError(String text) { pageFailed = true; status.setText(text); status.setVisibility(View.VISIBLE); }
     private void notice(String message) { Toast.makeText(this,message,Toast.LENGTH_SHORT).show(); }
     private boolean canControl() { return web != null && ServerAddress.sameOrigin(server,web.getUrl()); }
-    private void showKeyboard() {
-        if (!canControl()) return;
-        web.requestFocus();
-        web.evaluateJavascript("(()=>{const h=document.querySelector('.history-output');if(h){h.inputMode='text';h.focus();return true;}const t=document.querySelector('.terminal-frame')?.contentWindow?.term;if(t){t.focus();return true;}return false;})()",value->{
-            if ("true".equals(value)) ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(web,InputMethodManager.SHOW_IMPLICIT);
-            else notice("请先选择一个终端会话");
-        });
-    }
-    private void pasteClipboard() {
-        if (!canControl()) return;
-        ClipboardManager clipboard = (ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);
-        if (!clipboard.hasPrimaryClip() || clipboard.getPrimaryClip() == null || clipboard.getPrimaryClip().getItemCount() == 0) { notice("剪贴板没有文字"); return; }
-        CharSequence text = clipboard.getPrimaryClip().getItemAt(0).getText();
-        if (text == null || text.length() == 0) { notice("剪贴板没有可粘贴的文字"); return; }
-        String script = "(text=>{const h=document.querySelector('.history-output');if(h){const d=new DataTransfer();d.setData('text/plain',text);h.dispatchEvent(new ClipboardEvent('paste',{clipboardData:d,bubbles:true,cancelable:true}));return true;}const t=document.querySelector('.terminal-frame')?.contentWindow?.term;if(t&&!t.options.disableStdin){t.paste(text);t.focus();return true;}return false;})(" + JSONObject.quote(text.toString()) + ")";
-        web.evaluateJavascript(script,value->{ if (!"true".equals(value)) notice("请先连接并选择一个终端会话"); });
-    }
-    private void showMenu(View anchor) {
-        PopupMenu menu = new PopupMenu(this,anchor);
-        menu.getMenu().add("重新加载"); menu.getMenu().add("更换服务器"); menu.getMenu().add("使用说明");
-        menu.setOnMenuItemClickListener(item->{
-            switch (item.getTitle().toString()) {
-                case "重新加载": if (web != null) web.reload(); break;
-                case "更换服务器": showConnection(); break;
-                default: new AlertDialog.Builder(this).setTitle("手机使用说明")
-                    .setMessage("在终端上上下滑动可进入历史，历史中可继续滑动和长按选择复制。\n\n点击顶部「键盘」输入，或点「粘贴」，会带着内容返回终端。不会额外发送回车。\n\n会话置顶和排序保存在本应用中，与手机浏览器分别保存。\n\n需要保持网络连接；后台恢复时如遇断线，可重新加载。服务器上的任务由 tmux 保留。")
-                    .setPositiveButton("知道了",null).show();
-            }
-            return true;
-        }); menu.show();
+    private void connectionMenu() {
+        new AlertDialog.Builder(this).setTitle("连接选项")
+            .setItems(new String[]{"重新加载", "更换服务器", "返回桌面"}, (dialog, which) -> {
+                if (which == 0 && web != null) web.reload();
+                else if (which == 1) showConnection();
+                else moveTaskToBack(true);
+            }).setNegativeButton("取消", null).show();
     }
     @Override public void onBackPressed() {
-        if (!canControl()) { super.onBackPressed(); return; }
+        if (web == null) { super.onBackPressed(); return; }
+        if (!canControl()) { connectionMenu(); return; }
         web.evaluateJavascript("(()=>{const b=document.querySelector('[data-action=close-history]');if(b){b.click();return true;}return false;})()",value->{
-            if (!"true".equals(value)) moveTaskToBack(true);
+            if (!"true".equals(value)) connectionMenu();
         });
     }
     @Override protected void onPause() { if (web != null) web.onPause(); super.onPause(); }

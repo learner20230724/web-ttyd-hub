@@ -5,6 +5,7 @@ const runFile = promisify(execFile);
 const { randomUUID } = require('crypto');
 const EventEmitter = require('events');
 const PortManager = require('./port-manager');
+const { CodexActivity } = require('./codex-activity');
 
 const SESSION_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
@@ -59,6 +60,8 @@ class SessionManager extends EventEmitter {
     this.portManager = new PortManager(portRangeStart, portRangeEnd);
     this.shells = detectShells();
     this.nameCounter = 0;
+    this.activity = new CodexActivity(this);
+    this.inputQueues = new Map();
   }
 
   generateName(shell) {
@@ -267,6 +270,54 @@ class SessionManager extends EventEmitter {
     return this.serialize(session);
   }
 
+  async ensurePane(name) {
+    const session = this.getSession(name);
+    if (session.status !== 'running') throw new Error('会话已停止');
+    try { await runFile('tmux', ['has-session', '-t', `=${name}`]); }
+    catch {
+      const args = ['new-session', '-d', '-s', name, '-x', '120', '-y', '40'];
+      const shell = this.resolveShell(session.shell);
+      if (shell) args.push(shell);
+      await runFile('tmux', args);
+    }
+  }
+
+  async mobile(name) {
+    await this.ensurePane(name);
+    const messages = this.activity.messages(name);
+    if (messages?.length) return { messages, activity: this.getSession(name).activity };
+    return { ...await this.history(name), activity: this.getSession(name).activity };
+  }
+
+  input(name, { text, key }) {
+    this.getSession(name);
+    if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
+    if (text != null && (typeof text !== 'string' || Buffer.byteLength(text) > 64000 || /[\x00-\x08\x0b-\x1f\x7f]/.test(text))) throw new Error('输入文字无效或超过 64 KB');
+    const previous = this.inputQueues.get(name) || Promise.resolve();
+    const task = previous.catch(() => {}).then(async () => {
+      await this.ensurePane(name);
+      if (text) {
+        const buffer = `hub-${randomUUID()}`;
+        // stdin + named tmux buffer avoids shell interpolation and preserves multiline paste.
+        await new Promise((resolve, reject) => {
+          const child = spawn('tmux', ['load-buffer', '-b', buffer, '-'], { stdio: ['pipe', 'ignore', 'pipe'] });
+          child.on('error', reject); child.stdin.on('error', reject);
+          child.on('close', code => code === 0 ? resolve() : reject(new Error('无法写入终端')));
+          child.stdin.end(text);
+        });
+        try { await runFile('tmux', ['paste-buffer', '-d', '-p', '-b', buffer, '-t', `=${name}:`]); }
+        finally { await runFile('tmux', ['delete-buffer', '-b', buffer]).catch(() => {}); }
+        // Let bracketed-paste handling complete before submitting the input.
+        if (key) await new Promise(resolve => setTimeout(resolve, 80));
+      }
+      if (key) await runFile('tmux', ['send-keys', '-t', `=${name}:`, key]);
+      return { ok: true };
+    });
+    this.inputQueues.set(name, task);
+    task.finally(() => { if (this.inputQueues.get(name) === task) this.inputQueues.delete(name); }).catch(() => {});
+    return task;
+  }
+
   async history(name) {
     const session = this.getSession(name);
     try {
@@ -297,6 +348,7 @@ class SessionManager extends EventEmitter {
   }
 
   cleanup() {
+    this.activity.close();
     for (const session of this.sessions.values()) {
       if (session.status === 'running' && session.process) {
         session.process.kill('SIGTERM');

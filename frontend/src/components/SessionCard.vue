@@ -80,7 +80,7 @@ function cancelRemove(e) {
       @pointerdown.stop="emit('drag-start', $event, session.name)" @click.stop
       @keydown.up.prevent.stop="store.moveByKeyboard(session.name, -1)"
       @keydown.down.prevent.stop="store.moveByKeyboard(session.name, 1)">⠿</button>
-    <div class="status-indicator" :class="session.status"></div>
+    <div class="status-indicator" :class="store.activityState(session)" role="status" :aria-label="{busy: '正在回答', unread: '回答完成，未读', idle: '空闲或已读'}[store.activityState(session)]" :title="{busy: '正在回答', unread: '回答完成，未读', idle: '空闲或已读'}[store.activityState(session)]"></div>
 
     <div class="card-content" v-show="!collapsed">
       <div class="card-top">
@@ -194,10 +194,13 @@ function cancelRemove(e) {
   flex-shrink: 0;
 }
 
-.status-indicator.running {
+.status-indicator.unread {
   background: var(--success);
   box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
 }
+
+.status-indicator.busy { width:12px; height:12px; background:transparent; border:2px solid #506078; border-top-color:#70cbff; animation:answer-spin .8s linear infinite; }
+@keyframes answer-spin { to { transform:rotate(360deg); } }
 
 .card-content {
   flex: 1;

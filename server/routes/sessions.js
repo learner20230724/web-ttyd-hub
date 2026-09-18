@@ -29,6 +29,16 @@ module.exports = function (sessionManager) {
     }
   });
 
+  router.get('/:name/mobile', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try { res.json(await sessionManager.mobile(req.params.name)); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  router.post('/:name/input', async (req, res) => {
+    try { res.json(await sessionManager.input(req.params.name, req.body)); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
   router.patch('/:name', (req, res) => {
     try {
       res.json(sessionManager.rename(req.params.name, req.body.name));

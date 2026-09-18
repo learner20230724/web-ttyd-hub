@@ -108,3 +108,11 @@ npm start
 ## 许可证与致谢
 
 遵循上游 README 声明的 MIT 许可，见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。感谢 sosopop、ttyd、tmux 及其他依赖维护者。此项目不代表 ttyd 官方。
+
+## 手机阅读与 Codex 状态（Android 1.1）
+
+手机不再缩小电脑上的共享 tmux 窗口：独立聊天阅读界面支持 Markdown、代码块、彩色终端回退、原生滑动和长按复制。底部中文输入框支持系统粘贴、多行编辑与发送。APK 移除了顶部键盘/粘贴工具栏。
+
+会话左侧转圈表示 Codex 正在回答；完成但未查看显示绿点，前台打开后变灰。状态来自 Linux 上当前窗格 Codex 进程的明确 turn 事件；不靠静默时间猜测。普通终端及无法识别的 Codex 版本不显示虚假的忙碌状态。已读按设备保存。
+
+[下载 Android APK](https://github.com/learner20230724/web-ttyd-hub/releases/latest) · [手机使用与兼容说明](android/README.md)

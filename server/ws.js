@@ -23,6 +23,7 @@ function setupWebSocket(server, sessionManager) {
 
   const events = [
     'session:created',
+    'session:activity',
     'session:renamed',
     'session:stopped',
     'session:deleted',

@@ -1,6 +1,7 @@
 <script setup>
-import { ref, provide } from "vue";
+import { ref, provide, watch } from "vue";
 import Sidebar from "./components/Sidebar.vue";
+import MobileTerminal from "./components/MobileTerminal.vue";
 import TerminalView from "./components/TerminalView.vue";
 import CreateDialog from "./components/CreateDialog.vue";
 import Toast from "./components/Toast.vue";
@@ -11,27 +12,10 @@ const sidebarCollapsed = ref(false);
 const showCreateDialog = ref(false);
 const toastRef = ref(null);
 
-// Mobile handling: Initially collapsed on mobile could be handled by media queries,
-// but for state consistency, we might want to default to closed on small screens if we had window size detection.
-// For now, let's just default to open on desktop (false) and we will use CSS to hide it on mobile unless open.
-// Actually, a better mobile pattern is "Sidebar hidden by default".
-// Let's rely on the CSS `transform` logic in Sidebar.vue which uses a class.
-// But we need a reactive state for "mobileSidebarOpen".
-// To simplify, let's re-use `sidebarCollapsed` but invert the meaning or implementation for mobile?
-// No, let's keep it simple:
-// Desktop: `sidebarCollapsed` toggles width.
-// Mobile: `sidebarCollapsed` toggles visibility (transform).
-// Wait, usually "collapsed=true" means hidden/small.
-// On mobile, "collapsed=true" should mean hidden (default).
-// On desktop, "collapsed=false" means open (default).
-
-// Let's initialize based on basic heuristic or just default to false (Open) for desktop.
-// On mobile, we want it closed by default.
-// Adding a simple check (not SSR safe but fine for SPA):
-const isMobile = window.innerWidth < 768;
-if (isMobile) {
-  sidebarCollapsed.value = true;
-}
+// Keep a phone in reading mode across rotation and keyboard resizing.
+const isMobile = window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768;
+if (isMobile) sidebarCollapsed.value = true;
+watch(() => store.current, () => { if (isMobile) sidebarCollapsed.value = true; });
 
 provide("toast", toastRef);
 store.init();
@@ -100,7 +84,8 @@ function handleMobileOverlayClick() {
         @create="showCreateDialog = true"
       />
 
-      <TerminalView @create="showCreateDialog = true" />
+      <MobileTerminal v-if="isMobile" />
+      <TerminalView v-else @create="showCreateDialog = true" />
     </div>
 
     <CreateDialog v-if="showCreateDialog" @close="showCreateDialog = false" />
@@ -111,6 +96,8 @@ function handleMobileOverlayClick() {
 <style scoped>
 .app-layout {
   height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -174,6 +161,7 @@ function handleMobileOverlayClick() {
 }
 
 .main-area {
+  min-height: 0;
   flex: 1;
   display: flex;
   overflow: hidden;

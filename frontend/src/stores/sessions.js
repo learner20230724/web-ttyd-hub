@@ -1,11 +1,32 @@
 import { defineStore } from 'pinia'
-import { ref, computed, onScopeDispose } from 'vue'
+import { ref, computed, onScopeDispose, watch } from 'vue'
 import { LAYOUT_KEY, normalizeLayout, orderedSessions, moveSession } from '../utils/session-layout.mjs'
 
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref([])
+  const readKey = 'web-ttyd-hub.read.v1'
+  const read = ref({})
+  try { read.value = JSON.parse(localStorage.getItem(readKey)) || {} } catch {}
+  function markRead() {
+    if (document.hidden || !document.hasFocus()) return
+    const session = sessions.value.find(s => s.name === current.value)
+    if (session?.activity?.completed) {
+      read.value[session.name] = session.activity.completed
+      try { localStorage.setItem(readKey, JSON.stringify(read.value)) } catch {}
+    }
+  }
+  function activityState(session) {
+    if (session.status !== 'running') return 'idle'
+    if (session.activity?.busy) return 'busy'
+    if (session.activity?.completed && read.value[session.name] !== session.activity.completed) return 'unread'
+    return 'idle'
+  }
+  document.addEventListener('visibilitychange', markRead)
+  window.addEventListener('focus', markRead)
+  onScopeDispose(() => { document.removeEventListener('visibilitychange', markRead); window.removeEventListener('focus', markRead) })
   const shells = ref([])
   const current = ref(null)
+  watch([current, sessions], markRead)
   const layout = ref(normalizeLayout(null))
   const layoutError = ref('')
   try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))) } catch {}
@@ -152,6 +173,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   return {
     sessions,
+    activityState,
     sortedSessions,
     layoutError,
     isPinned,
