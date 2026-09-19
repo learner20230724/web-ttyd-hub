@@ -46,6 +46,8 @@ export const useSessionStore = defineStore('sessions', () => {
   try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))) } catch {}
   const sortedSessions = computed(() => orderedSessions(sessions.value.filter(s => !s.archivedAt), layout.value, activityState))
   const archivedSessions = computed(() => sessions.value.filter(s => s.archivedAt).sort((a,b) => Date.parse(b.archivedAt) - Date.parse(a.archivedAt)))
+  const unreadSessions = computed(() => sortedSessions.value.filter(s => s.name !== current.value && activityState(s) === 'unread'))
+  const unreadCount = computed(() => unreadSessions.value.length)
   const isPinned = name => layout.value.pinned.includes(name)
   function saveLayout(value) {
     layout.value = value
@@ -175,6 +177,11 @@ export const useSessionStore = defineStore('sessions', () => {
     markRead()
   }
 
+  function selectNextUnread() {
+    const next = unreadSessions.value[0]
+    if (next) select(next.name)
+  }
+
   function connectWs() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     ws = new WebSocket(`${proto}://${location.host}/ws`)
@@ -185,6 +192,8 @@ export const useSessionStore = defineStore('sessions', () => {
 
     ws.onopen = () => {
       reconnectDelay = 1000
+      // Recover completions that happened while a phone's connection was asleep.
+      fetchSessions().catch(() => {})
     }
 
     ws.onclose = () => {
@@ -216,6 +225,8 @@ export const useSessionStore = defineStore('sessions', () => {
     activityState,
     sortedSessions,
     archivedSessions,
+    unreadCount,
+    selectNextUnread,
     restoreSession,
     layoutError,
     isPinned,

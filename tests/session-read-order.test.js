@@ -111,6 +111,56 @@ test('Saved read state and promoted gray order survive reopening the store', asy
   assert.equal(f.store.activityState(f.store.sessions[1]), 'idle');
 });
 
+test('Unread badge excludes the current session even without focus and counts other completed sessions once', async t => {
+  const f = await setup(t, { order: [], pinned: ['other'] });
+  const sessions = [session('current', { completed: 't1' }), session('other', { completed: 't2' }),
+    session('busy', { busy: true, completed: 'old' }), session('plain'),
+    { ...session('archived', { completed: 't3' }), archivedAt: 'now' },
+    { ...session('stopped', { completed: 't4' }), status: 'stopped' }];
+  await f.update(sessions);
+  assert.equal(f.store.unreadCount, 2);
+  f.doc.focused = false;
+  f.store.select('current'); await f.nextTick();
+  assert.equal(f.store.activityState(f.store.sessions[0]), 'unread');
+  assert.equal(f.store.unreadCount, 1, 'Selected session is excluded independently of its read marker');
+  sessions[0].activity.completed = 't1-new';
+  sessions[2].activity = { completed: 'busy-finished' };
+  await f.update(sessions);
+  assert.equal(f.store.unreadCount, 2);
+  f.doc.focused = true;
+  f.win.dispatchEvent(new Event('focus'));
+  f.store.select('other'); await f.nextTick();
+  assert.equal(f.store.unreadCount, 1);
+  f.store.select('busy'); await f.nextTick();
+  assert.equal(f.store.unreadCount, 0);
+  await f.update(sessions);
+  assert.equal(f.store.unreadCount, 0);
+  sessions[1].activity.completed = 't2-next';
+  await f.update(sessions);
+  assert.equal(f.store.unreadCount, 1);
+  sessions[1].archivedAt = 'now';
+  await f.update(sessions);
+  assert.equal(f.store.unreadCount, 0);
+});
+
+test('Unread shortcut follows visible pinned/manual order, skips the current item, and stops after all are read', async t => {
+  const f = await setup(t, { order: ['gray', 'current', 'second', 'first', 'pinned'], pinned: ['pinned'] });
+  await f.update([session('first', { completed: 't1' }), session('second', { completed: 't2' }),
+    session('pinned', { completed: 't3' }), session('current', { completed: 't4' }), session('gray')]);
+  f.store.select('current'); await f.nextTick();
+  assert.equal(f.store.unreadCount, 3);
+  for (const [name, remaining] of [['pinned', 2], ['second', 1], ['first', 0]]) {
+    assert.equal(f.order().find(name => name !== f.store.current && f.store.activityState(f.store.sessions.find(s => s.name === name)) === 'unread'), name);
+    f.store.selectNextUnread(); await f.nextTick();
+    assert.equal(f.store.current, name);
+    assert.equal(f.store.unreadCount, remaining);
+    assert.equal(f.store.activityState(f.store.sessions.find(s => s.name === name)), 'idle');
+  }
+  f.store.selectNextUnread(); await f.nextTick();
+  assert.equal(f.store.current, 'first');
+  assert.equal(f.store.unreadCount, 0);
+});
+
 test('Last selection restores after a successful list, survives rename, and later refreshes do not switch tabs', async t => {
   const remembered = { name: 'return-here', createdAt: '2026-09-20T01:00:00Z' };
   const f = await setup(t, { order: [], pinned: [] }, {}, remembered);

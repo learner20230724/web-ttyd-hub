@@ -75,6 +75,11 @@ function handleMobileOverlayClick() {
           </svg>
         </div>
         <h1 class="toolbar-title">Web TTYd Hub</h1>
+        <button v-if="isMobile && store.unreadCount > 0" type="button" class="unread-shortcut"
+          :aria-label="`查看下一个未读会话，共 ${store.unreadCount} 个`"
+          title="打开列表中最上方的未读会话" @click="store.selectNextUnread()">
+          <span class="unread-badge" aria-live="polite" aria-atomic="true">{{ store.unreadCount }}</span>
+        </button>
       </div>
 
       <div v-if="isMobile" class="reading-controls" aria-label="手机阅读设置">
@@ -113,6 +118,9 @@ function handleMobileOverlayClick() {
 </template>
 
 <style scoped>
+.unread-shortcut { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:28px; min-height:40px; padding:2px; border:0; border-radius:6px; background:transparent; cursor:pointer; }
+.unread-shortcut:focus-visible { outline:2px solid var(--success); outline-offset:2px; }
+.unread-badge { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:24px; height:24px; border-radius:50%; background:var(--success); color:#03291e; font-size:11px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1; }
 .reading-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }
 .reading-control { min-width:36px; min-height:40px; padding:4px 6px; border:0; border-radius:7px; background:transparent; color:var(--text-secondary); font-size:13px; cursor:pointer; }
 .navigation-toggle { font-size:20px; }
@@ -121,7 +129,7 @@ function handleMobileOverlayClick() {
 @media (max-width: 767px) {
   .toolbar { padding:0 8px !important; gap:6px; }
   .toolbar-left { gap:8px !important; min-width:0; }
-  .toolbar-title { font-size:14px !important; white-space:nowrap; }
+  .toolbar-title { font-size:14px !important; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   .logo-wrapper { display:none !important; }
 }
 
