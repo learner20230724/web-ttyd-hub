@@ -30,6 +30,16 @@ export const useSessionStore = defineStore('sessions', () => {
   onScopeDispose(() => { document.removeEventListener('visibilitychange', markRead); window.removeEventListener('focus', markRead) })
   const shells = ref([])
   const current = ref(null)
+  const loaded = ref(false)
+  const selectionKey = 'web-ttyd-hub.last-session.v1'
+  let restoreSelection = true
+  function rememberSelection(session) {
+    try {
+      if (session && !session.archivedAt) {
+        localStorage.setItem(selectionKey, JSON.stringify({ name: session.name, createdAt: session.createdAt || null }))
+      } else localStorage.removeItem(selectionKey)
+    } catch {} // Storage restrictions must not prevent opening a terminal.
+  }
   watch([current, sessions], markRead)
   const layout = ref(normalizeLayout(null))
   const layoutError = ref('')
@@ -70,10 +80,21 @@ export const useSessionStore = defineStore('sessions', () => {
 
   async function fetchSessions() {
     const res = await fetch('/api/sessions')
+    if (!res.ok) throw new Error('无法读取会话列表')
     const data = await res.json()
+    if (!Array.isArray(data.sessions)) throw new Error('会话列表格式无效')
     void pruneContent(data.sessions)
     sessions.value = data.sessions
-    if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) current.value = null
+    if (restoreSelection) {
+      let saved
+      try { saved = JSON.parse(localStorage.getItem(selectionKey)) } catch {}
+      // Restore only after a successful list response; failed requests must not
+      // discard the saved selection or attach to an unrelated recreated session.
+      const previous = data.sessions.find(s => s.name === saved?.name &&
+        (s.createdAt || null) === saved?.createdAt && !s.archivedAt)
+      select(previous?.name || null)
+    } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) select(null)
+    loaded.value = true
   }
 
   async function fetchShells() {
@@ -93,7 +114,9 @@ export const useSessionStore = defineStore('sessions', () => {
       throw new Error(data.error)
     }
     const session = await res.json()
+    restoreSelection = false
     current.value = session.name
+    rememberSelection(session)
     await fetchSessions()
   }
 
@@ -133,7 +156,7 @@ export const useSessionStore = defineStore('sessions', () => {
       throw new Error(data.error)
     }
     if (current.value === name) {
-      current.value = null
+      select(null)
     }
     await fetchSessions()
   }
@@ -146,7 +169,9 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   function select(name) {
+    restoreSelection = false
     current.value = name
+    rememberSelection(sessions.value.find(s => s.name === name))
     markRead()
   }
 
@@ -199,6 +224,7 @@ export const useSessionStore = defineStore('sessions', () => {
     moveByKeyboard,
     shells,
     current,
+    loaded,
     init,
     fetchSessions,
     createSession,

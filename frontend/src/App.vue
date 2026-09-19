@@ -24,7 +24,9 @@ watch([showExecution, readingSize], () => {
 // Keep a phone in reading mode across rotation and keyboard resizing.
 const isMobile = window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768;
 if (isMobile) sidebarCollapsed.value = true;
-watch(() => store.current, () => { if (isMobile) sidebarCollapsed.value = true; });
+watch([() => store.current, () => store.loaded], ([name, loaded]) => {
+  if (isMobile && loaded) sidebarCollapsed.value = Boolean(name);
+});
 
 provide("toast", toastRef);
 store.init();

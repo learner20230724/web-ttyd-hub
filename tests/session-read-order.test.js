@@ -7,13 +7,15 @@ const modules = Promise.all([
 ]);
 const layoutKey = 'web-ttyd-hub.session-layout.v1';
 const readKey = 'web-ttyd-hub.read.v1';
+const selectionKey = 'web-ttyd-hub.last-session.v1';
 
-async function setup(t, initialLayout, initialRead = {}) {
+async function setup(t, initialLayout, initialRead = {}, initialSelection) {
   const [{ createPinia, disposePinia }, { nextTick }, { useSessionStore }] = await modules;
   const saved = new Map([[layoutKey, JSON.stringify(initialLayout)], [readKey, JSON.stringify(initialRead)]]);
+  if (initialSelection) saved.set(selectionKey, JSON.stringify(initialSelection));
   const doc = Object.assign(new EventTarget(), { hidden: false, focused: true, hasFocus() { return this.focused; } });
   const win = new EventTarget();
-  const globals = { document: doc, window: win, localStorage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) } };
+  const globals = { document: doc, window: win, localStorage: { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) } };
   const originals = Object.fromEntries(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value });
   const pinia = createPinia();
@@ -107,4 +109,79 @@ test('Saved read state and promoted gray order survive reopening the store', asy
     session('green', { completed: 'unseen-turn' }), session('busy', { busy: true })]);
   assert.deepEqual(f.order(), ['green', 'busy', 'read', 'gray']);
   assert.equal(f.store.activityState(f.store.sessions[1]), 'idle');
+});
+
+test('Last selection restores after a successful list, survives rename, and later refreshes do not switch tabs', async t => {
+  const remembered = { name: 'return-here', createdAt: '2026-09-20T01:00:00Z' };
+  const f = await setup(t, { order: [], pinned: [] }, {}, remembered);
+  const sessions = [{ ...session(remembered.name), ...remembered, displayName: '已更名' }, session('other')];
+  let respond;
+  t.mock.method(globalThis, 'fetch', () => new Promise(resolve => { respond = resolve; }));
+  const loading = f.store.fetchSessions();
+  assert.equal(f.store.current, null);
+  assert.equal(f.store.loaded, false);
+  respond(Response.json({ sessions })); await loading; await f.nextTick();
+  assert.equal(f.store.current, remembered.name);
+  assert.equal(f.store.loaded, true);
+  f.store.select('other');
+  assert.deepEqual(JSON.parse(f.saved.get(selectionKey)), { name: 'other', createdAt: null });
+  // A different tab's last selection applies only on the next open.
+  f.saved.set(selectionKey, JSON.stringify(remembered));
+  const refresh = f.store.fetchSessions(); respond(Response.json({ sessions })); await refresh;
+  assert.equal(f.store.current, 'other');
+});
+
+test('Failed or malformed initial list does not erase the remembered session', async t => {
+  const remembered = { name: 'saved', createdAt: null };
+  const f = await setup(t, { order: [], pinned: [] }, {}, remembered);
+  let response = Response.json({ sessions: [] }, { status: 401 });
+  t.mock.method(globalThis, 'fetch', async () => response);
+  await assert.rejects(f.store.fetchSessions());
+  assert.deepEqual(JSON.parse(f.saved.get(selectionKey)), remembered);
+  response = Response.json({ sessions: null });
+  await assert.rejects(f.store.fetchSessions());
+  assert.equal(f.store.loaded, false);
+  assert.deepEqual(JSON.parse(f.saved.get(selectionKey)), remembered);
+  response = Response.json({ sessions: [session('saved')] });
+  await f.store.fetchSessions();
+  assert.equal(f.store.current, 'saved');
+});
+
+test('Deleted, archived and recreated sessions are not restored; stopped sessions are selected without starting', async t => {
+  const remembered = { name: 'saved', createdAt: '2026-09-20T01:00:00Z' };
+  for (const [label, sessions, expected] of [
+    ['deleted', [], null],
+    ['archived', [{ ...session('saved'), ...remembered, archivedAt: 'now' }], null],
+    ['recreated', [{ ...session('saved'), createdAt: '2026-09-20T02:00:00Z' }], null],
+    ['stopped', [{ ...session('saved'), ...remembered, status: 'stopped' }], 'saved'],
+  ]) await t.test(label, async t => {
+    const f = await setup(t, { order: [], pinned: [] }, {}, remembered);
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+      assert.equal(url, '/api/sessions'); assert.equal(options, undefined);
+      return Response.json({ sessions });
+    });
+    await f.store.fetchSessions();
+    assert.equal(f.store.current, expected);
+    assert.equal(f.saved.has(selectionKey), Boolean(expected));
+    assert.equal(f.store.loaded, true);
+  });
+});
+
+test('Newly created sessions are remembered and archiving the selected session clears the preference', async t => {
+  const f = await setup(t, { order: [], pinned: [] });
+  const created = { ...session('new'), createdAt: '2026-09-20T01:00:00Z' };
+  let sessions = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (options?.method === 'POST') { sessions = [created]; return Response.json(created); }
+    if (options?.method === 'DELETE') { sessions = [{ ...created, archivedAt: 'now' }]; return Response.json({ ok: true }); }
+    return Response.json({ sessions });
+  });
+  await f.store.createSession('新会话', 'bash');
+  assert.equal(f.store.current, 'new');
+  assert.deepEqual(JSON.parse(f.saved.get(selectionKey)), { name: 'new', createdAt: created.createdAt });
+  await f.store.removeSession('new');
+  assert.equal(f.store.current, null);
+  assert.equal(f.saved.has(selectionKey), false);
+  await f.store.fetchSessions();
+  assert.equal(f.store.current, null);
 });
