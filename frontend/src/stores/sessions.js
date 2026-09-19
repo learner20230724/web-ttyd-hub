@@ -11,9 +11,12 @@ export const useSessionStore = defineStore('sessions', () => {
   function markRead() {
     if (document.hidden || !document.hasFocus()) return
     const session = sessions.value.find(s => s.name === current.value)
-    if (session?.activity?.completed) {
+    if (session && !session.archivedAt && activityState(session) === 'unread') {
       read.value[session.name] = session.activity.completed
       try { localStorage.setItem(readKey, JSON.stringify(read.value)) } catch {}
+      // Promote once per newly read completion. Status and pin groups still take
+      // priority, and later refreshes must not undo the user's manual ordering.
+      saveLayout({ ...layout.value, order: [session.name, ...layout.value.order.filter(name => name !== session.name)] })
     }
   }
   function activityState(session) {
@@ -144,6 +147,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function select(name) {
     current.value = name
+    markRead()
   }
 
   function connectWs() {
