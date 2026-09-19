@@ -3,6 +3,7 @@ const net = require('net');
 const { promisify, stripVTControlCharacters } = require('util');
 const runFile = promisify(execFile);
 const { randomUUID } = require('crypto');
+const path = require('node:path');
 const EventEmitter = require('events');
 const PortManager = require('./port-manager');
 const { CodexActivity } = require('./codex-activity');
@@ -101,7 +102,7 @@ class SessionManager extends EventEmitter {
   }
 
   getShells() {
-    return this.shells;
+    return [{ id: 'codex', name: 'Codex' }, ...this.shells];
   }
 
   resolveShell(shellId) {
@@ -109,6 +110,22 @@ class SessionManager extends EventEmitter {
     const shell = this.shells.find(s => s.id === shellId);
     if (!shell) throw new Error(`Shell "${shellId}" is not available`);
     return shell.path;
+  }
+
+  resolveCommand(shellId) {
+    if (shellId !== 'codex') {
+      const shell = this.resolveShell(shellId);
+      return shell ? [shell] : [];
+    }
+    const codex = (process.env.PATH || '').split(path.delimiter).map(dir => path.resolve(dir, 'codex')).find(file => {
+      try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile(); } catch { return false; }
+    });
+    if (!codex) throw new Error('服务器未安装 Codex，或 codex 不在 Hub 的 PATH 中');
+    const shell = this.shells.find(s => s.id === 'bash') || this.shells.find(s => s.id === 'sh');
+    if (!shell) throw new Error('Codex 会话需要 Bash 或 sh');
+    // Only a new tmux pane executes this launcher; attaching never sends input.
+    // Pass paths as positional arguments, and leave a usable shell after Codex exits.
+    return [shell.path, '-c', '"$1" --yolo; exec "$2" -l', 'hub-codex', codex, shell.path];
   }
 
   validateDisplayName(value, exceptName) {
@@ -138,11 +155,10 @@ class SessionManager extends EventEmitter {
     // Keep legacy ASCII IDs compatible; labels never enter shell commands or URLs.
     const name = SESSION_NAME_RE.test(displayName) && !this.sessions.has(displayName)
       ? displayName : `session-${randomUUID()}`;
-    const shellPath = this.resolveShell(shell);
+    const command = this.resolveCommand(shell);
     const port = await this.portManager.allocate();
 
-    const tmuxArgs = ['tmux', 'new', '-A', '-s', name];
-    if (shellPath) tmuxArgs.push(shellPath);
+    const tmuxArgs = ['tmux', 'new', '-A', '-s', name, ...command];
 
     const proc = spawn('ttyd', [
       '-W', '-p', String(port),
@@ -196,6 +212,16 @@ class SessionManager extends EventEmitter {
     }
 
     this.sessions.set(name, session);
+    if (shell === 'codex') {
+      try { await this.ensurePane(name); }
+      catch (err) {
+        session.status = 'stopped';
+        proc.kill('SIGTERM');
+        this.portManager.release(port);
+        this.sessions.delete(name);
+        throw err;
+      }
+    }
     this.emit('session:created', this.serialize(session));
     return this.serialize(session);
   }
@@ -263,11 +289,10 @@ class SessionManager extends EventEmitter {
     if (session.status === 'running') {
       throw new Error(`Session "${name}" is already running`);
     }
-    const shellPath = this.resolveShell(session.shell);
+    const command = this.resolveCommand(session.shell);
     const port = await this.portManager.allocate();
 
-    const tmuxArgs = ['tmux', 'new', '-A', '-s', name];
-    if (shellPath) tmuxArgs.push(shellPath);
+    const tmuxArgs = ['tmux', 'new', '-A', '-s', name, ...command];
 
     const proc = spawn('ttyd', [
       '-W', '-p', String(port),
@@ -329,8 +354,7 @@ class SessionManager extends EventEmitter {
       try { await runFile('tmux', ['has-session', '-t', `=${name}`]); }
       catch {
         const args = ['new-session', '-d', '-s', name, '-x', '120', '-y', '40'];
-        const shell = this.resolveShell(session.shell);
-        if (shell) args.push(shell);
+        args.push(...this.resolveCommand(session.shell));
         await runFile('tmux', args);
       }
     })();

@@ -7,7 +7,7 @@ const store = useSessionStore();
 
 const form = ref({
   name: "",
-  command: store.shells.length ? store.shells[0].id : "bash",
+  command: "codex",
 });
 
 const loading = ref(false);
@@ -56,12 +56,14 @@ async function handleSubmit() {
         <p v-if="error" role="alert">{{ error }}</p>
 
         <label class="form-group">
-          <span class="label-text">Shell</span>
+          <span class="label-text">Terminal Type / 终端类型</span>
           <select v-model="form.command">
-            <option v-for="s in store.shells" :key="s.id" :value="s.id">
+            <option value="codex">Codex</option>
+            <option v-for="s in store.shells.filter(s => s.id !== 'codex')" :key="s.id" :value="s.id">
               {{ s.name }}
             </option>
           </select>
+          <span v-if="form.command === 'codex'" class="label-text">自动运行 codex --yolo</span>
         </label>
       </div>
 

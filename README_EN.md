@@ -6,6 +6,8 @@
 
 A self-hosted **ttyd + tmux browser terminal session manager**, extending [sosopop/web-ttyd-hub](https://github.com/sosopop/web-ttyd-hub). Create named terminals, switch between installed shells, share sessions across browsers and reconnect to long-running command-line work.
 
+New Session defaults to **Codex**, launching `codex --yolo` in tmux; Bash and other installed shells remain selectable. Codex must be installed and configured on the server and available in the Hub service's PATH. Reconnecting or restarting the Hub attaches to the existing session without relaunching Codex. Exiting Codex returns to a regular shell.
+
 ![Web terminal session interface](assets/72643b69-16e1-44ab-841f-cc1dee1b1c0b.png)
 
 ## What it solves

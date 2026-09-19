@@ -40,6 +40,10 @@
 
 从 [Releases](https://github.com/learner20230724/web-ttyd-hub/releases) 下载 APK，安装后填写服务器地址即可使用。支持 Android 8.0+，适用于手机远程操作场景：滑动看彩色历史、长按复制、一键粘贴、调出键盘和会话管理。M153 豆包手机尚未完成实机验证；具体说明、构建和测试范围见 [Android 文档](android/README.md)。
 
+## 新建 Codex 或普通终端
+
+新建会话的终端类型默认选择 **Codex**，创建后在 tmux 中自动运行 `codex --yolo`；也可选择 Bash、Zsh 等普通终端。服务器需已安装并配置 Codex，且 `codex` 在 Hub 服务的 PATH 中。退出 Codex 后回到普通 shell；刷新、切换客户端或重启 Hub 会重新连接已有 tmux，不重复输入启动命令。`POST /api/sessions` 可传 `shell: "codex"`，已有普通终端的类型保持不变。
+
 ## 会话排序与置顶
 
 拖动会话左侧的 **⠿** 调整上下顺序，手机也可按住手柄拖动。点击图钉按钮置顶，再点一次取消；置顶会话始终在最上方，置顶组和普通组分别排序。键盘用户可聚焦拖动手柄后按上下键排序，拖动中按 Esc 取消。
