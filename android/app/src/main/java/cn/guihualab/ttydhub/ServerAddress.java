@@ -12,7 +12,7 @@ public final class ServerAddress {
         if (!value.contains("://")) value = "https://" + value;
         try {
             URI uri = new URI(value);
-            String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
             if ((!scheme.equals("https") && !scheme.equals("http")) || uri.getHost() == null ||
                     uri.getUserInfo() != null || uri.getFragment() != null || uri.getPort() == 0 || uri.getPort() > 65535) {
                 throw new IllegalArgumentException("请填写完整的 HTTP/HTTPS 地址，不要在地址中填写账号密码");

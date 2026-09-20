@@ -38,7 +38,7 @@
 
 ## Android 手机客户端
 
-从 [Releases](https://github.com/learner20230724/web-ttyd-hub/releases) 下载 APK，安装后填写服务器地址即可使用。支持 Android 8.0+，适用于手机远程操作场景：滑动看彩色历史、长按复制、一键粘贴、调出键盘和会话管理。M153 豆包手机尚未完成实机验证；具体说明、构建和测试范围见 [Android 文档](android/README.md)。
+从 [IP 直链](http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk) 下载 APK（[Releases 备用](https://github.com/learner20230724/web-ttyd-hub/releases)），安装后填写服务器地址即可使用。支持 Android 8.0+，适用于手机远程操作场景：滑动看彩色历史、长按复制、一键粘贴、调出键盘和会话管理。Android 1.5 的「连接选项」会列出已保存的多台服务器，分别记住登录，点一下切换，无需先退出；切换不会中断服务器任务。M153 豆包手机尚未完成实机验证；具体说明、构建和测试范围见 [Android 文档](android/README.md)。
 
 ## 新建 Codex 或普通终端
 

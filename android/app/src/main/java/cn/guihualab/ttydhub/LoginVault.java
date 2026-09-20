@@ -46,5 +46,12 @@ final class LoginVault {
         } catch (Exception e) { storage.edit().remove(scope).apply(); return null; }
     }
     void remove(String scope) { storage.edit().remove(scope).apply(); }
-    void clear() { storage.edit().clear().commit(); }
+    void removeServer(String address) {
+        String prefix = ServerAddress.authScope(address, "");
+        SharedPreferences.Editor edit = storage.edit();
+        for (String scope : storage.getAll().keySet()) {
+            if (scope.startsWith(prefix)) edit.remove(scope);
+        }
+        edit.apply();
+    }
 }

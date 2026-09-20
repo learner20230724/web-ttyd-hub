@@ -52,7 +52,7 @@ Typing or pasting in the history content returns to the live terminal and forwar
 
 ## Android client
 
-Download the APK from [Releases](https://github.com/learner20230724/web-ttyd-hub/releases), enter your server URL and sign in. The lightweight Android 8+ WebView client adds keyboard/clipboard actions, touch history navigation and IME-aware resizing, while using the live server's UI. No server credentials are embedded. M153 physical-device compatibility has not yet been verified. See [Android build and installation notes](android/README.md).
+Download the APK from the [direct download](http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk) or [Releases](https://github.com/learner20230724/web-ttyd-hub/releases), enter your server URL and sign in. The lightweight Android 8+ WebView client supports touch history navigation, text selection and paste, terminal keys, and IME-aware resizing while using the live server's UI. Android 1.5 lists saved servers in the connection menu: tap to switch without logging out, with credentials encrypted separately for each origin and authentication realm. Switching leaves remote tasks running. No server credentials are embedded. M153 physical-device compatibility has not yet been verified. See [Android build and installation notes](android/README.md).
 
 ## Session ordering and pins
 

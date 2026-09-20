@@ -4,7 +4,7 @@ public class ServerAddressTest {
         check(ServerAddress.normalize(" example.com ").equals("https://example.com/"));
         check(ServerAddress.normalize("http://192.168.1.2:8182").equals("http://192.168.1.2:8182/"));
         check(ServerAddress.normalize("https://example.com/hub/").equals("https://example.com/hub/"));
-        for (String bad : new String[]{"", "file:///etc/passwd", "javascript://alert(1)", "https://u:p@example.com", "https://example.com/#fragment", "http://x:99999", "http://x:0"}) {
+        for (String bad : new String[]{"", "file:///etc/passwd", "javascript://alert(1)", "https://u:p@example.com", "https://example.com/#fragment", "http://x:99999", "http://x:0", "folder/https://example.com"}) {
             try { ServerAddress.normalize(bad); throw new AssertionError("Accepted " + bad); } catch (IllegalArgumentException expected) {}
         }
         check(ServerAddress.sameOrigin("https://example.com/", "https://example.com:443/terminal/a"));
