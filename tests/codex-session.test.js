@@ -6,6 +6,39 @@ const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 const WebSocket = require('ws');
+const SessionManager = require('../server/services/session-manager');
+
+test('Codex launcher loads interactive shell proxy settings before running the command', () => {
+  const tmp = fs.mkdtempSync('/tmp/hub-codex-proxy-');
+  const result = path.join(tmp, 'environment.json');
+  const rcfile = path.join(tmp, 'bashrc');
+  const manager = new SessionManager(19780, 19790);
+  const originalPath = process.env.PATH;
+  try {
+    fs.writeFileSync(path.join(tmp, 'codex'), `#!${process.execPath}\n` +
+      `require('fs').writeFileSync(process.env.HUB_PROXY_TEST_RESULT, JSON.stringify({args:process.argv.slice(2),ready:process.env.HUB_PROXY_TEST_READY||null,proxy:process.env.https_proxy||null}));\n`, { mode: 0o755 });
+    fs.writeFileSync(rcfile, 'export HUB_PROXY_TEST_READY=loaded\nexport https_proxy=http://127.0.0.1:19799\n');
+    process.env.PATH = tmp + path.delimiter + originalPath;
+    const command = manager.resolveCommand('codex');
+    process.env.PATH = originalPath;
+    const env = { ...process.env, HUB_PROXY_TEST_RESULT: result };
+    for (const key of Object.keys(env)) if (/proxy/i.test(key) && key !== 'HUB_PROXY_TEST_RESULT') delete env[key];
+    const run = args => {
+      execFileSync(command[0], ['--rcfile', rcfile, ...args], { env, input: '', timeout: 5000, stdio: ['pipe', 'ignore', 'ignore'] });
+      return JSON.parse(fs.readFileSync(result, 'utf8'));
+    };
+    // Reproduce the regression with the old non-interactive launcher.
+    const old = run(command.slice(1).map(arg => arg === '-ic' ? '-c' : arg));
+    assert.equal(old.ready, null);
+    assert.equal(old.proxy, null);
+    const fixed = run(command.slice(1));
+    assert.deepEqual(fixed, { args: ['--yolo'], ready: 'loaded', proxy: 'http://127.0.0.1:19799' });
+  } finally {
+    process.env.PATH = originalPath;
+    manager.cleanup();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 async function until(check) {
   for (let n = 0; n < 100; n++) {

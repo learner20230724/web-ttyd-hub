@@ -123,9 +123,10 @@ class SessionManager extends EventEmitter {
     if (!codex) throw new Error('服务器未安装 Codex，或 codex 不在 Hub 的 PATH 中');
     const shell = this.shells.find(s => s.id === 'bash') || this.shells.find(s => s.id === 'sh');
     if (!shell) throw new Error('Codex 会话需要 Bash 或 sh');
-    // Only a new tmux pane executes this launcher; attaching never sends input.
+    // Interactive startup loads the same rc files (including proxy exports) as a
+    // normal terminal before Codex starts. Attaching never executes it again.
     // Pass paths as positional arguments, and leave a usable shell after Codex exits.
-    return [shell.path, '-c', '"$1" --yolo; exec "$2" -l', 'hub-codex', codex, shell.path];
+    return [shell.path, '-ic', '"$1" --yolo; exec "$2" -l', 'hub-codex', codex, shell.path];
   }
 
   validateDisplayName(value, exceptName) {
