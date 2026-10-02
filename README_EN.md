@@ -17,7 +17,7 @@ New Session defaults to **Codex**, launching `codex --yolo` in tmux; Bash and ot
 | Too many terminal URLs and processes | Named sessions, sidebar switching and a unified HTTP/WebSocket proxy |
 | Closing a tab interrupts access | tmux keeps work available across browser disconnections |
 | tmux captures text selection | Optional mouse-off profile and clipboard troubleshooting |
-| Too little output history | 10,000 browser scrollback lines; optional 20,000-line tmux history |
+| Too little output history | 20,000 browser scrollback lines with retained tmux history restored on reconnect |
 | Distracting terminal prompts | Disabled leave confirmation and resize overlay |
 | Repeated deployment setup | Loopback ttyd listeners, systemd and authenticated Caddy examples |
 
@@ -42,13 +42,13 @@ Open `http://localhost:3000`. The example uses loopback; configure authenticated
 
 Configuration: `HOST` defaults to `0.0.0.0` in code, overridden to `127.0.0.1` in the example. `PORT` defaults to 3000; `TTYD_PORT_RANGE_START` / `TTYD_PORT_RANGE_END` default to 7681 / 7780.
 
-## Scroll history without sending arrow keys
+## Native terminal scrolling
 
-Wheel up inside the terminal to open a native, selectable **History** view. Scroll with the wheel, scrollbar or touch; click **Live** or press Escape to return to the still-connected terminal. The view reads the active tmux pane's retained output (up to 20,000 preceding lines) without sending keys or changing tmux modes. Refresh updates the snapshot. Wheel down at the live terminal does not send arrows; Ctrl+wheel retains browser zoom. Lost, overwritten or discarded terminal output cannot be recovered. The history endpoint inherits site authentication and uses `Cache-Control: no-store`.
+The desktop uses xterm.js with tmux control mode: retained history and live output share one terminal, with no separate History button or preview panel. Each browser scrolls independently without entering shared tmux copy mode or injecting arrow keys. Output continues while reading; typing or pasting returns to the bottom.
 
-History preserves terminal ANSI styling: 16/256 colors, RGB, backgrounds, bold, dim, italic, underline and inverse. Selection copies plain text. Styles come from the retained tmux output, not inferred syntax highlighting.
+Connections restore up to 20,000 retained history lines and screen state before streaming raw pane output. ANSI colors, IME, selection/copy and multiline bracketed paste are preserved. Paste does not append Enter. Full-screen applications keep their alternate screen and application mouse behavior. Their application state and the tmux pane geometry remain shared; browser scroll position does not. Discarded or overwritten output cannot be recovered. Mobile keeps its independent answer/full-output reader.
 
-Typing or pasting in the history content returns to the live terminal and forwards that input, including the first character. IME input is forwarded after composition commits; copying and scrolling stay in history. Paste uses xterm’s bracketed-paste path without adding Enter.
+See [terminal stream architecture and tests](docs/terminal-stream.md). The original authenticated ttyd routes remain available for compatibility.
 
 ## Android client
 
@@ -72,7 +72,7 @@ Select text and use the browser Copy action. Common shortcuts are Ctrl+Shift+C /
 
 ## Operational limits
 
-Browser disconnect persistence does not imply reboot recovery. Session metadata is in memory and is not restored automatically after Hub restart; surviving tmux sessions can be attached by creating an entry with the same name. Deleting a session terminates its tmux session. Browser scrollback can reset when the iframe reloads and is separate from tmux history. systemd shutdown may clean up the entire service process group.
+Browser disconnect persistence does not imply reboot recovery. Session metadata is persisted and Hub restarts reconnect to surviving tmux panes. Deletion archives a session for 30 minutes before termination; permanent deletion terminates immediately. Retained history is restored on desktop reconnect. Keep systemd KillMode=process to preserve tasks during Hub deployment.
 
 No built-in accounts, user isolation or fine-grained permissions: browsers share the service OS user's environment. Use an authenticated HTTPS proxy before public access.
 

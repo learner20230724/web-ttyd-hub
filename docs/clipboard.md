@@ -20,14 +20,11 @@ tmux source-file /path/to/web-ttyd-hub/deploy/tmux.conf
 
 This optional user-wide profile disables tmux mouse capture, raises history for new panes and enables terminal clipboard integration. It cannot bypass browser permissions.
 
-## 历史输出
+## 原生终端滚动
 
-历史视图保留终端 ANSI 颜色与样式：16/256 色、RGB 真彩色、背景色、加粗、灰显、斜体、下划线和反显。拖选复制仍是纯文字；只显示 tmux 已保留的样式，不对内容重新猜测着色。
+桌面在 xterm.js 内直接上下滚动，没有独立历史面板，不切换 tmux copy mode。上翻时保留阅读位置，新输出继续进入缓冲；打字或粘贴回到底部，支持中文输入法。选择文字后 Ctrl+C/Cmd+C 复制纯文字，没有选择时 Ctrl+C 仍是中断。多行粘贴由 tmux 按应用当前的括号粘贴模式处理，不额外提交回车。
 
-终端内向上滚动或点击「历史输出」可打开浏览器原生滚动视图，使用滚轮、滚动条或手机滑动查看，文字可以直接拖选复制。此视图从 tmux 捕获当前窗格的历史与可见输出，不会向 Codex/其他命令行程序发送上下键，也不会改变共享会话模式。点击「刷新」更新快照；「回到终端」或 Esc 返回交互界面。已经被应用覆盖或被 tmux 丢弃的内容无法恢复。
-
-
-ttyd 使用 `scrollback=10000`。刷新或切换导致 iframe 重建时，浏览器缓冲可能丢失。tmux 历史与浏览器滚动条不同；默认 tmux 前缀下按 Ctrl+B 后按 `[` 进入复制模式，`q` 退出。长期日志应写入文件。
+浏览器保留最多 20,000 行回滚；重连从 tmux 恢复仍保留的历史与颜色。丢弃、清屏覆盖、进程结束前未保留的内容无法重建，长期日志应写入文件。全屏应用自身的鼠标操作仍由应用处理，Shift+拖选可绕过应用鼠标捕获。桌面数据通道绕过外层 tmux 鼠标设置；上面的可选配置主要用于原 ttyd/SSH 接入。
 
 ## 手机与故障排查
 

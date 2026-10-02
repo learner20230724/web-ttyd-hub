@@ -6,6 +6,7 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 const SessionManager = require('./services/session-manager');
 const sessionsRoute = require('./routes/sessions');
 const setupWebSocket = require('./ws');
+const { setupTerminalStreams } = require('./services/terminal-stream');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -70,7 +71,7 @@ app.use('/terminal', ttydProxy);
 app.use('/api/sessions', sessionsRoute(sessionManager));
 
 // Serve frontend static files in production
-const publicDir = path.join(__dirname, 'public');
+const publicDir = process.env.HUB_PUBLIC_DIR || path.join(__dirname, 'public');
 app.use(express.static(publicDir));
 app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
@@ -78,6 +79,7 @@ app.get(/^\/(?!api).*/, (req, res) => {
 
 // WebSocket
 setupWebSocket(server, sessionManager);
+const terminalStreams = setupTerminalStreams(server, sessionManager);
 
 server.on('upgrade', (req, socket, head) => {
   const sessionName = getSessionNameFromUrl(req.url);
@@ -103,6 +105,7 @@ sessionManager.restore().then(() => {
 
 // Cleanup on exit
 function cleanup() {
+  terminalStreams.close();
   console.log('\nCleaning up ttyd processes...');
   sessionManager.cleanup();
   process.exit(0);

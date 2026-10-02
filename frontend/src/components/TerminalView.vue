@@ -1,279 +1,177 @@
 <script setup>
-import { computed, ref, watch, nextTick, onBeforeUnmount } from "vue";
-import { useSessionStore } from "../stores/sessions";
-
-import { peekContent, loadContent, fetchContent } from "../utils/session-content.mjs";
-import { ansiToRuns } from "../utils/ansi.mjs";
+import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
+import { useSessionStore } from '../stores/sessions';
+import { snapshotSequence, pendingWrapSequence, suppressQueryReplies } from '../utils/terminal-snapshot.mjs';
 
 const store = useSessionStore();
-const emit = defineEmits(["create"]);
+const emit = defineEmits(['create']);
+const currentSession = computed(() => store.sessions.find(s => s.name === store.current));
+const runningName = computed(() => currentSession.value?.status === 'running' ? currentSession.value.name : null);
+const host = ref(null);
+const connection = ref('');
+let dispose = () => {};
+let revision = 0;
 
-const currentSession = computed(() => {
-  return store.sessions.find((s) => s.name === store.current);
-});
-
-const iframeSrc = computed(() => {
-  if (!currentSession.value || currentSession.value.status !== "running")
-    return null;
-  return `/terminal/${currentSession.value.name}`;
-});
-
-const terminalFrame = ref(null);
-const historyPane = ref(null);
-const touchDevice = window.matchMedia('(pointer: coarse)').matches;
-const historyOpen = ref(false);
-const historyText = ref('');
-const historyRuns = computed(() => ansiToRuns(historyText.value));
-const historyLoading = ref(false);
-const historyError = ref('');
-const historyRevision = ref(0);
-let composing = false;
-let compositionScroll = 0;
-let detachWheel = () => {};
-let requestController = null;
-
-async function openHistory(fromWheel = false) {
-  if (!currentSession.value || historyLoading.value) return;
-  const name = currentSession.value.name;
-  historyOpen.value = true;
-  historyLoading.value = true;
-  historyError.value = '';
-  requestController?.abort();
-  const controller = new AbortController();
-  requestController = controller;
-  const selected = currentSession.value;
-  const cached = peekContent(selected, 'full');
-  let shown = false;
-  async function show(entry) {
-    if (!entry || controller.signal.aborted || currentSession.value?.name !== name) return;
-    const text = entry.data.ansi ?? entry.data.text ?? '';
-    if (historyText.value !== text) historyText.value = text;
-    if (!shown) {
-      shown = true;
-      await nextTick();
-      if (controller.signal.aborted) return;
-      const pane = historyPane.value;
-      if (pane) {
-        pane.scrollTop = pane.scrollHeight - pane.clientHeight - (fromWheel ? pane.clientHeight * 0.6 : 0);
-        pane.focus({ preventScroll: true });
-      }
+watch(runningName, async name => {
+  const version = ++revision;
+  dispose();
+  if (!name) return;
+  await nextTick();
+  if (version !== revision || !host.value) return;
+  const element = host.value;
+  const term = new Terminal({
+    cursorBlink: true, fontSize: 15, scrollback: 20000,
+    fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+    theme: { background: '#000000', foreground: '#ffffff' },
+    scrollOnUserInput: true, smoothScrollDuration: 100, disableStdin: true,
+    allowProposedApi: true,
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open(element);
+  suppressQueryReplies(term);
+  // Keep the terminal API available for local diagnostics and accessibility.
+  element.terminal = term;
+  let ws, timer, stopped = false, ready = false, attempt = 0, lastSize = '';
+  let rendering = false, queuedBytes = 0;
+  const renderQueue = [];
+  const send = message => {
+    if (ws?.readyState !== WebSocket.OPEN || (!ready && message.type !== 'resize')) return false;
+    ws.send(JSON.stringify(message));
+    return true;
+  };
+  const measure = () => {
+    const size = fit.proposeDimensions();
+    if (!size) return;
+    const cols = Math.max(2, Math.min(500, size.cols));
+    const rows = Math.max(2, Math.min(300, size.rows));
+    const key = `${cols},${rows}`;
+    if (key !== lastSize && send({ type: 'resize', cols, rows })) lastSize = key;
+  };
+  const input = (type, data) => {
+    if (send({ type, data })) term.scrollToBottom();
+  };
+  term.onData(data => input('input', data));
+  term.onBinary(data => input('binary', data));
+  term.attachCustomWheelEventHandler(event => {
+    if (event.ctrlKey) return false;
+    // Full-screen programs with mouse support own their scrolling. Never turn a
+    // wheel gesture into Up/Down keys in programs without mouse support.
+    if (term.buffer.active.type === 'alternate' && term.modes.mouseTrackingMode === 'none') {
+      event.preventDefault(); return false;
     }
-  }
-  historyText.value = '';
-  if (cached) await show(cached);
-  else void loadContent(selected, 'full').then(entry => { if (!shown) show(entry); });
-  try {
-    await show(await fetchContent(selected, 'full', { mobile:false }));
-  } catch (err) {
-    if (!controller.signal.aborted) historyError.value = shown ? '正在显示缓存，暂时无法更新。' : err.message;
-  } finally {
-    if (requestController === controller) historyLoading.value = false;
-  }
-}
-
-function terminalInput(text) {
-  if (!historyOpen.value || !text) return false;
-  const term = terminalFrame.value?.contentWindow?.term;
-  if (!term?.paste || term.options?.disableStdin || currentSession.value?.status !== 'running') {
-    historyError.value = '终端尚未就绪，请回到终端连接后再输入。';
-    return false;
-  }
-  // Use xterm's own paste path, including bracketed-paste handling for multiline text.
-  // Never synthesize individual key events or add an Enter after pasted content.
-  term.paste(text);
-  closeHistory();
-  return true;
-}
-
-function historyBeforeInput(event) {
-  if (!historyOpen.value) { event.preventDefault(); return; }
-  if (composing || event.isComposing || event.inputType === 'insertCompositionText') return;
-  event.preventDefault(); // Keep the snapshot immutable (including deletion/formatting).
-  if (event.inputType === 'insertText' || event.inputType === 'insertReplacementText') {
-    terminalInput(event.data);
-  }
-}
-
-function historyPaste(event) {
-  event.preventDefault();
-  const text = event.clipboardData?.getData('text/plain');
-  if (text) terminalInput(text);
-}
-
-function historyCompositionStart() {
-  composing = true;
-  compositionScroll = historyPane.value?.scrollTop || 0;
-}
-
-function historyCompositionEnd(event) {
-  composing = false;
-  if (!historyOpen.value) return;
-  // The browser temporarily owns the editable DOM during IME composition.
-  // A fresh pre restores the snapshot after cancellation or an unavailable terminal.
-  if (!terminalInput(event.data)) {
-    historyRevision.value++;
-    nextTick(() => {
-      historyPane.value?.focus({ preventScroll: true });
-      if (historyPane.value) historyPane.value.scrollTop = compositionScroll;
+    return true;
+  });
+  term.attachCustomKeyEventHandler(event => {
+    if (event.type === 'keydown' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c' && term.hasSelection()) {
+      document.execCommand('copy');
+      event.preventDefault(); return false;
+    }
+    return true;
+  });
+  const paste = event => {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text === undefined) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    input('paste', text); term.focus();
+  };
+  element.addEventListener('paste', paste, true);
+  const observer = new ResizeObserver(measure);
+  observer.observe(element);
+  const renderNext = () => {
+    if (rendering || stopped || !renderQueue.length) return;
+    const { data, socket, bytes } = renderQueue.shift();
+    queuedBytes -= bytes;
+    if (socket !== ws) { renderNext(); return; }
+    rendering = true;
+    const done = () => { rendering = false; renderNext(); };
+    if (data instanceof ArrayBuffer) { term.write(new Uint8Array(data), done); return; }
+    const message = JSON.parse(data);
+    if (message.type !== 'snapshot') { done(); return; }
+    const buffer = term.buffer.active;
+    const distance = buffer.baseY - buffer.viewportY;
+    // Serialize resets with writes. A resize/reconnect during a large write must
+    // not let the old snapshot append itself to the freshly reset terminal.
+    term.reset();
+    term.resize(message.meta.pane_width, message.meta.pane_height);
+    term.write(snapshotSequence(message), () => {
+      if (stopped) return;
+      term.write(pendingWrapSequence(term, message.meta));
+      const pending = Uint8Array.from(atob(message.pending), ch => ch.charCodeAt(0));
+      term.write(pending, () => {
+        if (!stopped && socket === ws && socket.readyState === WebSocket.OPEN) {
+          if (distance > 0) term.scrollToLine(Math.max(0, term.buffer.active.baseY - distance));
+          ready = true; attempt = 0; connection.value = '';
+          term.options.disableStdin = false;
+        }
+        done();
+      });
     });
-  }
-}
-
-function historyKeydown(event) {
-  if (event.key === 'Escape' && !composing && !event.isComposing) {
-    event.preventDefault();
-    closeHistory();
-  }
-}
-
-function closeHistory() {
-  requestController?.abort();
-  historyLoading.value = false;
-  historyOpen.value = false;
-  composing = false;
-  const win = terminalFrame.value?.contentWindow;
-  if (win?.term?.focus) win.term.focus();
-  else win?.focus();
-}
-
-function bindWheel() {
-  detachWheel();
-  const doc = terminalFrame.value?.contentDocument;
-  if (!doc) return;
-  const onWheel = (event) => {
-    if (event.ctrlKey || !event.deltaY) return; // Preserve browser zoom.
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    // Never let xterm's alternate-screen wheel handling send arrow keys to the shell.
-    if (event.deltaY < 0 && !historyOpen.value) openHistory(true);
   };
-  doc.addEventListener('wheel', onWheel, { capture: true, passive: false });
-  let touchStart = null;
-  const onTouchStart = event => {
-    touchStart = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY, time: Date.now() } : null;
+  const connect = () => {
+    if (stopped) return;
+    ready = false; term.options.disableStdin = true;
+    connection.value = attempt ? '连接已断开，正在重连…' : '正在连接终端…';
+    const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/terminal/${encodeURIComponent(name)}`);
+    socket.binaryType = 'arraybuffer';
+    ws = socket;
+    socket.onopen = () => { lastSize = ''; measure(); };
+    socket.onmessage = event => {
+      if (stopped || socket !== ws) return;
+      const bytes = typeof event.data === 'string' ? event.data.length * 2 : event.data.byteLength;
+      queuedBytes += bytes;
+      if (queuedBytes > 32 * 1024 * 1024) {
+        renderQueue.length = 0; queuedBytes = 0; socket.close(); return;
+      }
+      renderQueue.push({ data: event.data, socket, bytes });
+      renderNext();
+    };
+    socket.onclose = () => {
+      if (stopped || socket !== ws) return;
+      ready = false; term.options.disableStdin = true;
+      connection.value = '连接已断开，正在重连…';
+      timer = setTimeout(connect, Math.min(1000 * 2 ** attempt++, 15000));
+    };
+    socket.onerror = () => socket.close();
   };
-  const onTouchMove = event => {
-    if (!touchStart || event.touches.length !== 1 || Date.now() - touchStart.time > 450 ||
-        doc.defaultView?.term?.getSelection?.()) return;
-    const dx = event.touches[0].clientX - touchStart.x;
-    const dy = event.touches[0].clientY - touchStart.y;
-    // Reserve a quick vertical gesture for history, not xterm's arrow-key emulation.
-    // Long presses, selection dragging and two-finger zoom keep their native behavior.
-    if (Math.abs(dy) > Math.abs(dx)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (Math.abs(dy) > 28) { touchStart = null; openHistory(true); }
-    }
+  connect(); term.focus();
+  dispose = () => {
+    stopped = true; clearTimeout(timer); observer.disconnect();
+    element.removeEventListener('paste', paste, true);
+    ws?.close(); term.dispose(); delete element.terminal;
   };
-  const onTouchEnd = () => { touchStart = null; };
-  doc.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
-  doc.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
-  doc.addEventListener('touchend', onTouchEnd, true);
-  doc.addEventListener('touchcancel', onTouchEnd, true);
-  detachWheel = () => {
-    doc.removeEventListener('wheel', onWheel, true);
-    doc.removeEventListener('touchstart', onTouchStart, true);
-    doc.removeEventListener('touchmove', onTouchMove, true);
-    doc.removeEventListener('touchend', onTouchEnd, true);
-    doc.removeEventListener('touchcancel', onTouchEnd, true);
-  };
-}
-
-watch(iframeSrc, () => {
-  detachWheel();
-  requestController?.abort();
-  historyOpen.value = false;
-  historyLoading.value = false;
-  historyText.value = '';
-  historyError.value = '';
-  composing = false;
-});
-
-onBeforeUnmount(() => { detachWheel(); requestController?.abort(); });
+}, { immediate: true });
+onBeforeUnmount(() => { revision++; dispose(); });
 </script>
 
 <template>
   <div class="terminal-area">
-    <iframe
-      v-if="iframeSrc"
-      :key="iframeSrc"
-      :src="iframeSrc"
-      class="terminal-frame"
-      ref="terminalFrame"
-      title="交互终端 / Interactive terminal"
-      @load="bindWheel"
-    ></iframe>
-
-    <div v-else class="welcome__container">
+    <div v-if="runningName" ref="host" class="terminal-host" aria-label="交互终端 / Interactive terminal"></div>
+    <div v-if="runningName && connection" class="connection-status" role="status">{{ connection }}</div>
+    <div v-if="!runningName" class="welcome__container">
       <div class="welcome__content">
         <div class="logo-text">TTYd Hub</div>
-
         <template v-if="!currentSession">
           <p class="welcome__text">No active session selected.</p>
-          <button class="btn btn-primary" @click="emit('create')">
-            Create First Session
-          </button>
+          <button class="btn btn-primary" @click="emit('create')">Create First Session</button>
         </template>
-
         <template v-else>
-          <p class="welcome__text">
-            Session <span class="highlight">{{ currentSession.displayName || currentSession.name }}</span> is
-            currently stopped.
-          </p>
+          <p class="welcome__text">Session <span class="highlight">{{ currentSession.displayName || currentSession.name }}</span> is currently stopped.</p>
           <p class="sub-text">Restart the session to continue.</p>
         </template>
       </div>
     </div>
-    <button v-if="currentSession && !historyOpen" class="history-toggle" @click="openHistory(false)">
-      历史输出 / History
-    </button>
-    <section v-if="historyOpen" class="history-panel" aria-label="历史输出 / Terminal history" @keydown="historyKeydown">
-      <header class="history-toolbar">
-        <span>历史输出 · 输入或粘贴即可返回终端</span>
-        <button :disabled="historyLoading" @click="openHistory(false)">刷新 / Refresh</button>
-        <button data-action="close-history" @click="closeHistory">回到终端 / Live</button>
-      </header>
-      <p v-if="historyLoading && !historyText" class="history-notice" role="status">正在读取历史输出…</p>
-      <p v-if="historyError" class="history-notice" role="alert">{{ historyError }}</p>
-      <pre :key="historyRevision" ref="historyPane" class="history-output" tabindex="0"
-        :inputmode="touchDevice ? 'none' : 'text'" contenteditable="true" spellcheck="false" autocapitalize="off" autocorrect="off"
-        aria-label="历史内容，输入或粘贴返回终端 / History content"
-        @beforeinput="historyBeforeInput" @paste="historyPaste"
-        @compositionstart="historyCompositionStart" @compositionend="historyCompositionEnd"
-        @drop.prevent @cut.prevent><span v-for="(run, index) in historyRuns" :key="index" :style="run.style">{{ run.text }}</span></pre>
-    </section>
-
   </div>
 </template>
 
 <style scoped>
-.history-toggle { position: absolute; right: 16px; top: 8px; z-index: 1; opacity: 0.85; }
-.history-toggle, .history-toolbar button {
-  background: var(--bg-secondary); color: var(--text-primary);
-  border: 1px solid var(--border-color); border-radius: 6px;
-  padding: 8px 12px; cursor: pointer;
-}
-.history-panel { position: absolute; inset: 0; display: flex; flex-direction: column; background: #000000; color: #ffffff; z-index: 2; }
-.history-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--border-color); }
-.history-toolbar span { flex: 1; font-size: 13px; }
-.history-output { flex: 1; min-height: 0; margin: 0; padding: 16px; overflow: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; user-select: text; touch-action: pan-y; scrollbar-gutter: stable; }
-.history-notice { margin: 0; padding: 8px 16px; font-size: 13px; }
-.history-output:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
-
-.terminal-area {
-  flex: 1;
-  display: flex;
-  overflow: hidden;
-  background: #000; /* Terminal background */
-  position: relative;
-}
-
-.terminal-frame {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: #000;
-}
+.terminal-area { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; background: #000; position: relative; }
+.terminal-host { width: 100%; height: 100%; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow: hidden; }
+.terminal-host :deep(.xterm) { height: 100%; }
+.connection-status { position: absolute; right: 12px; top: 8px; z-index: 1; background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; padding: 6px 10px; font-size: 12px; pointer-events: none; }
 
 .welcome__container {
   flex: 1;

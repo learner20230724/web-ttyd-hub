@@ -6,3 +6,5 @@ The upstream README declares MIT; no standalone LICENSE exists at this revision.
 This distribution adds the standard MIT text and retains upstream attribution.
 Modifications: learner20230724 and contributors, 2026.
 ttyd and tmux are separately installed dependencies with their own licenses.
+The desktop bundles xterm.js and its fit addon under MIT; complete notices are
+in frontend/public/third-party/xterm.txt (served at /third-party/xterm.txt).

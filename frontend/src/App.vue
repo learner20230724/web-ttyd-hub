@@ -1,8 +1,8 @@
 <script setup>
-import { ref, provide, watch } from "vue";
+import { ref, provide, watch, defineAsyncComponent } from "vue";
 import Sidebar from "./components/Sidebar.vue";
 import MobileTerminal from "./components/MobileTerminal.vue";
-import TerminalView from "./components/TerminalView.vue";
+const TerminalView = defineAsyncComponent(() => import("./components/TerminalView.vue"));
 import CreateDialog from "./components/CreateDialog.vue";
 import Toast from "./components/Toast.vue";
 import { useSessionStore } from "./stores/sessions";
