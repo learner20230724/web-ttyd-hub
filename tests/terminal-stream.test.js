@@ -10,7 +10,7 @@ test('control output preserves escaped bytes, literal escapes and split UTF-8', 
   assert.deepEqual(unescape(Buffer.from('\\344\\270\\255')), Buffer.from('中'));
 });
 
-test('terminal stream restores history, streams raw output, pastes safely and detaches without killing tasks', { timeout: 30000 }, async () => {
+test('terminal stream restores history, streams raw output, pastes safely and detaches without killing tasks', { timeout: 30000, skip: process.platform === 'win32' ? 'Requires Linux tmux/ttyd' : false }, async () => {
   const f = await fixture();
   const sockets = [];
   async function open(origin) {

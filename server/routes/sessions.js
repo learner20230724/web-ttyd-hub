@@ -4,7 +4,12 @@ const contentResponse = require('../services/content-response');
 
 module.exports = function (sessionManager) {
   router.get('/shells', (req, res) => {
-    res.json({ shells: sessionManager.getShells() });
+    res.json({ shells: sessionManager.getShells(), platform: process.platform });
+  });
+
+  router.get('/projects', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(process.platform === 'win32' ? require('../services/codex-projects').listProjects() : { projects: [] });
   });
 
   router.get('/', (req, res) => {
@@ -13,8 +18,8 @@ module.exports = function (sessionManager) {
 
   router.post('/', async (req, res) => {
     try {
-      const { name, shell } = req.body;
-      const session = await sessionManager.create(name, shell);
+      const { name, shell, cwd } = req.body;
+      const session = await sessionManager.create(name, shell, cwd);
       res.status(201).json(session);
     } catch (err) {
       res.status(400).json({ error: err.message });

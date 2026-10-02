@@ -18,3 +18,5 @@ android/local.properties
 
 # Local session identities and recovery snapshots (never publish)
 /data/
+/.playwright-cli/
+/output/

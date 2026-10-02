@@ -1,4 +1,6 @@
 <script setup>
+import { hubUrl } from '../utils/base.mjs'
+
 import { ref, shallowRef, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { contentKey, peekContent, loadContent, fetchContent } from '../utils/session-content.mjs'
 import { marked } from 'marked'
@@ -117,7 +119,7 @@ async function send(key = 'Enter', withText = true) {
     await bottom()
   }
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, key }) })
+    const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, key }) })
     const data = await res.json(); if (!res.ok) throw new Error(data.error)
     if (pending) {
       const item = pendingBySession.value[name]?.find(item => item.id === pending.id)

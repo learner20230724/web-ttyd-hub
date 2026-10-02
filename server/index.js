@@ -3,7 +3,7 @@ const express = require('express');
 const path = require('path');
 const http = require('http');
 const { createProxyMiddleware } = require('http-proxy-middleware');
-const SessionManager = require('./services/session-manager');
+const SessionManager = require(process.platform === 'win32' ? './services/windows-session-manager' : './services/session-manager');
 const sessionsRoute = require('./routes/sessions');
 const setupWebSocket = require('./ws');
 const { setupTerminalStreams } = require('./services/terminal-stream');
@@ -15,6 +15,9 @@ const TTYD_PORT_END = parseInt(process.env.TTYD_PORT_RANGE_END || '7780', 10);
 
 const app = express();
 const server = http.createServer(app);
+const access = require('./services/access-control')();
+app.use(access.middleware);
+server.on('upgrade', access.upgrade);
 
 app.use(express.json());
 
@@ -41,7 +44,12 @@ const ttydProxy = createProxyMiddleware({
   target: 'http://127.0.0.1',
   changeOrigin: true,
   router: (req) => `http://127.0.0.1:${req.ttydSession.port}`,
-  pathRewrite: (path, req) => req.originalUrl || req.url,
+  pathRewrite: (path, req) => (req.originalUrl || req.url).replace(new RegExp('^' + (process.env.HUB_BASE_PATH || '/__no_prefix__') + '(?=/)'), ''),
+  on: {
+    proxyReq(proxyReq, req) { if (sessionManager.workerToken) proxyReq.setHeader('x-hub-worker-token', sessionManager.workerToken(req.ttydSession.name)); },
+    proxyReqWs(proxyReq, req) { if (sessionManager.workerToken) proxyReq.setHeader('x-hub-worker-token', sessionManager.workerToken(req.ttydSession.name)); },
+    error(err, req, res) { if (res.writeHead && !res.headersSent) { res.writeHead(502); res.end('Terminal unavailable'); } }
+  },
   onError: (err, req, res) => {
     console.error('Proxy error:', err);
     if (res && typeof res.status === 'function' && !res.headersSent) {
@@ -79,9 +87,10 @@ app.get(/^\/(?!api).*/, (req, res) => {
 
 // WebSocket
 setupWebSocket(server, sessionManager);
-const terminalStreams = setupTerminalStreams(server, sessionManager);
+const terminalStreams = process.platform === 'win32' ? null : setupTerminalStreams(server, sessionManager);
 
 server.on('upgrade', (req, socket, head) => {
+  if (socket.destroyed) return;
   const sessionName = getSessionNameFromUrl(req.url);
   if (!sessionName) return;
   const session = resolveRunningSession(sessionName);
@@ -105,7 +114,7 @@ sessionManager.restore().then(() => {
 
 // Cleanup on exit
 function cleanup() {
-  terminalStreams.close();
+  terminalStreams?.close();
   console.log('\nCleaning up ttyd processes...');
   sessionManager.cleanup();
   process.exit(0);

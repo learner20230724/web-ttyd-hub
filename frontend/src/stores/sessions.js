@@ -1,3 +1,4 @@
+import { hubUrl } from '../utils/base.mjs'
 import { pruneContent } from '../utils/session-content.mjs'
 import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose, watch } from 'vue'
@@ -29,6 +30,7 @@ export const useSessionStore = defineStore('sessions', () => {
   window.addEventListener('focus', markRead)
   onScopeDispose(() => { document.removeEventListener('visibilitychange', markRead); window.removeEventListener('focus', markRead) })
   const shells = ref([])
+  const platform = ref('')
   const current = ref(null)
   const loaded = ref(false)
   const selectionKey = 'web-ttyd-hub.last-session.v1'
@@ -81,7 +83,7 @@ export const useSessionStore = defineStore('sessions', () => {
   let reconnectDelay = 1000
 
   async function fetchSessions() {
-    const res = await fetch('/api/sessions')
+    const res = await fetch(hubUrl('/api/sessions'))
     if (!res.ok) throw new Error('无法读取会话列表')
     const data = await res.json()
     if (!Array.isArray(data.sessions)) throw new Error('会话列表格式无效')
@@ -100,16 +102,17 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   async function fetchShells() {
-    const res = await fetch('/api/sessions/shells')
+    const res = await fetch(hubUrl('/api/sessions/shells'))
     const data = await res.json()
     shells.value = data.shells
+    platform.value = data.platform || ''
   }
 
-  async function createSession(name, shell) {
-    const res = await fetch('/api/sessions', {
+  async function createSession(name, shell, cwd) {
+    const res = await fetch(hubUrl('/api/sessions'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, shell })
+      body: JSON.stringify({ name, shell, ...(cwd ? { cwd } : {}) })
     })
     if (!res.ok) {
       const data = await res.json()
@@ -123,7 +126,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   async function renameSession(name, displayName) {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(name)}`, {
+    const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: displayName })
@@ -134,7 +137,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   async function stopSession(name) {
-    const res = await fetch(`/api/sessions/${name}/stop`, { method: 'POST' })
+    const res = await fetch(hubUrl(`/api/sessions/${name}/stop`), { method: 'POST' })
     if (!res.ok) {
       const data = await res.json()
       throw new Error(data.error)
@@ -143,7 +146,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   async function restartSession(name) {
-    const res = await fetch(`/api/sessions/${name}/restart`, { method: 'POST' })
+    const res = await fetch(hubUrl(`/api/sessions/${name}/restart`), { method: 'POST' })
     if (!res.ok) {
       const data = await res.json()
       throw new Error(data.error)
@@ -152,7 +155,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   async function removeSession(name, permanent = false) {
-    const res = await fetch(`/api/sessions/${name}${permanent ? '/permanent' : ''}`, { method: 'DELETE' })
+    const res = await fetch(hubUrl(`/api/sessions/${name}${permanent ? '/permanent' : ''}`), { method: 'DELETE' })
     if (!res.ok) {
       const data = await res.json()
       throw new Error(data.error)
@@ -164,7 +167,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   async function restoreSession(name) {
-    const res = await fetch(`/api/sessions/${name}/restore`, { method: 'POST' })
+    const res = await fetch(hubUrl(`/api/sessions/${name}/restore`), { method: 'POST' })
     const data = await res.json()
     if (!res.ok) throw new Error(data.error)
     await fetchSessions()
@@ -184,7 +187,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function connectWs() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    ws = new WebSocket(`${proto}://${location.host}/ws`)
+    ws = new WebSocket(`${proto}://${location.host}${hubUrl('/ws')}`)
 
     ws.onmessage = () => {
       fetchSessions()
@@ -216,8 +219,8 @@ export const useSessionStore = defineStore('sessions', () => {
     connectWs()
   }
 
-  async function create({ command, name }) {
-    return createSession(name || null, command || null)
+  async function create({ command, name, cwd }) {
+    return createSession(name || null, command || null, cwd)
   }
 
   return {
@@ -234,6 +237,7 @@ export const useSessionStore = defineStore('sessions', () => {
     reorderSession,
     moveByKeyboard,
     shells,
+    platform,
     current,
     loaded,
     init,

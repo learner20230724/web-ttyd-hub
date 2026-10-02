@@ -5,17 +5,22 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../stores/sessions';
 import { snapshotSequence, pendingWrapSequence, suppressQueryReplies } from '../utils/terminal-snapshot.mjs';
+import { hubUrl } from '../utils/base.mjs';
 
 const store = useSessionStore();
 const emit = defineEmits(['create']);
 const currentSession = computed(() => store.sessions.find(s => s.name === store.current));
 const runningName = computed(() => currentSession.value?.status === 'running' ? currentSession.value.name : null);
+// Windows workers own their ConPTY renderer; the native stream below uses tmux.
+const nativeName = computed(() => store.platform && store.platform !== 'win32' ? runningName.value : null);
+const windowsSrc = computed(() => store.platform === 'win32' && runningName.value
+  ? hubUrl(`/terminal/${encodeURIComponent(runningName.value)}`) : null);
 const host = ref(null);
 const connection = ref('');
 let dispose = () => {};
 let revision = 0;
 
-watch(runningName, async name => {
+watch(nativeName, async name => {
   const version = ++revision;
   dispose();
   if (!name) return;
@@ -115,7 +120,7 @@ watch(runningName, async name => {
     if (stopped) return;
     ready = false; term.options.disableStdin = true;
     connection.value = attempt ? '连接已断开，正在重连…' : '正在连接终端…';
-    const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/terminal/${encodeURIComponent(name)}`);
+    const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${hubUrl(`/ws/terminal/${encodeURIComponent(name)}`)}`);
     socket.binaryType = 'arraybuffer';
     ws = socket;
     socket.onopen = () => { lastSize = ''; measure(); };
@@ -149,8 +154,9 @@ onBeforeUnmount(() => { revision++; dispose(); });
 
 <template>
   <div class="terminal-area">
-    <div v-if="runningName" ref="host" class="terminal-host" aria-label="交互终端 / Interactive terminal"></div>
-    <div v-if="runningName && connection" class="connection-status" role="status">{{ connection }}</div>
+    <iframe v-if="windowsSrc" :src="windowsSrc" class="windows-terminal" title="交互终端 / Interactive terminal"></iframe>
+    <div v-else-if="nativeName" ref="host" class="terminal-host" aria-label="交互终端 / Interactive terminal"></div>
+    <div v-if="nativeName && connection" class="connection-status" role="status">{{ connection }}</div>
     <div v-if="!runningName" class="welcome__container">
       <div class="welcome__content">
         <div class="logo-text">TTYd Hub</div>
@@ -171,6 +177,7 @@ onBeforeUnmount(() => { revision++; dispose(); });
 .terminal-area { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; background: #000; position: relative; }
 .terminal-host { width: 100%; height: 100%; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow: hidden; }
 .terminal-host :deep(.xterm) { height: 100%; }
+.windows-terminal { width: 100%; height: 100%; border: 0; }
 .connection-status { position: absolute; right: 12px; top: 8px; z-index: 1; background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; padding: 6px 10px; font-size: 12px; pointer-events: none; }
 
 .welcome__container {

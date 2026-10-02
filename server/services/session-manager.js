@@ -81,7 +81,7 @@ class SessionManager extends EventEmitter {
     try {
       for (const saved of records) {
         this.sessions.set(saved.name, { name: saved.name, displayName: saved.displayName,
-          shell: saved.shell, createdAt: saved.createdAt, archivedAt: saved.archivedAt || null, expiresAt: saved.expiresAt || null, codexThreadId: saved.codexThreadId || null,
+          shell: saved.shell, ...(saved.cwd ? { cwd: saved.cwd } : {}), createdAt: saved.createdAt, archivedAt: saved.archivedAt || null, expiresAt: saved.expiresAt || null, codexThreadId: saved.codexThreadId || null,
           status: 'stopped', port: null, pid: null, process: null });
       }
       await this.purgeExpired();

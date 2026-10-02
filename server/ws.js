@@ -4,6 +4,7 @@ function setupWebSocket(server, sessionManager) {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
+    if (socket.destroyed) return;
     const url = req.url || '';
     const pathname = url.split('?')[0];
     if (pathname !== '/ws') return;
@@ -11,6 +12,9 @@ function setupWebSocket(server, sessionManager) {
       wss.emit('connection', ws, req);
     });
   });
+  const heartbeat = setInterval(() => { for (const ws of wss.clients) if (ws.readyState === 1) ws.ping(); }, 25000);
+  heartbeat.unref();
+  server.on('close', () => clearInterval(heartbeat));
 
   function broadcast(event, data) {
     const message = JSON.stringify({ event, data });

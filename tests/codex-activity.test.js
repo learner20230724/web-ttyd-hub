@@ -18,3 +18,13 @@ test('Mobile feed excludes developer, tools and analysis and bounds retained mes
   for (let i=0;i<320;i++) applyEvent(s, message('assistant'));
   assert.equal(s.messages.length,300); assert.equal(s.messages[0].id,'now:20');
 });
+test('Mobile feed hides initial environment/AGENTS metadata and shows explicit Codex failures', () => {
+  const s = state();
+  applyEvent(s, { type: 'response_item', timestamp: 'now', payload: { type: 'message', role: 'user', content: [
+    { type: 'input_text', text: '# AGENTS.md instructions\nprivate instructions' },
+    { type: 'input_text', text: '<environment_context>private metadata' }
+  ] } });
+  assert.equal(s.messages.length, 0);
+  applyEvent(s, { ...event('task_complete'), payload: { type: 'task_complete', turn_id: 'one', error: { message: 'CLI upgrade required' } } });
+  assert.equal(s.busy, false); assert.match(s.messages[0].text, /CLI upgrade required/);
+});

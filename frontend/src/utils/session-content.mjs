@@ -1,3 +1,4 @@
+import { hubUrl } from './base.mjs'
 // Raw text only on disk; derived HTML is always sanitized again by the renderer.
 const memory = new Map(), pending = new Map(), loads = new Map()
 const MEMORY_LIMIT = 64 * 1024 * 1024, DISK_LIMIT = 128 * 1024 * 1024
@@ -78,7 +79,7 @@ export async function fetchContent(session, view, { mobile = true } = {}) {
     const path = view === 'answer' ? 'mobile' : mobile ? 'mobile?view=full' : 'history'
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15000)
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(session.name)}/${path}`, {
+      const response = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/${path}`), {
         signal:controller.signal, cache:'no-store', headers:cached?.etag ? { 'If-None-Match':cached.etag } : {}
       })
       if (response.status === 304 && cached) return cached

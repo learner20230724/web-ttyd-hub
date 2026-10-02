@@ -245,6 +245,7 @@ function setupTerminalStreams(server, manager) {
   }, 30000);
   heartbeat.unref();
   server.on('upgrade', (req, socket, head) => {
+    if (socket.destroyed) return;
     const match = /^\/ws\/terminal\/([a-zA-Z0-9_-]+)$/.exec((req.url || '').split('?')[0]);
     if (!match) return;
     let valid = false;

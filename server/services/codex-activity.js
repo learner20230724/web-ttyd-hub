@@ -10,14 +10,18 @@ const run = promisify(execFile);
 function applyEvent(state, event) {
   const p = event.payload || {};
   if (event.type === 'event_msg') {
-    if (p.type === 'task_started') { state.busy = true; state.turn = p.turn_id; }
+    if (p.type === 'task_started') { state.busy = true; state.turn = p.turn_id; state.error = null; }
     if (['task_complete', 'turn_aborted'].includes(p.type) && (!p.turn_id || !state.turn || p.turn_id === state.turn)) {
       state.busy = false;
       if (p.type === 'task_complete') state.completed = `${event.timestamp}:${p.turn_id || ''}`;
+      if (p.error) {
+        state.error = typeof p.error === 'string' ? p.error : p.error.message || 'Codex request failed';
+        state.messages.push({ role: 'assistant', text: 'Codex 调用失败：\n\n' + state.error, id: `${event.timestamp}:${state.sequence++}` });
+      }
     }
   }
   if (event.type === 'response_item' && p.type === 'message' && ['user', 'assistant'].includes(p.role) && !['analysis', 'summary'].includes(p.channel)) {
-    const text = (p.content || []).filter(x => ['input_text', 'output_text'].includes(x.type)).map(x => x.text).join('\n');
+    const text = (p.content || []).filter(x => ['input_text', 'output_text'].includes(x.type) && !/^(?:<environment_context>|# AGENTS\.md instructions\b)/.test(x.text || '')).map(x => x.text).join('\n');
     if (text && !text.startsWith('<environment_context>')) {
       state.messages.push({ role: p.role, text, id: `${event.timestamp}:${state.sequence++}` });
       if (state.messages.length > 300) state.messages.shift();
@@ -50,11 +54,19 @@ class CodexActivity {
     if (this.polling) return;
     this.polling = true;
     try {
-      const { stdout } = await run('tmux', ['list-panes', '-a', '-F', '#{session_name}\t#{pane_pid}'], { timeout: 3000 });
-      const panes = new Map(stdout.trim().split('\n').map(line => line.split('\t')));
+      let panes, windowsPaths;
+      if (process.platform === 'win32') {
+        panes = new Map([...this.manager.sessions.values()].filter(s => s.status === 'running' && s.pid).map(s => [s.name, String(s.pid)]));
+        if (!panes.size) return;
+        const { stdout } = await run(process.env.HUB_PYTHON || 'python', [require('node:path').join(__dirname, '../../scripts/windows-rollouts.py'), ...panes.values()], { timeout: 8000, windowsHide: true, encoding: 'utf8' });
+        windowsPaths = JSON.parse(stdout);
+      } else {
+        const { stdout } = await run('tmux', ['list-panes', '-a', '-F', '#{session_name}\t#{pane_pid}'], { timeout: 3000 });
+        panes = new Map(stdout.trim().split('\n').map(line => line.split('\t')));
+      }
       for (const session of this.manager.sessions.values()) {
         const old = JSON.stringify(session.activity);
-        const path = session.status === 'running' && panes.has(session.name) ? await findRollout(panes.get(session.name)) : null;
+        const path = session.status === 'running' && panes.has(session.name) ? (windowsPaths ? windowsPaths[panes.get(session.name)] : await findRollout(panes.get(session.name))) : null;
         if (!path) {
           this.states.delete(session.name);
           session.activity = { available: false, busy: false, completed: session.activity?.completed || null };
@@ -83,7 +95,7 @@ class CodexActivity {
             }
             state.offset += consumed;
           }
-          session.activity = { available: true, busy: state.busy, completed: state.completed };
+          session.activity = { available: true, busy: state.busy, completed: state.completed, ...(state.error ? { error: state.error } : {}) };
         }
         if (JSON.stringify(session.activity) !== old) this.manager.emit('session:activity', this.manager.serialize(session));
       }

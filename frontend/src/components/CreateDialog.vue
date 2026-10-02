@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
+import { hubUrl } from '../utils/base.mjs';
 import { useSessionStore } from "../stores/sessions";
 
 const emit = defineEmits(["close"]);
@@ -8,10 +9,28 @@ const store = useSessionStore();
 const form = ref({
   name: "",
   command: "codex",
+  cwd: "",
 });
 
 const loading = ref(false);
 const error = ref("");
+const projects = ref([]), projectsLoading = ref(false), projectsError = ref('');
+const needsProject = computed(() => store.platform === 'win32' && form.value.command === 'codex');
+async function refreshProjects() {
+  projectsLoading.value = true; projectsError.value = '';
+  try {
+    const response = await fetch(hubUrl('/api/sessions/projects'));
+    if (!response.ok) throw new Error('项目列表读取失败');
+    const data = await response.json(); projects.value = data.projects || [];
+    if (data.error) projectsError.value = data.error;
+    if (!projects.value.some(p => p.path === form.value.cwd)) {
+      let previous; try { previous = localStorage.getItem('home-terminal.last-project'); } catch {}
+      form.value.cwd = projects.value.find(p => p.path === previous)?.path || projects.value.find(p => p.active)?.path || projects.value[0]?.path || '';
+    }
+  } catch (e) { projectsError.value = e.message; projects.value = []; form.value.cwd = ''; }
+  finally { projectsLoading.value = false; }
+}
+onMounted(refreshProjects);
 
 const nameHint = computed(() => {
   return form.value.name ? form.value.name : `${form.value.command}-auto`;
@@ -19,10 +38,12 @@ const nameHint = computed(() => {
 
 async function handleSubmit() {
   if (loading.value) return;
+  if (needsProject.value && !form.value.cwd) { error.value = '请先选择 Codex 项目目录'; return; }
   loading.value = true;
   error.value = "";
   try {
-    await store.create(form.value);
+    await store.create({ ...form.value, cwd: needsProject.value ? form.value.cwd : undefined });
+    if (needsProject.value) { try { localStorage.setItem('home-terminal.last-project', form.value.cwd); } catch {} }
     emit("close");
   } catch (e) {
     error.value = e.message;
@@ -63,7 +84,18 @@ async function handleSubmit() {
               {{ s.name }}
             </option>
           </select>
-          <span v-if="form.command === 'codex'" class="label-text">自动运行 codex --yolo</span>
+          <span v-if="form.command === 'codex'" class="label-text">自动运行 codex --yolo（关闭沙箱和审批）；仅限可信用户使用</span>
+        </label>
+        <label v-if="needsProject" class="form-group">
+          <span class="label-text">项目目录 / 在哪个项目中打开 Codex</span>
+          <select v-model="form.cwd" :disabled="projectsLoading" aria-label="Codex 项目目录">
+            <option disabled value="">{{ projectsLoading ? '正在读取本机 Codex 项目…' : '请选择项目' }}</option>
+            <option v-for="project in projects" :key="project.path" :value="project.path">{{ project.name }}{{ project.active ? '（Codex 当前项目）' : '' }}</option>
+          </select>
+          <span class="label-text project-path">{{ form.cwd }}</span>
+          <span v-if="projectsError" role="alert">{{ projectsError }}</span>
+          <span v-else-if="!projectsLoading && !projects.length" class="label-text">暂无可用项目，请先在本机 Codex 中打开项目。</span>
+          <button type="button" class="btn" :disabled="projectsLoading" @click="refreshProjects">刷新项目列表</button>
         </label>
       </div>
 
@@ -72,7 +104,7 @@ async function handleSubmit() {
         <button
           class="btn btn-primary"
           @click="handleSubmit"
-          :disabled="loading"
+          :disabled="loading || (needsProject && (projectsLoading || !form.cwd))"
         >
           {{ loading ? "Creating..." : "Create Session" }}
         </button>
@@ -138,6 +170,8 @@ async function handleSubmit() {
 }
 
 .modal-body {
+  max-height: 65vh;
+  overflow-y: auto;
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -155,6 +189,7 @@ async function handleSubmit() {
   font-weight: 500;
   color: var(--text-secondary);
 }
+.project-path { overflow-wrap: anywhere; font-size: 12px; }
 
 select,
 input {
