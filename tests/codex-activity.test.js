@@ -28,3 +28,21 @@ test('Mobile feed hides initial environment/AGENTS metadata and shows explicit C
   applyEvent(s, { ...event('task_complete'), payload: { type: 'task_complete', turn_id: 'one', error: { message: 'CLI upgrade required' } } });
   assert.equal(s.busy, false); assert.match(s.messages[0].text, /CLI upgrade required/);
 });
+
+test('question answer and user_note results confirm input without exposing other tool output', () => {
+  const s = state();
+  const call = (id, name = 'request_user_input') => applyEvent(s, { type: 'response_item', payload: { type: 'function_call', name, call_id: id } });
+  const output = (id, value) => applyEvent(s, { type: 'response_item', payload: { type: 'function_call_output', call_id: id, output: value } });
+  const answer = JSON.stringify({ answers: { choice: { answers: ['Option A', 'user_note: 追问内容\n第二行'] } }, private_tool_detail: 'must not appear' });
+  call('other', 'exec_command'); output('other', answer);
+  output('unknown', answer); assert.equal(s.inputReceipts, undefined);
+  call('question', 'functions.request_user_input'); output('question', answer);
+  assert.deepEqual(s.inputReceipts.map(r => r.text), ['Option A', '追问内容\n第二行']);
+  assert.equal(s.messages.length, 0, 'Do not render question tool results as conversation output');
+  output('question', answer); assert.equal(s.inputReceipts.length, 2, 'A repeated output is not a second acknowledgement');
+  call('broken'); output('broken', '{'); assert.equal(s.inputReceipts.length, 2);
+  call('invalid'); output('invalid', { answers: { x: { answers: [null, {}, '', 'x'.repeat(64001)] } } });
+  assert.equal(s.inputReceipts.length, 2);
+  for (let i = 0; i < 310; i++) { call('q' + i); output('q' + i, { answers: { x: { answers: ['note ' + i] } } }); }
+  assert.equal(s.inputReceipts.length, 300);
+});

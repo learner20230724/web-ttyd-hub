@@ -7,6 +7,7 @@ const path = require('node:path');
 const EventEmitter = require('events');
 const PortManager = require('./port-manager');
 const { CodexActivity } = require('./codex-activity');
+const { waitAfterPaste } = require('./paste-timing');
 
 const SESSION_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
@@ -374,8 +375,9 @@ class SessionManager extends EventEmitter {
     await this.ensurePane(name);
     if (full) return this.history(name);
     const messages = this.activity.messages(name);
-    if (messages?.length) return { messages, activity: this.getSession(name).activity };
-    return { ...await this.history(name), activity: this.getSession(name).activity };
+    const inputReceipts = this.activity.inputReceipts(name);
+    if (messages?.length) return { messages, inputReceipts, activity: this.getSession(name).activity };
+    return { ...await this.history(name), inputReceipts, activity: this.getSession(name).activity };
   }
 
   input(name, { text, key }) {
@@ -396,8 +398,7 @@ class SessionManager extends EventEmitter {
         });
         try { await runFile('tmux', ['paste-buffer', '-d', '-p', '-b', buffer, '-t', `=${name}:`]); }
         finally { await runFile('tmux', ['delete-buffer', '-b', buffer]).catch(() => {}); }
-        // Let bracketed-paste handling complete before submitting the input.
-        if (key) await new Promise(resolve => setTimeout(resolve, 80));
+        await waitAfterPaste(key);
       }
       if (key) await runFile('tmux', ['send-keys', '-t', `=${name}:`, key]);
       return { ok: true };

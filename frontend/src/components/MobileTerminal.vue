@@ -3,6 +3,7 @@ import { hubUrl } from '../utils/base.mjs'
 
 import { ref, shallowRef, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { contentKey, peekContent, loadContent, fetchContent } from '../utils/session-content.mjs'
+import { receiptCandidates, reconcileInputs } from '../utils/input-receipts.mjs'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { terminalSegments, tableMarkdown } from '../utils/terminal-tables.mjs'
@@ -12,22 +13,14 @@ const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, fon
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
-const pane = ref(null), follow = ref(true)
+const pane = ref(null), composerInput = ref(null), follow = ref(true)
 const drafts = new Map()
 const pendingBySession = ref({})
 const transcriptIds = new Map()
 const pendingMessages = computed(() => pendingBySession.value[store.current] || [])
-function reconcilePending(name, messages) {
-  if (!messages) return
-  const pending = pendingBySession.value[name] || []
-  const matched = new Set()
-  pendingBySession.value[name] = pending.filter(item => {
-    const message = messages.find(m => m.role === 'user' && !matched.has(m.id) && !item.before.includes(m.id) && m.text.trim() === item.text.trim())
-    if (message) { matched.add(message.id); return false }
-    item.before = [...new Set([...item.before, ...messages.map(m => m.id)])]
-    return true
-  })
-  transcriptIds.set(name, messages.map(m => m.id))
+function reconcilePending(name, data) {
+  pendingBySession.value[name] = reconcileInputs(pendingBySession.value[name] || [], data)
+  transcriptIds.set(name, receiptCandidates(data).map(m => m.id))
 }
 function dismissPending(id) { pendingBySession.value[store.current] = pendingMessages.value.filter(item => item.id !== id) }
 const renderedMessages = new Map(), renderedOutput = new WeakMap()
@@ -72,11 +65,11 @@ async function refresh(token = epoch) {
   try {
     const entry = await fetchContent(selected, view)
     if (disposed || token !== epoch) return
-    if (view === 'answer') reconcilePending(selected.name, entry.data.messages)
+    if (view === 'answer') reconcilePending(selected.name, entry.data)
     await display(entry)
     error.value = ''
-    if (view === 'full' && pendingMessages.value.some(item => item.codex)) {
-      void fetchContent(selected, 'answer').then(answer => { if (token === epoch) reconcilePending(selected.name, answer.data.messages) }).catch(() => {})
+    if (view === 'full' && pendingMessages.value.length) {
+      void fetchContent(selected, 'answer').then(answer => { if (token === epoch) reconcilePending(selected.name, answer.data) }).catch(() => {})
     }
   } catch (e) {
     if (token === epoch) error.value = Object.keys(content.value).length ? '正在显示缓存，暂时无法更新。' : e.message
@@ -100,7 +93,7 @@ watch([() => store.current, () => props.showExecution], async ([name, full], pre
   void refresh(token)
   const other = full ? 'answer' : 'full'
   void fetchContent(selected, other).then(entry => {
-    if (token === epoch && other === 'answer') reconcilePending(name, entry.data.messages)
+    if (token === epoch && other === 'answer') reconcilePending(name, entry.data)
   }).catch(() => {})
   if (!cached) {
     const stored = await loadContent(selected, view)
@@ -111,7 +104,9 @@ watch([() => store.current, () => props.showExecution], async ([name, full], pre
 watch(() => props.fontSize, async () => { if (follow.value) await bottom() })
 async function send(key = 'Enter', withText = true) {
   if (sending.value || !session.value) return
-  const name = session.value.name, text = withText ? draft.value : ''
+  // Vue postpones v-model updates during IME composition; send the visible text.
+  const name = session.value.name, text = withText ? (composerInput.value?.value ?? draft.value) : ''
+  if (withText) draft.value = text
   sending.value = true; error.value = ''
   const pending = text && key === 'Enter' ? { id: `${Date.now()}-${Math.random()}`, text, codex: session.value.activity?.available === true, status: 'sending', before: transcriptIds.get(name) || [] } : null
   if (pending) {
@@ -125,7 +120,15 @@ async function send(key = 'Enter', withText = true) {
       const item = pendingBySession.value[name]?.find(item => item.id === pending.id)
       if (item) item.status = 'delivered'
     }
-    if (withText) { drafts.delete(name); if (store.current === name && draft.value === text) draft.value = '' }
+    if (withText) {
+      drafts.delete(name)
+      if (store.current === name && draft.value === text) {
+        draft.value = ''
+        // Vue intentionally skips DOM writes during composition. Clear only
+        // the submitted value so a later compositionend cannot restore it.
+        if (composerInput.value?.value === text) composerInput.value.value = ''
+      }
+    }
     if (store.current === name) { await bottom(); refresh() }
   } catch (e) {
     const item = pending && pendingBySession.value[name]?.find(item => item.id === pending.id)
@@ -163,7 +166,7 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer) })
         <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" role="status">
           <div class="pending-text">{{ item.text }}</div>
           <div class="pending-status">
-            <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? (item.codex ? '已送达终端 · 等待 Codex 接收，通常在下一次工具调用后' : '已发送到终端') : '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
+            <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? (item.codex ? '已送达终端 · 等待 Codex 确认接收' : '已发送到终端') : '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
             <button v-if="item.status !== 'sending'" type="button" aria-label="关闭发送提示" @click="dismissPending(item.id)">×</button>
           </div>
         </article>
@@ -173,7 +176,7 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer) })
       <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
-          <textarea v-model="draft" aria-label="消息输入" placeholder="输入消息…" rows="2" enterkeyhint="enter"></textarea>
+          <textarea ref="composerInput" v-model="draft" aria-label="消息输入" placeholder="输入消息…" rows="2" enterkeyhint="enter"></textarea>
           <button class="send" :disabled="sending" type="submit">{{ sending ? '…' : draft ? '发送' : '回车' }}</button></div>
       </form>
     </template>

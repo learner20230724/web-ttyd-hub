@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { randomUUID, createHmac } = require('node:crypto');
+const { waitAfterPaste } = require('./paste-timing');
 
 class WindowsSessionManager extends Base {
   constructor(start, end, stateFile) {
@@ -114,13 +115,33 @@ class WindowsSessionManager extends Base {
   async history(name) { return this.call(this.getSession(name), '/history'); }
   async mobile(name, full = false) {
     await this.ensurePane(name);
+    const inputReceipts = this.activity.inputReceipts(name);
     if (!full) {
       const messages = this.activity.messages(name);
-      if (messages?.length) return { messages, activity: this.getSession(name).activity };
+      if (messages?.length) return { messages, inputReceipts, activity: this.getSession(name).activity };
     }
-    return { ...await this.history(name), activity: this.getSession(name).activity };
+    return { ...await this.history(name), inputReceipts, activity: this.getSession(name).activity };
   }
-  async input(name, body) { await this.ensurePane(name); return this.call(this.getSession(name), '/input', body); }
+  input(name, { text, key }) {
+    // Keep the fix in the Hub: already running ConPTY workers can keep their
+    // terminals alive across this update, including workers from older versions.
+    this.getSession(name);
+    if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'S-Left', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
+    const previous = this.inputQueues.get(name) || Promise.resolve();
+    const task = previous.catch(() => {}).then(async () => {
+      await this.ensurePane(name);
+      const session = this.getSession(name);
+      if (text && key) {
+        await this.call(session, '/input', { text });
+        await waitAfterPaste(key);
+        return this.call(session, '/input', { key });
+      }
+      return this.call(session, '/input', { text, key });
+    });
+    this.inputQueues.set(name, task);
+    task.finally(() => { if (this.inputQueues.get(name) === task) this.inputQueues.delete(name); }).catch(() => {});
+    return task;
+  }
   async pollWorkers() {
     if (this.polling || this.closing || this.restoring) return;
     this.polling = true;

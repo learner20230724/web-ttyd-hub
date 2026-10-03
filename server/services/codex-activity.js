@@ -9,6 +9,31 @@ const run = promisify(execFile);
 
 function applyEvent(state, event) {
   const p = event.payload || {};
+  if (event.type === 'response_item') {
+    // Question replies are tool results, not ordinary user messages. Retain only
+    // their accepted answer text for delivery receipts, never general tool output.
+    if (p.type === 'function_call' && /^(?:functions\.)?request_user_input$/.test(p.name || '') && p.call_id) {
+      state.inputRequests ||= new Set();
+      state.inputRequests.add(p.call_id);
+      if (state.inputRequests.size > 128) state.inputRequests.delete(state.inputRequests.values().next().value);
+    }
+    if (p.type === 'function_call_output' && state.inputRequests?.delete(p.call_id)) {
+      try {
+        const result = typeof p.output === 'string' ? JSON.parse(p.output) : p.output;
+        for (const [question, value] of Object.entries(result?.answers || {})) {
+          if (!Array.isArray(value?.answers)) continue;
+          value.answers.forEach((answer, index) => {
+            if (typeof answer !== 'string') return;
+            const text = answer.replace(/^user_note: ?/, '');
+            if (!text.trim() || Buffer.byteLength(text) > 64000) return;
+            state.inputReceipts ||= [];
+            state.inputReceipts.push({ id: `answer:${p.call_id}:${question}:${index}`, text });
+            if (state.inputReceipts.length > 300) state.inputReceipts.shift();
+          });
+        }
+      } catch { /* Partial/malformed results cannot confirm delivery. */ }
+    }
+  }
   if (event.type === 'event_msg') {
     if (p.type === 'task_started') { state.busy = true; state.turn = p.turn_id; state.error = null; }
     if (['task_complete', 'turn_aborted'].includes(p.type) && (!p.turn_id || !state.turn || p.turn_id === state.turn)) {
@@ -104,6 +129,7 @@ class CodexActivity {
     finally { this.polling = false; }
   }
   messages(name) { return this.states.get(name)?.messages || null; }
+  inputReceipts(name) { return this.states.get(name)?.inputReceipts || []; }
   close() { clearInterval(this.timer); }
 }
 module.exports = { CodexActivity, applyEvent };
