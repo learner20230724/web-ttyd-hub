@@ -56,9 +56,10 @@ HUB_ANDROID_KEY_PASSWORD=...
 
 ```bash
 mkdir -p /tmp/ttyd-address-test
-javac -d /tmp/ttyd-address-test app/src/main/java/cn/guihualab/ttydhub/ServerAddress.java app/src/main/java/cn/guihualab/ttydhub/SavedServers.java tests/ServerAddressTest.java tests/SavedServersTest.java
+javac -d /tmp/ttyd-address-test app/src/main/java/cn/guihualab/ttydhub/ServerAddress.java app/src/main/java/cn/guihualab/ttydhub/SavedServers.java app/src/main/java/cn/guihualab/ttydhub/HttpAuthSession.java tests/ServerAddressTest.java tests/SavedServersTest.java tests/HttpAuthSessionTest.java
 java -cp /tmp/ttyd-address-test ServerAddressTest
 java -cp /tmp/ttyd-address-test SavedServersTest
+java -cp /tmp/ttyd-address-test HttpAuthSessionTest
 ```
 
 - Chromium 手机模式测试了真实触摸滑动、彩色历史、选择复制、输入/粘贴接续、拖动排序与置顶。
@@ -74,7 +75,7 @@ Linux 服务通过对应 tmux 窗格的 Codex 进程打开的 rollout 文件读�
 
 本项目是连接用户服务器的远程终端客户端，继续使用现有 Java/WebView 外壳；页面与业务逻辑从同一服务器加载，保留 origin、排序和已读记录。运行 `npm run deploy:web` 同时更新网页和 APK 在线界面，重新加载或完全关闭后打开应用生效，不强制打断正在编辑的页面。脚本要求本机 systemd 的 `KillMode=process`，保存会话清单并验证 tmux 窗格 PID 保留。
 
-远程终端离线不能操作服务器，本项目不把私密终端记录打包进离线网页更新包。断网后保留当前画面与未发送输入，恢复网络自动重试读取；不要在发送结果不确定时直接重复发送。外壳改变（本次移除原生顶部栏）才需要覆盖安装 APK；之后页面更新无需重复安装。版本包回滚由服务器代码和构建版本管理，不承诺离线终端可用。
+远程终端离线不能操作服务器，本项目不把私密终端记录打包进离线网页更新包。断网后保留当前画面与未发送输入，恢复网络自动重试读取；不要在发送结果不确定时直接重复发送。原生登录、下载处理等外壳改变才需要覆盖安装 APK；页面更新无需重复安装。版本包回滚由服务器代码和构建版本管理，不承诺离线终端可用。
 
 ### 手机阅读设置
 
@@ -119,9 +120,19 @@ http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk
 
 这是原生连接界面更新，需同签名覆盖安装 1.5.0（versionCode 6）一次；不用卸载。之后各服务器上的网页更新仍直接在线生效。已验证地址迁移、切换顺序、列表持久化、凭据作用域、Release 构建、Lint 与签名；尚未连接 M153 真机。连接其他机器时，各机器需已经部署可访问的 Web TTYd Hub，本更新不会自动安装远端服务。
 
+### 1.5.1：修复反复弹出登录
+
+旧版用整个 WebView 生命周期内的「是否已经尝试过登录」判断密码失效。同一服务器的后续页面、资源或 API 发起新认证请求时，即使密码正确，也可能被误判为失败、删除保存的凭据，再次弹出登录框。
+
+现在使用 Android 的 [`HttpAuthHandler.useHttpAuthUsernamePassword()`](https://developer.android.com/reference/android/webkit/HttpAuthHandler#useHttpAuthUsernamePassword()) 判断**当前请求**是否已被服务器拒绝。正常的新请求继续使用保存的账号密码；同一认证域的并发请求共用一个登录框；真正被拒绝时才要求修正，并给出明确提示。取消、切换服务器时清理旧请求，避免将一台服务器的输入交给另一台。
+
+此修复在原生 Android 层，需要同签名覆盖安装 **1.5.1（versionCode 7）** 一次，无需卸载。保留服务器列表、站点存储和原加密凭据格式；若旧版已误删密码，更新后需重新输入一次。Windows 原生终端支持属于服务器/网页更新，本身不要求新 APK。
+
+已验证连续/并发认证、错误密码后修正、取消与重开、服务器隔离、保存失败处理；Release 构建、Lint、包名和签名校验通过。未连接 M153 真机，因此这些是代码回归与构建验证，不能代替真机登录验证。
+
 ### 会话内容缓存
 
-已访问会话的「回答」与「全文」分别保存在内存和本机 IndexedDB；首次打开会同时预读另一种视图，后续切换先显示缓存再后台更新。每个视图保留本次使用中的滚动位置，切换不清空草稿。电脑历史面板也复用同一缓存。
+已访问会话的「回答」与「全文」分别保存在内存和本机 IndexedDB；首次打开会同时预读另一种视图，后续切换先显示缓存再后台更新。每个视图保留本次使用中的滚动位置，切换不清空草稿。电脑端已改为独立的原生终端滚动。
 
 服务器返回内容版本标记；未变化时只返回 304，不再整份传输和解析。Markdown/ANSI 的渲染结果在内存中复用。内存原文缓存约 64 MiB、本机持久缓存约 128 MiB，超出后清理旧缓存；缓存仅覆盖服务端提供的已读取历史窗口，不是无限历史归档。会话彻底删除后，下次同步会移除其缓存，归档期间保留。浏览器存储不可用时自动使用内存缓存，不影响操作。
 

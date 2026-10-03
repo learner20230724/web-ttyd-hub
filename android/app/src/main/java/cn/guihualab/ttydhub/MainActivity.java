@@ -31,8 +31,6 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
-import java.util.ArrayList;
-import java.util.List;
 
 public class MainActivity extends Activity {
     private LinearLayout root;
@@ -42,16 +40,15 @@ public class MainActivity extends Activity {
     private SharedPreferences preferences;
     private String server = "";
     private AlertDialog loginDialog;
-    private final List<HttpAuthHandler> authRequests = new ArrayList<>();
     private boolean pageFailed;
     private LoginVault loginVault;
     private SavedServers savedServers;
-    private final java.util.Set<String> attemptedLogins = new java.util.HashSet<>();
-    private String loginScope;
+    private HttpAuthSession httpAuth;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         loginVault = new LoginVault(this);
+        httpAuth = new HttpAuthSession(loginVault, this::promptLogin);
         preferences = getSharedPreferences("connection", MODE_PRIVATE);
         server = preferences.getString("server", "");
         savedServers = new SavedServers(preferences.getString("servers", null), server);
@@ -99,9 +96,7 @@ public class MainActivity extends Activity {
     }
     private void destroyWeb() {
         if (loginDialog != null) { loginDialog.dismiss(); loginDialog = null; }
-        for (HttpAuthHandler h : authRequests) h.cancel();
-        authRequests.clear();
-        loginScope = null;
+        httpAuth.cancel();
         if (web != null) {
             WebView previous = web;
             web = null;
@@ -182,7 +177,6 @@ public class MainActivity extends Activity {
     private void openServer(String address) {
         destroyWeb();
         server = address;
-        attemptedLogins.clear();
         LinearLayout outer = column(); setRoot(outer);
         progress = new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
         outer.addView(progress,new LinearLayout.LayoutParams(-1,dp(3)));
@@ -240,13 +234,10 @@ public class MainActivity extends Activity {
             @Override public void onReceivedHttpAuthRequest(WebView v,HttpAuthHandler handler,String host,String realm) {
                 if (v != web || !Uri.parse(address).getHost().equalsIgnoreCase(host) || !ServerAddress.sameOrigin(address, v.getUrl())) { handler.cancel(); return; }
                 String scope = ServerAddress.authScope(address, realm);
-                if (attemptedLogins.add(scope)) {
-                    String[] saved = loginVault.load(scope);
-                    if (saved != null) { handler.proceed(saved[0], saved[1]); return; }
-                } else loginVault.remove(scope);
-                if (loginDialog != null && !scope.equals(loginScope)) { handler.cancel(); return; }
-                loginScope = scope;
-                promptLogin(handler);
+                httpAuth.challenge(scope, handler.useHttpAuthUsernamePassword(), new HttpAuthSession.Request() {
+                    @Override public void proceed(String user, String pass) { handler.proceed(user, pass); }
+                    @Override public void cancel() { handler.cancel(); }
+                });
             }
             @Override public void onReceivedSslError(WebView v,SslErrorHandler handler,SslError error) {
                 handler.cancel();
@@ -269,26 +260,23 @@ public class MainActivity extends Activity {
             startActivity(intent);
         } catch (android.content.ActivityNotFoundException e) { notice("没有可用的浏览器，请复制链接到浏览器下载"); }
     }
-    private void promptLogin(HttpAuthHandler handler) {
-        authRequests.add(handler);
-        if (loginDialog != null) return;
+    private void promptLogin(String scope, boolean rejected) {
         LinearLayout form = column(); form.setPadding(dp(20),dp(8),dp(20),0);
         form.addView(label(Uri.parse(server).getAuthority(),14));
+        if (rejected) form.addView(label("服务器未接受这组账号密码，请检查后重新输入。",13));
         EditText username = input("用户名",false), password = input("密码",true);
         username.setInputType(InputType.TYPE_CLASS_TEXT); form.addView(username); form.addView(password);
         loginDialog = new AlertDialog.Builder(this).setTitle("服务器登录").setView(form)
             .setPositiveButton("登录",(dialog,which)-> {
                 String user = username.getText().toString(), pass = password.getText().toString();
-                List<HttpAuthHandler> pending = new ArrayList<>(authRequests); authRequests.clear(); loginDialog = null;
-                try { loginVault.save(loginScope, user, pass); }
-                catch (Exception e) { notice("本次可登录，但无法保存密码，下次需要重新输入"); }
-                for (HttpAuthHandler h : pending) h.proceed(user,pass);
+                loginDialog = null;
+                if (!httpAuth.submit(user, pass)) notice("本次可登录，但无法保存密码，下次需要重新输入");
                 password.setText("");
             }).setNegativeButton("取消",(dialog,which)->cancelLogin()).setOnCancelListener(dialog->cancelLogin()).create();
         loginDialog.show();
     }
     private void cancelLogin() {
-        for (HttpAuthHandler h : authRequests) h.cancel(); authRequests.clear(); loginDialog = null;
+        httpAuth.cancel(); loginDialog = null;
         connectionError("已取消登录，可在返回键菜单重新加载或更换服务器。");
     }
     private void connectionError(String text) { pageFailed = true; status.setText(text); status.setVisibility(View.VISIBLE); }
@@ -302,7 +290,7 @@ public class MainActivity extends Activity {
         TextView current = label(server, 13); current.setPadding(0, dp(4), 0, dp(12)); content.addView(current);
         content.addView(button("重新加载", v -> {
             menu.dismiss();
-            if (web != null) { attemptedLogins.clear(); web.reload(); }
+            if (web != null) web.reload();
         }));
         content.addView(button("添加服务器", v -> { menu.dismiss(); showConnection(); }));
         addSavedServers(content, menu);

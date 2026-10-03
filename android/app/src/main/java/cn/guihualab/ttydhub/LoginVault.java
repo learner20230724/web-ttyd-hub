@@ -14,7 +14,7 @@ import javax.crypto.spec.GCMParameterSpec;
 import org.json.JSONObject;
 
 /** Credentials stay in this app; encryption key never leaves Android Keystore. */
-final class LoginVault {
+final class LoginVault implements HttpAuthSession.Store {
     private static final String ALIAS = "ttyd-hub-login-v1";
     private final SharedPreferences storage;
     LoginVault(Context context) { storage = context.getSharedPreferences("encrypted-logins", Context.MODE_PRIVATE); }
@@ -26,7 +26,7 @@ final class LoginVault {
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());
         return generator.generateKey();
     }
-    void save(String scope, String username, String password) throws Exception {
+    @Override public void save(String scope, String username, String password) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, key());
         cipher.updateAAD(scope.getBytes(StandardCharsets.UTF_8));
         JSONObject login = new JSONObject().put("username", username).put("password", password);
@@ -34,7 +34,7 @@ final class LoginVault {
             Base64.encodeToString(cipher.doFinal(login.toString().getBytes(StandardCharsets.UTF_8)), Base64.NO_WRAP);
         if (!storage.edit().putString(scope, encrypted).commit()) throw new IllegalStateException("Cannot save login");
     }
-    String[] load(String scope) {
+    @Override public String[] load(String scope) {
         String value = storage.getString(scope, null); if (value == null) return null;
         try {
             String[] parts = value.split(":", 2);
@@ -45,7 +45,7 @@ final class LoginVault {
             return new String[]{login.getString("username"), login.getString("password")};
         } catch (Exception e) { storage.edit().remove(scope).apply(); return null; }
     }
-    void remove(String scope) { storage.edit().remove(scope).apply(); }
+    @Override public void remove(String scope) { storage.edit().remove(scope).apply(); }
     void removeServer(String address) {
         String prefix = ServerAddress.authScope(address, "");
         SharedPreferences.Editor edit = storage.edit();
