@@ -64,6 +64,8 @@ async function main() {
       assert.equal(await page.getByText('STALE A PREVIEW', { exact: true }).count(), 0);
       assert.equal(await page.locator('.history-preview img').count(), 0, 'Preview must not render HTML');
       await page.screenshot({ path: path.join(output, `codex-picker-${target}.png`), fullPage: true });
+      await page.locator('.history-preview').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(output, `codex-picker-preview-${target}.png`), fullPage: true });
       await page.getByRole('button', { name: '恢复 / 打开会话', exact: true }).click();
       await page.waitForSelector('.modal-overlay', { state: 'detached' });
       assert.equal(requests.length, 1);
