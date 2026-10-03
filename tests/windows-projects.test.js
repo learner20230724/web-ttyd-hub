@@ -18,6 +18,9 @@ test('Codex project picker uses names/order/selection, deduplicates and filters 
     assert.equal(result.projects.length, 2); assert.equal(result.projects[0].path, b);
     assert.equal(result.projects[1].active, true); assert.equal(result.projects[1].name, '中文');
     fs.writeFileSync(file, '{broken'); assert.equal(listProjects(file).projects.length, 0);
+    fs.writeFileSync(file, 'null'); assert.equal(listProjects(file).projects.length, 0);
+    fs.writeFileSync(file, JSON.stringify({ 'project-order': 42, 'electron-saved-workspace-roots': {} }));
+    assert.equal(listProjects(file).projects.length, 0);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 

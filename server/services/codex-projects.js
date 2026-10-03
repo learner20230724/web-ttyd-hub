@@ -2,31 +2,32 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-// Read only project metadata, never auth.json, conversations or desktop settings.
+// Read desktop project metadata only; CLI history is supplied by codex-history.
 function listProjects(filename = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), '.codex-global-state.json')) {
   let state;
   try { state = JSON.parse(fs.readFileSync(filename, 'utf8')); }
   catch { return { projects: [], error: '无法读取 Codex 项目列表，请先在本机 Codex 中打开项目后刷新。' }; }
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return { projects: [] };
   const projects = [], seen = new Set();
   const selected = state['selected-project'];
   function add(root, name, active = false) {
-    if (typeof root !== 'string' || !path.isAbsolute(root)) return;
+    if (typeof root !== 'string' || !path.isAbsolute(root) || /[\x00-\x1f]/.test(root)) return;
     try {
       if (!fs.statSync(root).isDirectory()) return;
       fs.accessSync(root, fs.constants.R_OK);
       const full = path.resolve(root), key = process.platform === 'win32' ? full.toLowerCase() : full;
       if (seen.has(key)) return;
-      seen.add(key); projects.push({ name: name || path.basename(full) || full, path: full, active });
+      seen.add(key); projects.push({ name: typeof name === 'string' && name ? name : path.basename(full) || full, path: full, active });
     } catch { /* Removed/unmounted workspaces are not launch targets. */ }
   }
   const locals = state['local-projects'] || {};
-  const order = [...new Set([...(state['project-order'] || []), ...Object.keys(locals)])];
+  const order = [...new Set([...(Array.isArray(state['project-order']) ? state['project-order'] : []), ...Object.keys(locals)])];
   for (const id of order) {
     const project = locals[id];
     if (!project || !Array.isArray(project.rootPaths)) continue;
     for (const root of project.rootPaths) add(root, project.name, selected?.type === 'local' && selected.projectId === id);
   }
-  for (const root of state['electron-saved-workspace-roots'] || []) add(root);
+  for (const root of Array.isArray(state['electron-saved-workspace-roots']) ? state['electron-saved-workspace-roots'] : []) add(root);
   return { projects };
 }
 async function getProjects() {
@@ -36,7 +37,7 @@ async function getProjects() {
   const seen = new Set(projects.map(x => pathKey(x.path)));
   const roots = [...rows.map(x => x.cwd), process.env.HUB_CWD || process.cwd()];
   for (const root of roots) {
-    if (typeof root !== 'string' || !path.isAbsolute(root) || seen.has(pathKey(root))) continue;
+    if (typeof root !== 'string' || !path.isAbsolute(root) || /[\x00-\x1f]/.test(root) || seen.has(pathKey(root))) continue;
     try {
       if (!fs.statSync(root).isDirectory()) continue;
       fs.accessSync(root, fs.constants.R_OK);
