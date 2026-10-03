@@ -6,6 +6,7 @@ const pty = require('node-pty');
 const { WebSocketServer } = require('ws');
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
+const { codexArgs } = require('./codex-launch');
 
 let configText = '';
 process.stdin.setEncoding('utf8');
@@ -21,7 +22,7 @@ function start(config) {
   for (const key of Object.keys(env)) if (/^HUB_(AUTH|WORKER)/.test(key)) delete env[key];
   const args = ['-NoLogo', '-NoExit'];
   const setup = "[Console]::InputEncoding=[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $env:PYTHONIOENCODING='utf-8'; " +
-    (config.kind === 'codex' ? "& '" + (config.codexExe || 'codex').replace(/'/g, "''") + "' --yolo" : "");
+    (config.kind === 'codex' ? "& '" + (config.codexExe || 'codex').replace(/'/g, "''") + "' " + codexArgs(config.resumeThreadId).join(' ') : "");
   args.push('-EncodedCommand', Buffer.from(setup, 'utf16le').toString('base64'));
   const shell = pty.spawn(config.shell, args, { name: 'xterm-256color', cols: 120, rows: 40, cwd: config.cwd, env, useConpty: true });
   // Answer terminal queries even when only the phone's HTTP reader is attached.

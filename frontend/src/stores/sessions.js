@@ -108,11 +108,11 @@ export const useSessionStore = defineStore('sessions', () => {
     platform.value = data.platform || ''
   }
 
-  async function createSession(name, shell, cwd) {
+  async function createSession(name, shell, cwd, resumeThreadId) {
     const res = await fetch(hubUrl('/api/sessions'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, shell, ...(cwd ? { cwd } : {}) })
+      body: JSON.stringify({ name, shell, ...(cwd ? { cwd } : {}), ...(resumeThreadId ? { resumeThreadId } : {}) })
     })
     if (!res.ok) {
       const data = await res.json()
@@ -219,8 +219,8 @@ export const useSessionStore = defineStore('sessions', () => {
     connectWs()
   }
 
-  async function create({ command, name, cwd }) {
-    return createSession(name || null, command || null, cwd)
+  async function create({ command, name, cwd, resumeThreadId }) {
+    return createSession(name || null, command || null, cwd, resumeThreadId)
   }
 
   return {

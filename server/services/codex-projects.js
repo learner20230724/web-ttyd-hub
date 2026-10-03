@@ -29,10 +29,29 @@ function listProjects(filename = path.join(process.env.CODEX_HOME || path.join(o
   for (const root of state['electron-saved-workspace-roots'] || []) add(root);
   return { projects };
 }
-function resolveProject(cwd) {
+async function getProjects() {
+  const { history, pathKey } = require('./codex-history');
+  const rows = await history().load();
   const { projects } = listProjects();
-  const project = typeof cwd === 'string' && projects.find(x => process.platform === 'win32' ? x.path.toLowerCase() === path.resolve(cwd).toLowerCase() : x.path === path.resolve(cwd));
+  const seen = new Set(projects.map(x => pathKey(x.path)));
+  const roots = [...rows.map(x => x.cwd), process.env.HUB_CWD || process.cwd()];
+  for (const root of roots) {
+    if (typeof root !== 'string' || !path.isAbsolute(root) || seen.has(pathKey(root))) continue;
+    try {
+      if (!fs.statSync(root).isDirectory()) continue;
+      fs.accessSync(root, fs.constants.R_OK);
+      projects.push({ name: path.basename(root) || root, path: path.resolve(root), active: false });
+      seen.add(pathKey(root));
+    } catch {}
+  }
+  const counts = new Map();
+  for (const row of rows) counts.set(pathKey(row.cwd), (counts.get(pathKey(row.cwd)) || 0) + 1);
+  return { projects: projects.map(x => ({ ...x, sessionCount: counts.get(pathKey(x.path)) || 0 })) };
+}
+async function resolveProject(cwd) {
+  const { projects } = await getProjects();
+  const project = typeof cwd === 'string' && path.isAbsolute(cwd) && projects.find(x => process.platform === 'win32' ? x.path.toLowerCase() === path.resolve(cwd).toLowerCase() : x.path === path.resolve(cwd));
   if (!project) throw new Error('请选择当前 Codex 项目列表中仍然存在的项目目录');
   return project.path;
 }
-module.exports = { listProjects, resolveProject };
+module.exports = { listProjects, getProjects, resolveProject };

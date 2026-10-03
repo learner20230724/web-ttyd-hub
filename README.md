@@ -40,6 +40,8 @@
 
 ## 新建 Codex 或普通终端
 
+Windows 和 Linux 均支持先选项目，再选择 **新建空白会话** 或 **恢复历史会话**。历史列表支持标题/ID 搜索、分页和最近对话预览；恢复时在对应项目中运行 `codex resume <会话ID> --yolo`，已有 Hub 终端会优先复用。Linux 纯 CLI 安装也能从本机 Codex 历史中发现项目，不需要桌面版。详见 [项目与历史会话选择](docs/codex-history.md)。
+
 新建会话的终端类型默认选择 **Codex**，创建后在 tmux 中自动运行 `codex --yolo`；也可选择 Bash、Zsh 等普通终端。服务器需已安装并配置 Codex，且 `codex` 在 Hub 服务的 PATH 中。退出 Codex 后回到普通 shell；刷新、切换客户端或重启 Hub 会重新连接已有 tmux，不重复输入启动命令。`POST /api/sessions` 可传 `shell: "codex"`，已有普通终端的类型保持不变。
 
 Codex 启动前会经过交互式 shell 初始化，继承普通终端启动文件里的代理等环境设置；项目不内置代理地址，也不修改机器上的代理配置。

@@ -82,6 +82,7 @@ class SessionManager extends EventEmitter {
       for (const saved of records) {
         this.sessions.set(saved.name, { name: saved.name, displayName: saved.displayName,
           shell: saved.shell, ...(saved.cwd ? { cwd: saved.cwd } : {}), createdAt: saved.createdAt, archivedAt: saved.archivedAt || null, expiresAt: saved.expiresAt || null, codexThreadId: saved.codexThreadId || null,
+          resumeThreadId: saved.resumeThreadId || null,
           status: 'stopped', port: null, pid: null, process: null });
       }
       await this.purgeExpired();
@@ -112,7 +113,7 @@ class SessionManager extends EventEmitter {
     return shell.path;
   }
 
-  resolveCommand(shellId) {
+  resolveCommand(shellId, resumeThreadId) {
     if (shellId !== 'codex') {
       const shell = this.resolveShell(shellId);
       return shell ? [shell] : [];
@@ -126,7 +127,8 @@ class SessionManager extends EventEmitter {
     // Interactive startup loads the same rc files (including proxy exports) as a
     // normal terminal before Codex starts. Attaching never executes it again.
     // Pass paths as positional arguments, and leave a usable shell after Codex exits.
-    return [shell.path, '-ic', '"$1" --yolo; exec "$2" -l', 'hub-codex', codex, shell.path];
+    const args = require('./codex-launch').codexArgs(resumeThreadId);
+    return [shell.path, '-ic', 'codex_bin="$1"; login_shell="$2"; shift 2; "$codex_bin" "$@"; exec "$login_shell" -l', 'hub-codex', codex, shell.path, ...args];
   }
 
   validateDisplayName(value, exceptName) {
@@ -150,16 +152,17 @@ class SessionManager extends EventEmitter {
     return this.serialize(session);
   }
 
-  async create(value, shell) {
+  async create(value, shell, cwd, resumeThreadId) {
+    const options = await require('./codex-launch').launchOptions(shell, cwd, resumeThreadId);
     if (value == null || value === '') value = this.generateName(shell);
     const displayName = this.validateDisplayName(value);
     // Keep legacy ASCII IDs compatible; labels never enter shell commands or URLs.
     const name = SESSION_NAME_RE.test(displayName) && !this.sessions.has(displayName)
       ? displayName : `session-${randomUUID()}`;
-    const command = this.resolveCommand(shell);
+    const command = this.resolveCommand(shell, options.resumeThreadId);
     const port = await this.portManager.allocate();
 
-    const tmuxArgs = ['tmux', 'new', '-A', '-s', name, ...command];
+    const tmuxArgs = ['tmux', 'new', '-A', '-s', name, ...(options.cwd ? ['-c', options.cwd] : []), ...command];
 
     const proc = spawn('ttyd', [
       '-W', '-p', String(port),
@@ -186,6 +189,8 @@ class SessionManager extends EventEmitter {
       port,
       pid: proc.pid,
       shell: shell || null,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(options.resumeThreadId ? { resumeThreadId: options.resumeThreadId, codexThreadId: options.resumeThreadId } : {}),
       status: 'running',
       createdAt: new Date().toISOString(),
       process: proc
@@ -290,10 +295,10 @@ class SessionManager extends EventEmitter {
     if (session.status === 'running') {
       throw new Error(`Session "${name}" is already running`);
     }
-    const command = this.resolveCommand(session.shell);
+    const command = this.resolveCommand(session.shell, session.resumeThreadId);
     const port = await this.portManager.allocate();
 
-    const tmuxArgs = ['tmux', 'new', '-A', '-s', name, ...command];
+    const tmuxArgs = ['tmux', 'new', '-A', '-s', name, ...(session.cwd ? ['-c', session.cwd] : []), ...command];
 
     const proc = spawn('ttyd', [
       '-W', '-p', String(port),
@@ -355,7 +360,8 @@ class SessionManager extends EventEmitter {
       try { await runFile('tmux', ['has-session', '-t', `=${name}`]); }
       catch {
         const args = ['new-session', '-d', '-s', name, '-x', '120', '-y', '40'];
-        args.push(...this.resolveCommand(session.shell));
+        if (session.cwd) args.push('-c', session.cwd);
+        args.push(...this.resolveCommand(session.shell, session.resumeThreadId));
         await runFile('tmux', args);
       }
     })();

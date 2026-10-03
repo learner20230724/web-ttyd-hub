@@ -60,6 +60,12 @@ test('Codex starts once with --yolo, survives clients and Hub restart, and exits
   const bin = path.join(tmp, 'bin with spaces');
   fs.mkdirSync(bin);
   const log = path.join(tmp, 'starts.jsonl');
+  const project = path.join(tmp, "project with spaces ' quote");
+  fs.mkdirSync(project);
+  const codexHome = path.join(tmp, 'codex-home');
+  fs.mkdirSync(path.join(codexHome, 'sessions'), { recursive: true });
+  const resumeId = '01900000-0000-7000-8000-000000000001';
+  fs.writeFileSync(path.join(codexHome, 'sessions', `rollout-${resumeId}.jsonl`), JSON.stringify({ type: 'session_meta', payload: { id: resumeId, cwd: project, source: 'cli' } }) + '\n');
   // Exercise real tmux/ttyd processes without starting a model or using credentials.
   fs.writeFileSync(path.join(bin, 'codex'), `#!${process.execPath}\n` +
     `require('fs').appendFileSync(process.env.HUB_CODEX_TEST_LOG, JSON.stringify({args:process.argv.slice(2),pid:process.pid})+'\\n');\n` +
@@ -67,7 +73,7 @@ test('Codex starts once with --yolo, survives clients and Hub restart, and exits
     `process.stdin.resume(); process.stdin.on('data', data => { if(data.toString().includes('exit-fixture')) process.exit(0); });\n`, { mode: 0o755 });
   const ports = [await freePort(), await freePort()];
   const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMUX_TMPDIR: tmp,
-    HUB_STATE_FILE: path.join(tmp, 'sessions.json'), HUB_CODEX_TEST_LOG: log,
+    HUB_STATE_FILE: path.join(tmp, 'sessions.json'), HUB_CODEX_TEST_LOG: log, CODEX_HOME: codexHome,
     HOST: '127.0.0.1', PORT: String(await freePort()),
     TTYD_PORT_RANGE_START: String(Math.min(...ports)), TTYD_PORT_RANGE_END: String(Math.max(...ports)) };
   delete env.TMUX;
@@ -130,6 +136,16 @@ test('Codex starts once with --yolo, survives clients and Hub restart, and exits
     await api('/' + plain.name + '/mobile');
     assert.equal(plain.shell, 'bash');
     assert.equal(starts().length, 1, 'An explicit Bash session must remain an ordinary terminal');
+    const resumed = await api('', { shell: 'codex', cwd: project, resumeThreadId: resumeId });
+    await until(() => starts().length === 2);
+    assert.deepEqual(starts()[1].args, ['resume', resumeId, '--yolo']);
+    assert.equal(tmux('display-message', '-p', '-t', `=${resumed.name}:`, '#{pane_current_path}'), project);
+    const reattached = await api('', { shell: 'codex', cwd: project, resumeThreadId: resumeId });
+    assert.equal(reattached.name, resumed.name); assert.equal(starts().length, 2);
+    await stop(); await start();
+    const recovered = (await api()).sessions.find(s => s.name === resumed.name);
+    assert.equal(recovered.resumeThreadId, resumeId); assert.equal(recovered.cwd, project);
+    await api('/' + resumed.name + '/mobile'); assert.equal(starts().length, 2);
   } finally {
     terminal?.terminate();
     if (child) await stop();

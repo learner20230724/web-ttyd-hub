@@ -16,13 +16,14 @@ class SessionState {
           typeof s.createdAt !== 'string' || !Number.isFinite(Date.parse(s.createdAt))) throw new Error('Invalid saved session record; refusing to overwrite state');
       if ((s.archivedAt || s.expiresAt) && (!Number.isFinite(Date.parse(s.archivedAt)) || !Number.isFinite(Date.parse(s.expiresAt)) || Date.parse(s.expiresAt) - Date.parse(s.archivedAt) !== 1800000)) throw new Error('Invalid archive deadline');
       if (s.cwd != null && (typeof s.cwd !== 'string' || !path.isAbsolute(s.cwd) || /[\x00-\x1f]/.test(s.cwd))) throw new Error('Invalid project directory');
+      if (s.resumeThreadId != null && (s.shell !== 'codex' || !s.cwd || typeof s.resumeThreadId !== 'string' || !require('./codex-history').THREAD_ID.test(s.resumeThreadId))) throw new Error('Invalid saved resume session');
       ids.add(s.name); labels.add(s.displayName);
     }
     return data.sessions;
   }
   save(sessions) {
     const records = sessions.map(s => ({ name: s.name, displayName: s.displayName || s.name, shell: s.shell || null,
-      status: s.status, createdAt: s.createdAt, ...(s.cwd ? { cwd: s.cwd } : {}), ...(s.archivedAt ? { archivedAt: s.archivedAt, expiresAt: s.expiresAt } : {}), ...(s.codexThreadId ? { codexThreadId: s.codexThreadId } : {}) }));
+      status: s.status, createdAt: s.createdAt, ...(s.cwd ? { cwd: s.cwd } : {}), ...(s.resumeThreadId ? { resumeThreadId: s.resumeThreadId } : {}), ...(s.archivedAt ? { archivedAt: s.archivedAt, expiresAt: s.expiresAt } : {}), ...(s.codexThreadId ? { codexThreadId: s.codexThreadId } : {}) }));
     fs.mkdirSync(path.dirname(this.filename), { recursive: true, mode: 0o700 });
     const temp = `${this.filename}.${randomUUID()}.tmp`;
     try {

@@ -48,6 +48,7 @@ class WindowsSessionManager extends Base {
     const config = { name: session.name, token: this.workerToken(session.name),
       shell: this.shells[0].path, kind: session.shell,
       codexExe: process.env.HUB_CODEX_EXE || 'codex',
+      resumeThreadId: session.resumeThreadId || null,
       cwd: session.cwd || process.env.HUB_CWD || process.env.USERPROFILE,
       base: process.env.HUB_BASE_PATH || '', stateFile: this.workerFile(session.name) };
     const child = spawn(process.execPath, [path.join(__dirname, 'windows-worker.js')], {
@@ -65,13 +66,16 @@ class WindowsSessionManager extends Base {
     }
     throw new Error('Windows terminal did not become ready; check PowerShell/node-pty installation');
   }
-  async create(value, shell = 'powershell', cwd) {
+  async create(value, shell = 'powershell', cwd, resumeThreadId) {
+    const options = await require('./codex-launch').launchOptions(shell, cwd, resumeThreadId);
     if (this.sessions.size >= 40) throw new Error('最多创建 40 个会话，请清理已归档会话');
     if (value == null || value === '') value = this.generateName(shell);
     const displayName = this.validateDisplayName(value);
     const name = /^[a-zA-Z0-9_-]+$/.test(displayName) && !this.sessions.has(displayName) ? displayName : `session-${randomUUID()}`;
-    const workingDirectory = shell === 'codex' || cwd ? require('./codex-projects').resolveProject(cwd) : (process.env.HUB_CWD || process.env.USERPROFILE);
-    const session = { name, displayName, shell, cwd: workingDirectory, status: 'stopped', createdAt: new Date().toISOString(), port: null, pid: null, process: null };
+    const workingDirectory = options.cwd || process.env.HUB_CWD || process.env.USERPROFILE;
+    const session = { name, displayName, shell, cwd: workingDirectory,
+      ...(options.resumeThreadId ? { resumeThreadId: options.resumeThreadId, codexThreadId: options.resumeThreadId } : {}),
+      status: 'stopped', createdAt: new Date().toISOString(), port: null, pid: null, process: null };
     this.sessions.set(name, session); // Reserve the name before awaiting a spawn.
     try { await this.launch(session); }
     catch (error) { this.sessions.delete(name); throw error; }

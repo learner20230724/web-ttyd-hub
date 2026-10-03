@@ -1,0 +1,49 @@
+name: Test Hub
+on:
+  push:
+    branches: [main, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux ttyd
+      - run: npm ci
+      - run: npm ci --prefix frontend
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: node tests/codex-picker-browser.cjs
+      - if: runner.os == 'Linux'
+        run: npm run test:terminal
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-${{ matrix.os }}
+          path: output/playwright/
+          if-no-files-found: ignore
+      - if: runner.os == 'Windows'
+        run: npm run build
+        env:
+          HUB_BASE_PATH: /home-terminal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-${{ matrix.os }}
+          path: server/public/

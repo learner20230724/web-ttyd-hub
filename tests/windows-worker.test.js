@@ -21,7 +21,7 @@ function startupCommand(config) {
   };
   const filename = path.join(__dirname, '../server/services/windows-worker.js');
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-    require: name => Object.hasOwn(mocks, name) ? mocks[name] : require(name),
+    require: name => Object.hasOwn(mocks, name) ? mocks[name] : require(name.startsWith('.') ? path.resolve(path.dirname(filename), name) : name),
     process: { stdin, env: {} }, Buffer,
   }, { filename });
   stdin.emit('data', JSON.stringify(config));
@@ -41,4 +41,13 @@ test('Windows Codex executable paths stay quoted with --yolo', () => {
 test('Windows PowerShell sessions do not launch Codex or add --yolo', () => {
   const command = startupCommand({ kind: 'powershell' });
   assert.doesNotMatch(command, /codex|--yolo/);
+});
+
+test('Windows Codex resumes the selected UUID with --yolo', () => {
+  const id = '01900000-0000-7000-8000-000000000001';
+  assert.ok(startupCommand({ kind: 'codex', resumeThreadId: id }).endsWith(`& 'codex' resume ${id} --yolo`));
+});
+
+test('Windows launcher rejects command injection in resume IDs before spawning', () => {
+  assert.throws(() => startupCommand({ kind: 'codex', resumeThreadId: "'; Write-Output BAD; '" }));
 });
