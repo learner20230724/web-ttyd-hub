@@ -31,7 +31,8 @@ test('Real Windows ConPTY resumes in the selected directory and survives a Hub a
     await until(() => fs.existsSync(log));
     const launched = JSON.parse(fs.readFileSync(log, 'utf8').replace(/^\uFEFF/, '').trim());
     assert.deepEqual(launched.args, ['resume', id, '--yolo']);
-    assert.equal(launched.cwd, project);
+    // Windows runners can supply TEMP in 8.3 form; PowerShell expands it.
+    assert.equal(fs.realpathSync.native(launched.cwd).toLowerCase(), fs.realpathSync.native(project).toLowerCase());
     await until(async () => (await manager.history(session.name)).text.includes('WINDOWS_RESUME_FIXTURE_READY'));
     const originalPid = session.pid;
     manager.cleanup();
