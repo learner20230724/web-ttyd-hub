@@ -72,6 +72,7 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       await page.getByRole('button', { name: '会话列表', exact: true }).tap();
       await page.getByRole('button', { name: '账号额度', exact: true }).tap();
       await page.getByRole('dialog', { name: '账号剩余额度' }).waitFor();
+      await page.locator('progress').nth(1).waitFor();
       assert.equal(await page.locator('progress').count(), 2);
       await page.screenshot({ path: path.join(output, `codex-usage-${width}.png`) });
       stale = true; await page.getByRole('button', { name: '刷新额度', exact: true }).tap();
