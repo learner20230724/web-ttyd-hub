@@ -56,7 +56,7 @@ Download the APK from the [direct download](http://42.192.115.30:8182/downloads/
 
 ## Session ordering and pins
 
-Drag the **⠿** handle to reorder sessions with a mouse or touch. Toggle the pin button to keep a session above ordinary sessions; reorder within each group. Focus the handle and use Up/Down for keyboard ordering, or Escape to cancel a drag. Preferences persist in this browser's localStorage and sync between same-origin tabs, not across devices. Reordering does not switch the selected session or recreate its terminal.
+Drag the **⠿** handle to reorder sessions with a mouse or touch. Toggle the pin button to keep a session above ordinary sessions; reorder within each group. Focus the handle and use Up/Down for keyboard ordering, or Escape to cancel a drag. Read receipts, pins and ordering persist on the Hub and synchronize across computers, browsers and the Android app. Reading a completed reply clears its green indicator everywhere; stale receipts cannot mark a later reply as read. Clients reconcile after reconnecting, and pending operations survive a reload in the same tab/WebView. Selected sessions, drafts and reading preferences remain local. Reordering does not switch the selected session or recreate its terminal.
 
 ## Chinese names and renaming
 

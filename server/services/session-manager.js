@@ -66,18 +66,23 @@ class SessionManager extends EventEmitter {
     this.inputQueues = new Map();
     this.paneStarts = new Map();
     this.state = stateFile ? new (require('./session-state'))(stateFile) : null;
+    this.sync = new (require('./session-sync'))(this);
     this.restoring = false;
     this.closing = false;
     this.archiveSweep = setInterval(() => { if (!this.restoring && !this.closing) this.purgeExpired().catch(err => console.error('Archive cleanup failed:', err.message)); }, 1000);
     this.archiveSweep.unref();
     for (const event of ['session:created', 'session:renamed', 'session:stopped', 'session:deleted', 'session:exited', 'session:identity', 'session:archived', 'session:restored']) {
-      this.on(event, () => { if (this.state && !this.restoring && !this.closing) this.state.save(this.list()); });
+      this.on(event, () => {
+        this.sync.prune();
+        if (this.state && !this.restoring && !this.closing) this.state.save(this.list(), this.sync.snapshot());
+      });
     }
   }
 
   async restore() {
     if (!this.state) return;
     const records = this.state.read();
+    this.sync.restore(this.state.shared);
     this.restoring = true;
     try {
       for (const saved of records) {
@@ -88,7 +93,8 @@ class SessionManager extends EventEmitter {
       }
       await this.purgeExpired();
       for (const saved of records) if (saved.status === 'running' && this.sessions.has(saved.name)) await this.restart(saved.name);
-      this.state.save(this.list());
+      this.sync.prune();
+      this.state.save(this.list(), this.sync.snapshot());
     } finally { this.restoring = false; }
   }
 

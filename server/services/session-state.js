@@ -8,6 +8,7 @@ class SessionState {
     if (!fs.existsSync(this.filename)) return [];
     const data = JSON.parse(fs.readFileSync(this.filename, 'utf8'));
     if (data.version !== 1 || !Array.isArray(data.sessions)) throw new Error('Invalid session state; restore sessions.json.bak before starting');
+    this.shared = data.shared == null ? undefined : require('./session-sync').validate(data.shared);
     const ids = new Set(), labels = new Set();
     for (const s of data.sessions) {
       if (!s || typeof s.name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(s.name) || ids.has(s.name) ||
@@ -21,14 +22,14 @@ class SessionState {
     }
     return data.sessions;
   }
-  save(sessions) {
+  save(sessions, shared) {
     const records = sessions.map(s => ({ name: s.name, displayName: s.displayName || s.name, shell: s.shell || null,
       status: s.status, createdAt: s.createdAt, ...(s.cwd ? { cwd: s.cwd } : {}), ...(s.resumeThreadId ? { resumeThreadId: s.resumeThreadId } : {}), ...(s.archivedAt ? { archivedAt: s.archivedAt, expiresAt: s.expiresAt } : {}), ...(s.codexThreadId ? { codexThreadId: s.codexThreadId } : {}) }));
     fs.mkdirSync(path.dirname(this.filename), { recursive: true, mode: 0o700 });
     const temp = `${this.filename}.${randomUUID()}.tmp`;
     try {
       const fd = fs.openSync(temp, 'wx', 0o600);
-      try { fs.writeFileSync(fd, JSON.stringify({ version: 1, sessions: records }, null, 2) + '\n'); fs.fsyncSync(fd); }
+      try { fs.writeFileSync(fd, JSON.stringify({ version: 1, sessions: records, ...(shared ? { shared } : {}) }, null, 2) + '\n'); fs.fsyncSync(fd); }
       finally { fs.closeSync(fd); }
       if (fs.existsSync(this.filename)) {
         fs.copyFileSync(this.filename, `${this.filename}.bak`);

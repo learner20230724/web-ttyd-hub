@@ -4,6 +4,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose, watch } from 'vue'
 import { LAYOUT_KEY, normalizeLayout, orderedSessions, moveSession } from '../utils/session-layout.mjs'
 import { activityState as classifyActivity, activityPresentation } from '../utils/activity.mjs'
+import { createSessionSync } from '../utils/session-sync.mjs'
 
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref([])
@@ -15,6 +16,10 @@ export const useSessionStore = defineStore('sessions', () => {
     if (document.hidden || !document.hasFocus() || connectionIssue.value) return
     const session = sessions.value.find(s => s.name === current.value)
     if (session && !session.archivedAt && activityState(session) === 'unread') {
+      if (sync.enabled) {
+        sync.enqueue({ type: 'read', name: session.name, createdAt: session.createdAt, completed: session.activity.completed })
+        return
+      }
       read.value[session.name] = session.activity.completed
       try { localStorage.setItem(readKey, JSON.stringify(read.value)) } catch {}
       // Promote once per newly read completion. Status and pin groups still take
@@ -46,6 +51,19 @@ export const useSessionStore = defineStore('sessions', () => {
   const layout = ref(normalizeLayout(null))
   const layoutError = ref('')
   try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))) } catch {}
+  const sync = createSessionSync({
+    sessions: () => sessions.value, legacyRead: { ...read.value }, legacyLayout: layout.value,
+    apply: value => {
+      read.value = value.read; layout.value = value.layout
+      try {
+        localStorage.setItem(readKey, JSON.stringify(value.read))
+        localStorage.setItem(LAYOUT_KEY, JSON.stringify(value.layout))
+      } catch {} // Confirmed shared state is durable even when local storage is unavailable.
+    },
+    error: message => { layoutError.value = message },
+    refresh: () => refreshVisible(),
+  })
+  onScopeDispose(() => sync.dispose())
   const sortedSessions = computed(() => orderedSessions(sessions.value.filter(s => !s.archivedAt), layout.value, activityState))
   const archivedSessions = computed(() => sessions.value.filter(s => s.archivedAt).sort((a,b) => Date.parse(b.archivedAt) - Date.parse(a.archivedAt)))
   const otherSessions = computed(() => sortedSessions.value.filter(s => s.name !== current.value))
@@ -63,10 +81,21 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
   function togglePin(name) {
+    const session = sessions.value.find(s => s.name === name)
+    if (sync.enabled && session) {
+      sync.enqueue({ type: 'pin', name, createdAt: session.createdAt, pinned: !isPinned(name) })
+      return
+    }
     const pinned = isPinned(name) ? layout.value.pinned.filter(x => x !== name) : [...layout.value.pinned, name]
     saveLayout({ order: [name, ...sortedSessions.value.map(s => s.name).filter(x => x !== name)], pinned })
   }
   function reorderSession(name, target, after) {
+    if (sync.enabled) {
+      const session = sessions.value.find(s => s.name === name), other = sessions.value.find(s => s.name === target)
+      if (session && other) sync.enqueue({ type: 'move', name, createdAt: session.createdAt,
+        target, targetCreatedAt: other.createdAt, after: !!after })
+      return
+    }
     saveLayout(moveSession(sessions.value, layout.value, name, target, after))
   }
   function moveByKeyboard(name, direction) {
@@ -75,6 +104,7 @@ export const useSessionStore = defineStore('sessions', () => {
     if (target) reorderSession(name, target.name, direction > 0)
   }
   function syncLayout(event) {
+    if (sync.enabled) return
     if (event.key !== LAYOUT_KEY && event.key !== null) return
     try { layout.value = normalizeLayout(JSON.parse(event.newValue)) } catch {}
   }
@@ -84,7 +114,7 @@ export const useSessionStore = defineStore('sessions', () => {
   let reconnectTimer = null
   let reconnectDelay = 1000
 
-  let fetchSequence = 0, fetching = 0
+  let fetchSequence = 0, fetching = 0, refreshPending = false
   async function fetchSessions() {
     const sequence = ++fetchSequence
     fetching++
@@ -97,6 +127,7 @@ export const useSessionStore = defineStore('sessions', () => {
       connectionIssue.value = false
       void pruneContent(data.sessions)
       sessions.value = data.sessions
+      sync.receive(data.shared)
       if (restoreSelection) {
         let saved
         try { saved = JSON.parse(localStorage.getItem(selectionKey)) } catch {}
@@ -110,7 +141,10 @@ export const useSessionStore = defineStore('sessions', () => {
     } catch (error) {
       if (sequence === fetchSequence) connectionIssue.value = true
       throw error
-    } finally { fetching-- }
+    } finally {
+      fetching--
+      if (!fetching && refreshPending) { refreshPending = false; refreshVisible() }
+    }
   }
 
   async function fetchShells() {
@@ -247,7 +281,11 @@ export const useSessionStore = defineStore('sessions', () => {
 
   // Phones can suspend a WebSocket without delivering close. Refresh on return
   // and periodically reconcile, even when no activity notification arrives.
-  const refreshVisible = () => { if (!document.hidden && !fetching) fetchSessions().catch(() => {}) }
+  const refreshVisible = () => {
+    if (document.hidden) return
+    if (fetching) { refreshPending = true; return }
+    fetchSessions().catch(() => {})
+  }
   let refreshTimer
   onScopeDispose(() => {
     clearInterval(refreshTimer); clearTimeout(reconnectTimer)

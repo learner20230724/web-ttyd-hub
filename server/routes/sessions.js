@@ -55,7 +55,14 @@ module.exports = function (sessionManager) {
   });
 
   router.get('/', (req, res) => {
-    res.json({ sessions: sessionManager.list() });
+    res.set('Cache-Control', 'no-store');
+    res.json({ sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot() });
+  });
+
+  router.post('/sync', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try { res.json(sessionManager.sync.apply(req.body)); }
+    catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
 
   router.post('/', async (req, res) => {

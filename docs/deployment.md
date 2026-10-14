@@ -29,6 +29,14 @@ caddy hash-password
 
 These are templates. Verify DNS, TLS, authentication and clipboard behavior in your own environment.
 
+## 跨设备会话状态
+
+`GET /api/sessions` 同时返回 `shared`（递增版本、逐轮已读标记、置顶和排列），禁止缓存。`POST /api/sessions/sync` 接受 `read`、`pin`、`move` 或首次 `initialize` 操作，沿用站点认证；不接受设备用整个旧快照覆盖服务器。操作核对会话 ID 与 `createdAt`，已读还核对当前成功完成的轮次。保存成功后广播 `session:sync`，各端重新读取；请求进行中收到广播也会补读，手机回前台和定时核对作为断线补偿。
+
+共享数据随原 `data/sessions.json` 原子保存和备份，旧版状态文件可直接升级。Hub 没有独立用户账号，同一 Hub 的所有获准访问设备共享这些状态。首次连接导入相符的旧本机已读记录，仅首次初始化排列，后续设备以服务器为准；当前会话选择、输入草稿和阅读设置仍保留在设备上。无需更新 APK，运行原有 `npm run deploy:web`，网页刷新或 APP 重新加载后生效。
+
+验证：`npm test`、`npm run build`、`node tests/session-sync-browser.cjs`。后者使用独立手机／桌面浏览器上下文及合成内容，检查双向已读、各任务阶段、置顶排序、断线／刷新重试、过期已读拒绝和归档恢复；不读取生产会话，也不等于 M153 真机测试。
+
 ## Codex 状态兼容检查
 
 Linux 的 Codex 0.162.1 可将任务交给共享 app-server daemon。服务需要 `ss`（iproute2）、Node.js 22.13+ 的 `node:sqlite`，以及读取相同服务用户 `/proc` 和 Codex 状态库的权限。独立进程继续直接读取其主任务 rollout。共享后台仅在当前完整终端标题、项目名与后台打开的主任务唯一匹配时关联；遇到自定义标题、重名或读取失败会显示「状态待确认」。不扫描其他对话来猜当前任务，不改 Codex 全局配置。Windows 共享后台尚未验证。

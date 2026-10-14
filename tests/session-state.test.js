@@ -27,6 +27,7 @@ test('Real Hub restart restores stable IDs, Unicode names and stopped status wit
   await api('/'+s.name,{name:'持久名称 📌'},'PATCH');await Promise.all([api('/'+s.name+'/mobile'),api('/'+s.name+'/mobile?view=full')]);
   const pane=()=>execFileSync('tmux',['display-message','-p','-t','='+s.name+':','#{pane_id}:#{pane_pid}'],{env}).toString();
   const before=pane();const stopped=await api('',{name:'stopped-one',shell:'bash'});await api('/'+stopped.name+'/stop',{});
+  await api('/sync',{type:'pin',name:s.name,createdAt:s.createdAt,pinned:true});
   await api('/'+s.name,undefined,'DELETE');
   assert.equal(pane(),before);
   const expiry=(await api()).sessions.find(x=>x.name===s.name).expiresAt;
@@ -34,6 +35,7 @@ test('Real Hub restart restores stable IDs, Unicode names and stopped status wit
   assert.equal(list.find(x=>x.name===s.name).displayName,'持久名称 📌');assert.equal(list.find(x=>x.name===s.name).createdAt,s.createdAt);
   assert.equal(list.find(x=>x.name===stopped.name).status,'stopped');assert.equal(pane(),before);
   assert.equal(list.find(x=>x.name===s.name).expiresAt,expiry);
+  assert.deepEqual((await api()).shared.layout.pinned,[s.name]);
   await api('/'+s.name+'/restore',{});assert.equal(pane(),before);assert.equal((await api()).sessions.find(x=>x.name===s.name).archivedAt,null);
   await api('/'+stopped.name,undefined,'DELETE');await api('/'+stopped.name+'/permanent',undefined,'DELETE');await stop();await start();assert.equal((await api()).sessions.length,1);
   await api('/'+s.name,undefined,'DELETE');assert.equal(pane(),before);
