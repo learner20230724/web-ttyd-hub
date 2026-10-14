@@ -6,6 +6,21 @@ const { history, pathKey } = require('../services/codex-history');
 module.exports = function (sessionManager) {
   const router = express.Router();
   const resumeLocks = new Map();
+  router.get('/codex-usage', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try { res.json(await sessionManager.activity.usage.read(req.query.refresh === '1')); }
+    catch { res.status(503).json({ error: '暂时无法读取账号额度，请稍后刷新' }); }
+  });
+  router.get('/:name/questions', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try { sessionManager.getSession(req.params.name); res.json(await sessionManager.activity.questions.read(req.params.name)); }
+    catch { res.status(400).json({ error: '无法读取此会话的追问' }); }
+  });
+  router.post('/:name/questions/:id/respond', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try { res.json(await sessionManager.activity.questions.respond(req.params.name, req.params.id, req.body)); }
+    catch (err) { res.status(err.status || 503).json({ error: err.status ? err.message : '追问连接暂不可用，请查看全文确认当前状态' }); }
+  });
   router.get('/shells', (req, res) => {
     res.json({ shells: sessionManager.getShells(), platform: process.platform });
   });

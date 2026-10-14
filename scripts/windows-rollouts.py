@@ -54,7 +54,8 @@ def processes():
 def opened_rollout(pid):
     process = k.OpenProcess(0x440, False, pid)  # QUERY_INFORMATION | DUP_HANDLE
     if not process:
-        return None
+        return []
+    paths = []
     try:
         size = 65536
         for _ in range(5):
@@ -81,27 +82,32 @@ def opened_rollout(pid):
                 if length and length < len(name):
                     value = name.value
                     if '\\sessions\\' in value and '\\rollout-' in value and value.endswith('.jsonl'):
-                        return value
+                        paths.append(value)
             finally:
                 k.CloseHandle(local)
     finally:
         k.CloseHandle(process)
-    return None
+    return paths
 
 def main():
     table = processes(); output = {}
     for root in map(int, sys.argv[1:]):
-        descendants = {root}
+        # Stop at the terminal's first Codex process, even if it has no rollout.
+        # A child app-server may be shared with other terminals and is not proof
+        # of which thread this client is displaying.
+        level = {root}; seen = set()
         for _ in range(12):
-            new = {pid for pid, (parent, _) in table.items() if parent in descendants}
-            if new <= descendants:
+            clients = [pid for pid in level if table.get(pid, (0, ''))[1] in ('codex', 'codex.exe')]
+            if clients:
+                if len(clients) == 1:
+                    result = opened_rollout(clients[0])
+                    if result:
+                        output[str(root)] = result
                 break
-            descendants |= new
-        for pid in descendants:
-            if 'codex' in table.get(pid, (0, ''))[1]:
-                result = opened_rollout(pid)
-                if result:
-                    output[str(root)] = result; break
+            seen |= level
+            level = {pid for pid, (parent, _) in table.items() if parent in level} - seen
+            if not level:
+                break
     print(json.dumps(output, ensure_ascii=True))
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, nextTick, watch, computed, onBeforeUnmount } from "vue";
 import { useSessionStore } from "../stores/sessions";
+import ActivityBadge from './ActivityBadge.vue';
 
 const props = defineProps({
   session: Object,
@@ -100,7 +101,7 @@ function cancelRemove(e) {
       @pointerdown.stop="emit('drag-start', $event, session.name)" @click.stop
       @keydown.up.prevent.stop="store.moveByKeyboard(session.name, -1)"
       @keydown.down.prevent.stop="store.moveByKeyboard(session.name, 1)">⠿</button>
-    <div class="status-indicator" :class="store.activityState(session)" role="status" :aria-label="{busy: '正在回答', unread: '回答完成，未读', idle: '空闲或已读'}[store.activityState(session)]" :title="{busy: '正在回答', unread: '回答完成，未读', idle: '空闲或已读'}[store.activityState(session)]"></div>
+    <ActivityBadge v-if="collapsed" :status="store.activityStatus(session)" compact />
 
     <Teleport to="body">
       <dialog ref="actionDialog" class="session-actions-dialog" :aria-label="`会话操作：${session.displayName || session.name}`"
@@ -143,8 +144,8 @@ function cancelRemove(e) {
       <p v-if="error && !editing && !confirming" role="alert">{{ error }}</p>
       <div v-if="!editing && !confirming" class="session-info">
         <span v-if="session.archivedAt">{{ minutesLeft }} 分钟后清理</span>
-        <span v-else class="pid">PID: {{ session.pid }}</span>
-        <span class="status-text">{{ session.status }}</span>
+        <ActivityBadge :status="store.activityStatus(session)" />
+        <span v-if="!session.archivedAt && store.isPinned(session.name)" class="pinned-label">置顶</span>
       </div>
     </div>
   </div>
@@ -202,22 +203,6 @@ function cancelRemove(e) {
   border-color: var(--border-color);
 }
 
-.status-indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-  flex-shrink: 0;
-}
-
-.status-indicator.unread {
-  background: var(--success);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
-}
-
-.status-indicator.busy { width:12px; height:12px; background:transparent; border:2px solid #506078; border-top-color:#70cbff; animation:answer-spin .8s linear infinite; }
-@keyframes answer-spin { to { transform:rotate(360deg); } }
-
 .card-content {
   flex: 1;
   min-width: 0;
@@ -244,6 +229,9 @@ function cancelRemove(e) {
 
 .session-info {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
   justify-content: space-between;
   font-size: 11px;
   color: var(--text-tertiary);
@@ -288,8 +276,5 @@ function cancelRemove(e) {
   justify-content: center;
   padding: 12px;
 }
-.session-card.collapsed .status-indicator {
-  width: 10px;
-  height: 10px;
-}
+.pinned-label { font-size:11px; color:#a8b6ca; }
 </style>
