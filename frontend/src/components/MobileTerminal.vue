@@ -9,10 +9,24 @@ import DOMPurify from 'dompurify'
 import { terminalSegments, tableMarkdown } from '../utils/terminal-tables.mjs'
 import { ansiToRuns } from '../utils/ansi.mjs'
 import { useSessionStore } from '../stores/sessions'
+import ActivityBadge from './ActivityBadge.vue'
+import CodexQuestions from './CodexQuestions.vue'
+const emit = defineEmits(['show-execution'])
 const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
+const status = computed(() => session.value ? store.activityStatus(session.value) : null)
+const now = ref(Date.now())
+const elapsedTimer = setInterval(() => { now.value = Date.now() }, 1000)
+const elapsed = computed(() => {
+  if (!session.value?.activity?.busy || store.connectionIssue) return ''
+  const start = Date.parse(session.value.activity.startedAt)
+  if (!Number.isFinite(start)) return ''
+  const seconds = Math.max(0, Math.floor((now.value - start) / 1000))
+  return seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`
+})
 const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
+const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
 const drafts = new Map()
 const pendingBySession = ref({})
@@ -137,7 +151,7 @@ async function send(key = 'Enter', withText = true) {
   }
   finally { sending.value = false }
 }
-onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer) })
+onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer) })
 </script>
 <template>
   <section class="mobile-terminal" :style="{ '--reading-size': `${fontSize}px` }">
@@ -147,11 +161,21 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer) })
         :disabled="sending || session?.status !== 'running'" @click="send(key, false)">{{ {Up:'↑', Down:'↓', Left:'←', Right:'→', Enter:'↵ 回车', 'S-Left':'Shift+←', Escape:'ESC'}[key] }}</button>
     </div>
     <template v-if="session">
-      <div class="mobile-session-title">{{ session.displayName || session.name }}<span>{{ session.activity?.busy ? '正在回答…' : session.status === 'running' ? '已连接' : '已停止' }}</span></div>
+      <div class="mobile-session-header">
+        <div class="mobile-title-row">
+          <div class="mobile-session-title" :title="session.displayName || session.name">{{ session.displayName || session.name }}</div>
+          <ActivityBadge class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
+          <span v-if="elapsed" class="elapsed">已运行 {{ elapsed }}</span>
+        </div>
+        <div v-if="['waiting', 'error', 'unknown', 'interrupted'].includes(status.state) && !(status.state === 'waiting' && questionPending)" class="status-guidance" :class="status.state">
+          <p>{{ status.state === 'waiting' && questionSupport === false ? '此会话需在全文中作答，请按终端提示选择或跳过。' : status.detail }}</p>
+          <button v-if="!showExecution" type="button" @click="emit('show-execution', status.state === 'waiting')">查看全文 <span aria-hidden="true">↗</span></button>
+        </div>
+      </div>
       <div ref="pane" class="mobile-reading" @scroll.passive="scrolled">
         <template v-if="!showExecution && messages.length">
           <article v-for="message in messages" :key="message.id" :class="['message', message.role]">
-            <div class="speaker">{{ message.role === 'user' ? '你' : 'Codex' }}</div>
+            <div class="speaker">{{ message.role === 'user' ? '你' : message.phase === 'commentary' ? 'Codex · 工作进展' : 'Codex · 回复' }}</div>
             <div class="markdown" v-html="message.html"></div>
           </article>
         </template>
@@ -170,13 +194,15 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer) })
             <button v-if="item.status !== 'sending'" type="button" aria-label="关闭发送提示" @click="dismissPending(item.id)">×</button>
           </div>
         </article>
+        <div v-if="!Object.keys(content).length && !error" class="reading-placeholder" role="status">正在加载会话…</div>
       </div>
       <button v-if="!follow" class="latest" @click="bottom">↓ 回到最新</button>
       <p v-if="error" class="mobile-error" role="alert">{{ error }}</p>
+      <CodexQuestions v-if="session.status === 'running' && session.activity?.detected" :session-name="session.name" @handled="refresh()" @pending="questionPending = $event" @support="questionSupport = $event" />
       <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
-          <textarea ref="composerInput" v-model="draft" aria-label="消息输入" placeholder="输入消息…" rows="2" enterkeyhint="enter"></textarea>
+          <textarea ref="composerInput" v-model="draft" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
           <button class="send" :disabled="sending" type="submit">{{ sending ? '…' : draft ? '发送' : '回车' }}</button></div>
       </form>
     </template>
@@ -192,9 +218,18 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer) })
   .mobile-navigation { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); }
   .mobile-navigation button:nth-child(6) { grid-column:span 2; }
 }
-.mobile-session-title { padding:10px 16px; font-size:14px; border-bottom:1px solid #263143; overflow-wrap:anywhere }
-.mobile-session-title span { float:right; color:#91a0b7; font-size:12px; margin-left:8px }
-.mobile-reading { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:16px; touch-action:pan-x pan-y; }
+.mobile-session-header { padding:10px 12px; border-bottom:1px solid #263143; background:#111a28; flex-shrink:0; }
+.mobile-title-row { display:flex; align-items:center; gap:8px; min-width:0; }
+.mobile-session-title { min-width:0; font-size:15px; font-weight:600; line-height:1.5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.inline-status { flex-shrink:0; white-space:nowrap; }
+.inline-status.busy :deep(.activity-dot) { display:none; }
+.elapsed { display:none; color:#98a9c0; font-size:11px; font-variant-numeric:tabular-nums; flex-shrink:0; white-space:nowrap; }
+@media (min-width:600px) { .elapsed { display:inline; margin-left:auto; } }
+.status-guidance { display:flex; align-items:center; gap:8px; margin-top:10px; padding:10px 12px; background:#1b2739; border-radius:10px; font-size:12px; line-height:1.6; color:#c1cede; }
+.status-guidance.waiting { background:#342b19; color:#fde68a; }.status-guidance.error { background:#34202a; color:#fecdd3; }
+.status-guidance p { flex:1; min-width:0; }.status-guidance button { flex-shrink:0; padding:6px 8px; font-size:12px; background:transparent; color:inherit; text-decoration:underline; }
+.mobile-reading { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:18px 16px; touch-action:pan-x pan-y pinch-zoom; }
+.reading-placeholder { color:#98a9c0; font-size:14px; text-align:center; padding:24px 0; }
 .message { margin:0 0 24px; line-height:1.75; font-size:var(--reading-size); overflow-wrap:anywhere; user-select:text }
 .pending-message { margin:16px 0; padding:12px 14px; border:1px dashed #52729b; border-radius:14px; background:#18273d; }
 .pending-text { font-size:var(--reading-size); white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.6; }
@@ -218,7 +253,7 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer) })
 .terminal-table td { padding:8px 10px; border:1px solid #344259; white-space:nowrap; line-height:1.6; }
 .terminal-table tr:first-child { background:#1c2a40; color:#7dd3fc; }
 .mobile-output { margin:0; font:var(--reading-size)/1.65 monospace; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text }
-.composer { padding:10px 12px; border-top:1px solid #263143; background:#131c2a; }
+.composer { padding:10px 12px; padding-bottom:max(10px, env(safe-area-inset-bottom)); border-top:1px solid #263143; background:#131c2a; }
 .compose-row { display:flex; gap:8px; align-items:center }
 textarea { flex:1; min-width:0; resize:none; max-height:160px; font:16px/1.5 sans-serif; background:#1d293b; color:#f1f5f9; border:1px solid #40516b; border-radius:12px; padding:10px; }
 button { min-height:44px; border:0; border-radius:10px; padding:8px 12px; background:#25364b; color:#e2e8f0; font-size:14px }
@@ -228,4 +263,8 @@ button { min-height:44px; border:0; border-radius:10px; padding:8px 12px; backgr
 .latest { position:absolute; right:16px; bottom:110px; box-shadow:0 3px 15px #0008 }
 .mobile-error { padding:8px 16px; color:#fda4af; font-size:13px }
 .mobile-empty { margin:auto; padding:20px; color:#94a3b8 }
+@media (max-height: 550px) {
+  .mobile-session-header { padding:6px 12px; }.status-guidance { padding:4px 8px; margin-top:4px; }
+  .mobile-reading { padding:12px; }.composer { padding-top:6px; }
+}
 </style>

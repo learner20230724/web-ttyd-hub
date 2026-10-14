@@ -143,6 +143,44 @@ test('Unread badge excludes the current session even without focus and counts ot
   assert.equal(f.store.unreadCount, 0);
 });
 
+test('Working count excludes the current session, updates on selection, and excludes waiting, stopped, archived and offline sessions', async t => {
+  const f = await setup(t, { order: [], pinned: ['thinking'] });
+  const sessions = ['working', 'thinking', 'responding', 'executing', 'retrying'].map(phase => session(phase, { phase, busy: true }));
+  sessions.push(session('waiting', { phase: 'waiting', busy: true }),
+    session('completed', { completed: 'done' }), session('error', { phase: 'error' }),
+    session('interrupted', { phase: 'interrupted' }), session('unknown', { phase: 'unknown', available: false }),
+    { ...session('stopped', { busy: true }), status: 'stopped' },
+    { ...session('archived', { busy: true }), archivedAt: 'now' });
+  await f.update(sessions);
+  assert.equal(f.store.workingCount, 5, 'With no selected session, all five workers are counted once');
+  f.doc.focused = false;
+  f.store.select('working'); await f.nextTick();
+  assert.equal(f.store.workingCount, 4, 'Selected worker is excluded even when the page is not focused');
+  f.store.select('thinking'); await f.nextTick();
+  assert.equal(f.store.workingCount, 4, 'Switching workers counts the previous one and excludes the new one');
+  f.store.select('working'); await f.nextTick();
+  f.doc.focused = true;
+  sessions[0].activity = { completed: 'selected-done' };
+  await f.update(sessions);
+  assert.equal(f.store.workingCount, 4);
+  assert.equal(f.store.unreadCount, 1, 'The selected completion is read while the other completion stays unread');
+  f.store.select('completed'); await f.nextTick();
+  assert.equal(f.store.workingCount, 4, 'Reading another session does not change the working count');
+  f.store.select('thinking'); await f.nextTick();
+  assert.equal(f.store.workingCount, 3, 'Opening a running session removes it from the count immediately');
+  f.store.connectionIssue = true;
+  assert.equal(f.store.workingCount, 0, 'Do not present stale work as current when disconnected');
+  f.store.connectionIssue = false;
+  assert.equal(f.store.workingCount, 3);
+  f.store.select(null); await f.nextTick();
+  assert.equal(f.store.workingCount, 4);
+  await f.update([session('only-worker', { phase: 'executing', busy: true })]);
+  f.store.select('only-worker'); await f.nextTick();
+  assert.equal(f.store.workingCount, 0, 'Only the current session is working');
+  await f.update([]);
+  assert.equal(f.store.workingCount, 0);
+});
+
 test('Unread shortcut follows visible pinned/manual order, skips the current item, and stops after all are read', async t => {
   const f = await setup(t, { order: ['gray', 'current', 'second', 'first', 'pinned'], pinned: ['pinned'] });
   await f.update([session('first', { completed: 't1' }), session('second', { completed: 't2' }),
@@ -159,6 +197,63 @@ test('Unread shortcut follows visible pinned/manual order, skips the current ite
   f.store.selectNextUnread(); await f.nextTick();
   assert.equal(f.store.current, 'first');
   assert.equal(f.store.unreadCount, 0);
+});
+
+test('Working shortcut cycles through every worker in pinned/manual order and follows manual selection or reordering', async t => {
+  const f = await setup(t, { order: ['other', 'second', 'first', 'third'], pinned: ['third'] });
+  await f.update([session('first', { busy: true }), session('second', { busy: true }),
+    session('third', { busy: true }), session('other')]);
+  f.store.select('other'); await f.nextTick();
+  assert.equal(f.store.workingCount, 3);
+  const layoutBefore = f.saved.get(layoutKey);
+  for (const name of ['third', 'second', 'first', 'third', 'second', 'first']) {
+    f.store.selectNextWorking(); await f.nextTick();
+    assert.equal(f.store.current, name);
+    assert.equal(f.store.workingCount, 2, 'The chosen worker is excluded from the displayed count');
+  }
+  assert.equal(f.saved.get(layoutKey), layoutBefore, 'Cycling does not reorder the list');
+  f.store.select('second'); await f.nextTick();
+  f.store.selectNextWorking(); await f.nextTick();
+  assert.equal(f.store.current, 'first', 'Manual selection becomes the starting point');
+  f.store.reorderSession('first', 'second', false);
+  f.store.selectNextWorking(); await f.nextTick();
+  assert.equal(f.store.current, 'second', 'Use the current manual order');
+  f.store.selectNextWorking(); await f.nextTick();
+  assert.equal(f.store.current, 'third', 'Wrap across pinned and regular workers');
+});
+
+test('Working shortcut uses live states, alternates two workers, and cannot select completed, waiting, stopped, archived or offline sessions', async t => {
+  const f = await setup(t, { order: ['a', 'b', 'c'], pinned: [] });
+  const sessions = [session('a', { busy: true }), session('b', { busy: true }), session('c', { busy: true }),
+    session('waiting', { phase: 'waiting', busy: true }),
+    { ...session('stopped', { busy: true }), status: 'stopped' },
+    { ...session('archived', { busy: true }), archivedAt: 'now' }];
+  await f.update(sessions);
+  f.store.select('a'); await f.nextTick();
+  sessions[2].activity = { completed: 'c-done' };
+  await f.update(sessions);
+  for (const name of ['b', 'a', 'b', 'a']) {
+    f.store.selectNextWorking(); await f.nextTick();
+    assert.equal(f.store.current, name);
+    assert.equal(f.store.workingCount, 1);
+  }
+  sessions[1].archivedAt = 'now';
+  await f.update(sessions);
+  f.store.selectNextWorking(); await f.nextTick();
+  assert.equal(f.store.current, 'a');
+  assert.equal(f.store.workingCount, 0, 'Only the current worker remains');
+  sessions[0].activity = { completed: 'a-done' };
+  await f.update(sessions);
+  f.store.selectNextWorking(); await f.nextTick();
+  assert.equal(f.store.current, 'a', 'No workers is a no-op');
+  sessions[1].archivedAt = null;
+  await f.update(sessions);
+  f.store.connectionIssue = true;
+  f.store.selectNextWorking(); await f.nextTick();
+  assert.equal(f.store.current, 'a', 'Do not navigate using stale offline status');
+  f.store.connectionIssue = false;
+  f.store.selectNextWorking(); await f.nextTick();
+  assert.equal(f.store.current, 'b', 'A newly available worker is included');
 });
 
 test('Last selection restores after a successful list, survives rename, and later refreshes do not switch tabs', async t => {
@@ -207,7 +302,7 @@ test('Deleted, archived and recreated sessions are not restored; stopped session
   ]) await t.test(label, async t => {
     const f = await setup(t, { order: [], pinned: [] }, {}, remembered);
     t.mock.method(globalThis, 'fetch', async (url, options) => {
-      assert.equal(url, '/api/sessions'); assert.equal(options, undefined);
+      assert.equal(url, '/api/sessions'); assert.ok(options.signal instanceof AbortSignal); assert.equal(options.method, undefined);
       return Response.json({ sessions });
     });
     await f.store.fetchSessions();

@@ -6,7 +6,7 @@ export function normalizeLayout(value) {
 export function orderedSessions(sessions, layout, activityState = () => 'idle') {
   const positions = new Map(layout.order.map((name, index) => [name, index]));
   const pinned = new Set(layout.pinned);
-  const priority = session => ({ unread: 0, busy: 1, idle: 2 }[activityState(session)] ?? 2);
+  const priority = session => ({ waiting: -1, error: -1, unread: 0, busy: 1, idle: 2 }[activityState(session)] ?? 2);
   return [...sessions].sort((a, b) => Number(pinned.has(b.name)) - Number(pinned.has(a.name)) || priority(a) - priority(b) ||
     (positions.get(a.name) ?? Infinity) - (positions.get(b.name) ?? Infinity));
 }

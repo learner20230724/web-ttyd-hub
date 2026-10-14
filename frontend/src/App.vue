@@ -4,12 +4,14 @@ import Sidebar from "./components/Sidebar.vue";
 import MobileTerminal from "./components/MobileTerminal.vue";
 const TerminalView = defineAsyncComponent(() => import("./components/TerminalView.vue"));
 import CreateDialog from "./components/CreateDialog.vue";
+import CodexUsageDialog from "./components/CodexUsageDialog.vue";
 import Toast from "./components/Toast.vue";
 import { useSessionStore } from "./stores/sessions";
 
 const store = useSessionStore();
 const sidebarCollapsed = ref(false);
 const showCreateDialog = ref(false);
+const showUsageDialog = ref(false);
 const toastRef = ref(null);
 const readingKey = 'web-ttyd-hub.mobile-reading.v1';
 let savedReading = {};
@@ -47,7 +49,8 @@ function handleMobileOverlayClick() {
         <button
           class="icon-btn toggle-btn"
           @click="toggleSidebar"
-          aria-label="Toggle Sidebar"
+          aria-label="会话列表"
+          :aria-expanded="!sidebarCollapsed"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -74,12 +77,19 @@ function handleMobileOverlayClick() {
             <path d="M13 16h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </div>
-        <h1 class="toolbar-title">Web TTYd Hub</h1>
-        <button v-if="isMobile && store.unreadCount > 0" type="button" class="unread-shortcut"
-          :aria-label="`查看下一个未读会话，共 ${store.unreadCount} 个`"
-          title="打开列表中最上方的未读会话" @click="store.selectNextUnread()">
-          <span class="unread-badge" aria-live="polite" aria-atomic="true">{{ store.unreadCount }}</span>
-        </button>
+        <h1 class="toolbar-title"><template v-if="isMobile">TTYD<span class="brand-suffix"> Hub</span></template><template v-else>Web TTYd Hub</template></h1>
+        <div v-if="isMobile && (store.unreadCount || store.workingCount)" class="activity-counters">
+          <button v-if="store.unreadCount > 0" type="button" class="unread-shortcut"
+            :aria-label="`查看下一个未读会话，共 ${store.unreadCount} 个`"
+            title="打开列表中最上方的未读会话" @click="store.selectNextUnread()">
+            <span class="unread-badge" aria-live="polite" aria-atomic="true">{{ store.unreadCount }}</span>
+          </button>
+          <button v-if="store.workingCount > 0" type="button" class="working-shortcut"
+            :aria-label="`查看下一个工作中的会话，共 ${store.workingCount} 个，不含当前会话`"
+            title="按列表顺序循环查看其他工作中的会话" @click="store.selectNextWorking()">
+            <span class="working-badge" aria-live="polite" aria-atomic="true">{{ store.workingCount }}</span>
+          </button>
+        </div>
       </div>
 
       <div v-if="isMobile" class="reading-controls" aria-label="手机阅读设置">
@@ -106,29 +116,38 @@ function handleMobileOverlayClick() {
       <Sidebar
         :collapsed="sidebarCollapsed"
         @create="showCreateDialog = true"
+        @usage="showUsageDialog = true; if (isMobile) sidebarCollapsed = true"
       />
 
-      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen" />
+      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen"
+        @show-execution="showExecution = true; navigationOpen ||= $event" />
       <TerminalView v-else @create="showCreateDialog = true" />
     </div>
 
     <CreateDialog v-if="showCreateDialog" @close="showCreateDialog = false" />
+    <CodexUsageDialog v-if="showUsageDialog" @close="showUsageDialog = false" />
     <Toast ref="toastRef" />
   </div>
 </template>
 
 <style scoped>
-.unread-shortcut { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:28px; min-height:40px; padding:2px; border:0; border-radius:6px; background:transparent; cursor:pointer; }
+.activity-counters { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+.unread-shortcut, .working-shortcut { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:28px; min-height:40px; padding:2px; border:0; border-radius:6px; background:transparent; cursor:pointer; }
 .unread-shortcut:focus-visible { outline:2px solid var(--success); outline-offset:2px; }
+.working-shortcut:focus-visible { outline:2px solid #bbc2cc; outline-offset:2px; }
 .unread-badge { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:24px; height:24px; border-radius:50%; background:var(--success); color:#03291e; font-size:11px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1; }
+.working-badge { display:inline-flex; position:relative; align-items:center; justify-content:center; width:24px; height:24px; color:#bbc2cc; font-size:11px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1; }
+.working-badge::before { content:''; position:absolute; inset:0; border:2px solid #bbc2cc40; border-top-color:#bbc2cc; border-radius:50%; animation:working-spin 1s linear infinite; }
+@keyframes working-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .working-badge::before { animation:none; } }
 .reading-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }
-.reading-control { min-width:36px; min-height:40px; padding:4px 6px; border:0; border-radius:7px; background:transparent; color:var(--text-secondary); font-size:13px; cursor:pointer; }
+.reading-control { min-width:40px; min-height:44px; padding:4px 6px; border:0; border-radius:7px; background:transparent; color:#a8b6ca; font-size:13px; cursor:pointer; }
 .navigation-toggle { font-size:20px; }
 .reading-control.selected { color:#7dd3fc; background:#19344b; }
 .reading-control:disabled { opacity:.35; cursor:default; }
 @media (max-width: 767px) {
   .toolbar { padding:0 8px !important; gap:6px; }
-  .toolbar-left { gap:8px !important; min-width:0; }
+  .toolbar-left { gap:6px !important; min-width:0; }
   .toolbar-title { font-size:14px !important; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   .logo-wrapper { display:none !important; }
 }
@@ -139,6 +158,9 @@ function handleMobileOverlayClick() {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  padding-top:env(safe-area-inset-top);
+  padding-left:env(safe-area-inset-left);
+  padding-right:env(safe-area-inset-right);
 }
 
 .toolbar {
@@ -160,6 +182,8 @@ function handleMobileOverlayClick() {
 }
 
 .toggle-btn {
+  min-width:40px;
+  min-height:44px;
   background: transparent;
   border: none;
   color: var(--text-secondary);
@@ -170,6 +194,8 @@ function handleMobileOverlayClick() {
   align-items: center;
   justify-content: center;
 }
+
+@media (max-width:359px) { .toolbar-title { font-size:12px !important; }.brand-suffix { display:none; }.toolbar-left { gap:4px !important; }.reading-controls { gap:0; }.reading-control { min-width:38px; } }
 .toggle-btn:hover {
   color: var(--text-primary);
   background: var(--bg-tertiary);

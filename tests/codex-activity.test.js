@@ -9,7 +9,7 @@ test('Codex completion uses explicit turn events, ignores unrelated turn complet
   applyEvent(s, event('task_complete', 'other')); assert.equal(s.busy, true);
   applyEvent(s, event('task_complete')); assert.equal(s.busy, false); assert.match(s.completed, /:one$/);
   applyEvent(s, event('task_started', 'two')); applyEvent(s, event('turn_aborted', 'two'));
-  assert.equal(s.busy, false); assert.match(s.completed, /:one$/);
+  assert.equal(s.busy, false); assert.equal(s.completed, null); assert.equal(s.phase, 'interrupted');
 });
 test('Mobile feed excludes developer, tools and analysis and bounds retained messages', () => {
   const s = state();
@@ -45,4 +45,59 @@ test('question answer and user_note results confirm input without exposing other
   assert.equal(s.inputReceipts.length, 2);
   for (let i = 0; i < 310; i++) { call('q' + i); output('q' + i, { answers: { x: { answers: ['note ' + i] } } }); }
   assert.equal(s.inputReceipts.length, 300);
+});
+
+test('0.162 commentary and final messages never imply turn completion; tools keep the turn active', () => {
+  const s = state(); applyEvent(s, event('task_started'));
+  const response = payload => applyEvent(s, { type: 'response_item', timestamp: 'now', payload });
+  response({ type: 'reasoning' }); assert.equal(s.phase, 'thinking');
+  response({ type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: '检查进展' }] });
+  assert.equal(s.phase, 'responding'); assert.equal(s.messages[0].phase, 'commentary');
+  response({ type: 'custom_tool_call', name: 'functions.exec', call_id: 'exec' }); assert.equal(s.phase, 'executing');
+  response({ type: 'function_call', name: 'functions.request_user_input', call_id: 'question' }); assert.equal(s.phase, 'waiting');
+  response({ type: 'custom_tool_call_output', call_id: 'exec', output: 'done' }); assert.equal(s.phase, 'waiting');
+  response({ type: 'function_call_output', call_id: 'question', output: '{}' }); assert.equal(s.phase, 'working');
+  response({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: '结果' }] });
+  assert.equal(s.completed, null); assert.equal(s.busy, true);
+  applyEvent(s, event('task_complete')); assert.equal(s.phase, 'completed'); assert.equal(s.busy, false);
+  applyEvent(s, event('token_count')); assert.equal(s.phase, 'completed');
+});
+
+test('failure and cancellation never produce a successful completion, retry can recover', () => {
+  for (const outcome of [{ error: { message: 'failed' } }, { status: 'failed' }, { status: 'interrupted' }]) {
+    const s = state(); applyEvent(s, event('task_started'));
+    applyEvent(s, { ...event('task_complete'), payload: { ...event('task_complete').payload, ...outcome } });
+    assert.equal(s.completed, null); assert.equal(s.busy, false);
+  }
+  const s = state(); applyEvent(s, event('task_started'));
+  applyEvent(s, { ...event('error'), payload: { ...event('error').payload, message: 'failed' } });
+  applyEvent(s, event('task_complete')); assert.equal(s.phase, 'error'); assert.equal(s.completed, null);
+  applyEvent(s, event('task_started', 'two')); assert.equal(s.error, null);
+  applyEvent(s, event('stream_error', 'two')); assert.equal(s.phase, 'retrying'); assert.equal(s.busy, true);
+  applyEvent(s, event('task_complete', 'two')); assert.equal(s.phase, 'completed');
+});
+
+test('new turn clears old green, duplicate start and stale other-turn events cannot reset it', () => {
+  const s = state(); applyEvent(s, event('task_started')); applyEvent(s, event('task_complete'));
+  applyEvent(s, event('task_started', 'two')); assert.equal(s.completed, null);
+  applyEvent(s, { type: 'response_item', payload: { type: 'custom_tool_call', call_id: 'tool' } });
+  applyEvent(s, event('task_started', 'two')); assert.equal(s.phase, 'executing');
+  applyEvent(s, event('turn_aborted')); applyEvent(s, event('error')); applyEvent(s, event('task_complete'));
+  assert.equal(s.phase, 'executing'); assert.equal(s.completed, null);
+});
+
+test('UTF-8, CRLF, partial JSON and malformed lines do not lose later completion events', async t => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const { consumeRollout } = require('../server/services/codex-activity');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-activity-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'rollout.jsonl'), s = { ...state(), path: file, offset: 0 };
+  const complete = JSON.stringify(event('task_complete'));
+  const initial = JSON.stringify(event('task_started')) + '\r\n' + JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: '中文🙂' }] } }) + '\r\n{malformed}\n';
+  await fs.writeFile(file, initial + complete.slice(0, 40));
+  await consumeRollout(s, (await fs.stat(file)).size);
+  assert.equal(s.busy, true); assert.equal(s.offset, Buffer.byteLength(initial)); assert.equal(s.messages[0].text, '中文🙂');
+  await fs.appendFile(file, complete.slice(40) + '\r\n');
+  await consumeRollout(s, (await fs.stat(file)).size);
+  assert.equal(s.phase, 'completed'); assert.equal(s.offset, (await fs.stat(file)).size);
 });

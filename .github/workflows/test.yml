@@ -32,6 +32,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: node tests/codex-picker-browser.cjs
       - run: node tests/mobile-input-browser.cjs
+      - run: node tests/activity-browser.cjs
+      - run: node tests/codex-mobile-browser.cjs
       - if: runner.os == 'Linux'
         run: npm run test:terminal
       - if: always()

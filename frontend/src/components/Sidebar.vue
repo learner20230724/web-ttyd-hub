@@ -8,7 +8,7 @@ defineProps({
   mobile: Boolean, // New prop to detect if we are in mobile mode (optional, or just use css media queries)
 });
 
-const emit = defineEmits(["create"]);
+const emit = defineEmits(["create", "usage"]);
 const store = useSessionStore();
 const list = ref(null);
 const dragging = ref(null);
@@ -85,11 +85,11 @@ onBeforeUnmount(() => finishDrag());
 <template>
   <aside class="sidebar" :class="{ collapsed }">
     <div class="sidebar-header">
-      <h2 class="sidebar-title" v-show="!collapsed">Sessions</h2>
+      <h2 class="sidebar-title" v-show="!collapsed">会话列表</h2>
       <button
         class="icon-btn new-session-btn"
         @click="emit('create')"
-        title="New Session"
+        title="新建会话"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -105,7 +105,7 @@ onBeforeUnmount(() => finishDrag());
           <line x1="12" y1="5" x2="12" y2="19"></line>
           <line x1="5" y1="12" x2="19" y2="12"></line>
         </svg>
-        <span v-show="!collapsed">New Session</span>
+        <span v-show="!collapsed">新建会话</span>
       </button>
     </div>
 
@@ -123,10 +123,11 @@ onBeforeUnmount(() => finishDrag());
       />
 
       <div v-if="!store.sortedSessions.length" class="empty-hint" v-show="!collapsed">
-        <p>No active sessions</p>
-        <p class="sub-hint">Create one to get started</p>
+        <p>还没有会话</p>
+        <p class="sub-hint">新建一个会话，开始工作</p>
       </div>
     </div>
+    <button v-if="!collapsed" type="button" class="account-usage" aria-label="账号额度" @click="emit('usage')"><span aria-hidden="true">◔</span> 账号额度 <span aria-hidden="true">›</span></button>
     <details v-if="!collapsed" class="archive-section">
       <summary>归档（{{ store.archivedSessions.length }}）</summary>
       <p class="sort-hint">进程保留 30 分钟，到期自动终止</p>
@@ -139,6 +140,7 @@ onBeforeUnmount(() => finishDrag());
 </template>
 
 <style scoped>
+.account-usage { display:flex; align-items:center; gap:10px; flex-shrink:0; width:calc(100% - 24px); min-height:44px; margin:8px 12px; padding:10px 12px; border:1px solid var(--border-color); border-radius:10px; color:var(--text-primary); background:var(--bg-tertiary); cursor:pointer; font-size:14px; text-align:left; }.account-usage span:last-child { margin-left:auto; }
 .archive-section { flex-shrink:0; max-height:40%; overflow:auto; border-top:1px solid var(--border-color); padding:8px; }
 .archive-section summary { cursor:pointer; font-size:12px; color:var(--text-secondary); padding:8px; }
 .archive-list { display:flex; flex-direction:column; gap:4px; }

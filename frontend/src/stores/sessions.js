@@ -3,14 +3,16 @@ import { pruneContent } from '../utils/session-content.mjs'
 import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose, watch } from 'vue'
 import { LAYOUT_KEY, normalizeLayout, orderedSessions, moveSession } from '../utils/session-layout.mjs'
+import { activityState as classifyActivity, activityPresentation } from '../utils/activity.mjs'
 
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref([])
+  const connectionIssue = ref(false)
   const readKey = 'web-ttyd-hub.read.v1'
   const read = ref({})
   try { read.value = JSON.parse(localStorage.getItem(readKey)) || {} } catch {}
   function markRead() {
-    if (document.hidden || !document.hasFocus()) return
+    if (document.hidden || !document.hasFocus() || connectionIssue.value) return
     const session = sessions.value.find(s => s.name === current.value)
     if (session && !session.archivedAt && activityState(session) === 'unread') {
       read.value[session.name] = session.activity.completed
@@ -21,11 +23,9 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
   function activityState(session) {
-    if (session.status !== 'running') return 'idle'
-    if (session.activity?.busy) return 'busy'
-    if (session.activity?.completed && read.value[session.name] !== session.activity.completed) return 'unread'
-    return 'idle'
+    return connectionIssue.value ? 'unknown' : classifyActivity(session, read.value)
   }
+  const activityStatus = session => activityPresentation(session, read.value, connectionIssue.value)
   document.addEventListener('visibilitychange', markRead)
   window.addEventListener('focus', markRead)
   onScopeDispose(() => { document.removeEventListener('visibilitychange', markRead); window.removeEventListener('focus', markRead) })
@@ -48,8 +48,10 @@ export const useSessionStore = defineStore('sessions', () => {
   try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))) } catch {}
   const sortedSessions = computed(() => orderedSessions(sessions.value.filter(s => !s.archivedAt), layout.value, activityState))
   const archivedSessions = computed(() => sessions.value.filter(s => s.archivedAt).sort((a,b) => Date.parse(b.archivedAt) - Date.parse(a.archivedAt)))
-  const unreadSessions = computed(() => sortedSessions.value.filter(s => s.name !== current.value && activityState(s) === 'unread'))
+  const otherSessions = computed(() => sortedSessions.value.filter(s => s.name !== current.value))
+  const unreadSessions = computed(() => otherSessions.value.filter(s => activityState(s) === 'unread'))
   const unreadCount = computed(() => unreadSessions.value.length)
+  const workingCount = computed(() => otherSessions.value.filter(s => activityState(s) === 'busy').length)
   const isPinned = name => layout.value.pinned.includes(name)
   function saveLayout(value) {
     layout.value = value
@@ -82,23 +84,33 @@ export const useSessionStore = defineStore('sessions', () => {
   let reconnectTimer = null
   let reconnectDelay = 1000
 
+  let fetchSequence = 0, fetching = 0
   async function fetchSessions() {
-    const res = await fetch(hubUrl('/api/sessions'))
-    if (!res.ok) throw new Error('无法读取会话列表')
-    const data = await res.json()
-    if (!Array.isArray(data.sessions)) throw new Error('会话列表格式无效')
-    void pruneContent(data.sessions)
-    sessions.value = data.sessions
-    if (restoreSelection) {
-      let saved
-      try { saved = JSON.parse(localStorage.getItem(selectionKey)) } catch {}
-      // Restore only after a successful list response; failed requests must not
-      // discard the saved selection or attach to an unrelated recreated session.
-      const previous = data.sessions.find(s => s.name === saved?.name &&
-        (s.createdAt || null) === saved?.createdAt && !s.archivedAt)
-      select(previous?.name || null)
-    } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) select(null)
-    loaded.value = true
+    const sequence = ++fetchSequence
+    fetching++
+    try {
+      const res = await fetch(hubUrl('/api/sessions'), { signal: AbortSignal.timeout(10000) })
+      if (!res.ok) throw new Error('无法读取会话列表')
+      const data = await res.json()
+      if (!Array.isArray(data.sessions)) throw new Error('会话列表格式无效')
+      if (sequence !== fetchSequence) return
+      connectionIssue.value = false
+      void pruneContent(data.sessions)
+      sessions.value = data.sessions
+      if (restoreSelection) {
+        let saved
+        try { saved = JSON.parse(localStorage.getItem(selectionKey)) } catch {}
+        // Restore only after a successful list response; failed requests must not
+        // discard the saved selection or attach to an unrelated recreated session.
+        const previous = data.sessions.find(s => s.name === saved?.name &&
+          (s.createdAt || null) === saved?.createdAt && !s.archivedAt)
+        select(previous?.name || null)
+      } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) select(null)
+      loaded.value = true
+    } catch (error) {
+      if (sequence === fetchSequence) connectionIssue.value = true
+      throw error
+    } finally { fetching-- }
   }
 
   async function fetchShells() {
@@ -185,21 +197,31 @@ export const useSessionStore = defineStore('sessions', () => {
     if (next) select(next.name)
   }
 
+  function selectNextWorking() {
+    // Advance from the current worker before wrapping; choosing the first
+    // other worker each time would bounce between two and miss later ones.
+    const working = sortedSessions.value.filter(s => activityState(s) === 'busy')
+    const index = working.findIndex(s => s.name === current.value)
+    const next = working[index + 1] || working[0]
+    if (next && next.name !== current.value) select(next.name)
+  }
+
   function connectWs() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     ws = new WebSocket(`${proto}://${location.host}${hubUrl('/ws')}`)
 
     ws.onmessage = () => {
-      fetchSessions()
+      refreshVisible()
     }
 
     ws.onopen = () => {
       reconnectDelay = 1000
       // Recover completions that happened while a phone's connection was asleep.
-      fetchSessions().catch(() => {})
+      refreshVisible()
     }
 
     ws.onclose = () => {
+      connectionIssue.value = true
       scheduleReconnect()
     }
   }
@@ -214,10 +236,25 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   function init() {
-    fetchSessions()
-    fetchShells()
+    if (refreshTimer) return
+    fetchSessions().catch(() => {})
+    fetchShells().catch(() => {})
     connectWs()
+    refreshTimer = setInterval(refreshVisible, 5000)
+    document.addEventListener('visibilitychange', refreshVisible)
+    window.addEventListener('online', refreshVisible)
   }
+
+  // Phones can suspend a WebSocket without delivering close. Refresh on return
+  // and periodically reconcile, even when no activity notification arrives.
+  const refreshVisible = () => { if (!document.hidden && !fetching) fetchSessions().catch(() => {}) }
+  let refreshTimer
+  onScopeDispose(() => {
+    clearInterval(refreshTimer); clearTimeout(reconnectTimer)
+    if (ws) { ws.onclose = null; ws.close() }
+    document.removeEventListener('visibilitychange', refreshVisible)
+    window.removeEventListener('online', refreshVisible)
+  })
 
   async function create({ command, name, cwd, resumeThreadId }) {
     return createSession(name || null, command || null, cwd, resumeThreadId)
@@ -226,10 +263,14 @@ export const useSessionStore = defineStore('sessions', () => {
   return {
     sessions,
     activityState,
+    activityStatus,
+    connectionIssue,
     sortedSessions,
     archivedSessions,
     unreadCount,
+    workingCount,
     selectNextUnread,
+    selectNextWorking,
     restoreSession,
     layoutError,
     isPinned,
