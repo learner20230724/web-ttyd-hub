@@ -27,6 +27,26 @@ test('unix socket peers bind only a client actually connected to the managed dae
   assert.deepEqual([...daemonPeers(rows)], [['10', '20']]);
 });
 
+test('action-required title animation keeps the same thread bound without relaxing identity checks', () => {
+  const root = candidate('root', '当前工作');
+  const other = candidate('other', '其他工作');
+  const child = candidate('child', '当前工作', { subagent: { thread_spawn: { parent_thread_id: 'root' } } });
+  for (const prefix of ['[ ! ] Action Required | ', '[ . ] Action Required | ']) {
+    const title = prefix + '当前工作 | project';
+    assert.equal(selectRollout([root, other, child], title, true), root);
+    assert.equal(selectRollout([root, other], '● ' + title, true), root);
+    assert.equal(selectRollout([root], prefix + '当前工作 | other-project', true), null);
+    assert.equal(selectRollout([root], prefix + '其他工作 | project', true), null);
+    assert.equal(selectRollout([root], prefix + '当前工作', true), null);
+    assert.equal(selectRollout([root, candidate('duplicate', '当前工作')], title, true), null);
+    const literal = candidate('literal', prefix + '当前工作');
+    assert.equal(selectRollout([literal], title, true), literal, 'Literal names are preserved');
+    assert.equal(selectRollout([root, literal], title, true), null, 'Do not choose between literal and decorated names');
+  }
+  assert.equal(selectRollout([root], '[ ! ] Custom Notice | 当前工作 | project', true), null);
+  assert.equal(selectRollout([root], '自定义 | 当前工作 | project', true), null);
+});
+
 test('live footer detects work/approval/retry without treating mentions or silence as completion', () => {
   assert.equal(terminalStatus('• Working (1m 2s • esc to interrupt)\n\n› Ask Codex to do anything\n  GPT-6-Astra max'), 'working');
   assert.equal(terminalStatus('◦ Working (27h 05m 19s • esc to interrupt) · 1 background terminal running\n\n› Ask Codex to do anything'), 'working');
@@ -49,6 +69,8 @@ test('shared daemon reads names only for verified open rollouts and fails closed
   db.exec('CREATE TABLE threads (id TEXT, name TEXT)');
   db.prepare('INSERT INTO threads VALUES (?, ?)').run('one', '当前工作'); db.close();
   assert.equal(await resolveRollout([file, dbfile], '⠇ 当前工作 | project', true), file);
+  assert.equal(await resolveRollout([file, dbfile], '[ ! ] Action Required | 当前工作 | project', true), file);
+  assert.equal(await resolveRollout([file, dbfile], '[ . ] Action Required | 当前工作 | project', true), file);
   assert.equal(await resolveRollout([dbfile], '当前工作 | project', true), null);
   assert.equal(await resolveRollout([file], '当前工作 | project', true), null);
 });

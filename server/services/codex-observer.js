@@ -60,9 +60,13 @@ function selectRollout(candidates, title, shared) {
   const roots = candidates.filter(c => c.meta?.id && !JSON.stringify(c.meta.source || '').includes('subagent'));
   if (!shared && roots.length === 1) return roots[0];
   const label = plainTitle(title);
+  // Codex 0.162 blinks between these two prefixes while requesting input.
+  // Keep the literal title too: a real name can contain the same words, and
+  // ambiguity across either interpretation must still leave the pane unbound.
+  const labels = new Set([label, plainTitle(label.replace(/^\[ [!.] \] Action Required \| /, ''))]);
   // Match the full title, including project, and require uniqueness. In particular,
   // a saved Hub thread id is NOT proof after /new, /resume or a process restart.
-  const matches = roots.filter(c => c.name && `${c.name} | ${path.basename(c.meta.cwd || '')}` === label);
+  const matches = roots.filter(c => c.name && labels.has(`${c.name} | ${path.basename(c.meta.cwd || '')}`));
   return matches.length === 1 ? matches[0] : null;
 }
 async function resolveRollout(files, title, shared = false) {

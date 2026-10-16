@@ -41,6 +41,8 @@ These are templates. Verify DNS, TLS, authentication and clipboard behavior in y
 
 Linux 的 Codex 0.162.1 可将任务交给共享 app-server daemon。服务需要 `ss`（iproute2）、Node.js 22.13+ 的 `node:sqlite`，以及读取相同服务用户 `/proc` 和 Codex 状态库的权限。独立进程继续直接读取其主任务 rollout。共享后台仅在当前完整终端标题、项目名与后台打开的主任务唯一匹配时关联；遇到自定义标题、重名或读取失败会显示「状态待确认」。不扫描其他对话来猜当前任务，不改 Codex 全局配置。Windows 共享后台尚未验证。
 
+等待操作时的 `[ ! ] Action Required |` 与 `[ . ] Action Required |` 是 [Codex 0.162.1 的闪烁标题前缀](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/chatwidget/status_surfaces.rs)。匹配兼容两种前缀，同时保留原样标题的候选，原样与去前缀后若对应不同任务仍拒绝关联。只归一化这两个已知前缀，不按任意标题后缀匹配；任务阶段和成功完成仍由原有事件规则确定。
+
 发布检查：`npm test`、`node tests/activity-browser.cjs`、`node tests/mobile-input-browser.cjs`；浏览器检查须先 `npm run build`，测试使用合成消息，不读取私人会话。`node tests/terminal-browser.cjs` 验证电脑终端滚动、重连和手机阅读没有回归。最后执行 `npm run deploy:web` 并核对当前会话的 busy / phase / completed。本轮成功的完成事件才设置 completed；未知状态、中断和出错均不沿用上一轮绿色提醒。
 
 状态语义参考 [OpenAI Codex App Server](https://learn.chatgpt.com/docs/app-server) 的 turn 结束与线程活动状态；rollout 与终端标题属于版本相关适配，升级后仍需回归验证。
