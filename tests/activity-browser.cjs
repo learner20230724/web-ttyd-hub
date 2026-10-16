@@ -52,8 +52,8 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       }
       await compactTitle();
       await page.getByLabel('消息输入').fill('保留这条尚未发送的中文草稿');
-      async function transition(phase) {
-        sessions[0].activity = make('reader', '', phase).activity; version++;
+      async function transition(phase, overrides = {}) {
+        sessions[0].activity = { ...make('reader', '', phase).activity, ...overrides }; version++;
         manager.emit('session:activity', sessions[0]);
       }
       await transition('waiting');
@@ -72,9 +72,36 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       await page.waitForFunction(() => document.querySelector('.mobile-session-header .activity-badge')?.textContent.includes('已完成'));
       await compactTitle();
       await page.screenshot({ path: path.join(output, `status-completed-${width}.png`) });
+      const readingBeforeUnknown = await page.locator('.mobile-reading').boundingBox();
+      // Status and content can update independently. Neither a missing phase nor
+      // unavailable tracking should push working content down or imply completion.
+      for (const activity of [{}, { available: false, phase: undefined, completed: 'stale-completion' }]) {
+        await transition('unknown', activity);
+        await page.locator('.mobile-session-header .activity-badge.unknown').waitFor();
+        assert.equal(await page.locator('.status-guidance').count(), 0, 'Unknown status adds no guidance row');
+        await compactTitle();
+        const reading = await page.locator('.mobile-reading').boundingBox();
+        assert.equal(reading.y, readingBeforeUnknown.y, 'Unavailable status does not push content down');
+        assert.equal(reading.height, readingBeforeUnknown.height, 'Unavailable status preserves reading space');
+        assert.equal(await page.getByLabel('消息输入').inputValue(), '保留这条尚未发送的中文草稿');
+      }
+      const originalProgress = transcript[1];
+      transcript[1] = { ...originalProgress, text: '状态同步期间，新的工作进展仍能正常显示。' }; version++;
+      await page.getByText(transcript[1].text, { exact: true }).waitFor();
+      assert.equal(await page.locator('.mobile-session-header .unread, .mobile-session-header .busy').count(), 0, 'Visible replies never imply a reliable task outcome');
+      await page.screenshot({ path: path.join(output, `status-unknown-${width}.png`) });
+      await page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
+      await page.locator('.mobile-output').waitFor();
+      await compactTitle();
+      assert.equal(await page.locator('.status-guidance').count(), 0, 'Full view also stays compact');
+      assert.equal(await page.getByLabel('消息输入').inputValue(), '保留这条尚未发送的中文草稿');
+      await page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
+      transcript[1] = originalProgress; version++;
       await transition('thinking'); await page.locator('.mobile-session-header .activity-badge.busy').waitFor();
       failing = true; manager.emit('session:activity', sessions[0]);
       await page.locator('.mobile-session-header').getByText('连接中断', { exact: true }).waitFor();
+      await compactTitle();
+      assert.equal(await page.locator('.status-guidance').count(), 0, 'Connection status also uses only the title row');
       await page.locator('.working-badge').waitFor({ state: 'detached' });
       assert.equal(await page.getByLabel('消息输入').inputValue(), '保留这条尚未发送的中文草稿');
       failing = false; manager.emit('session:activity', sessions[0]);
@@ -118,7 +145,7 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       assert(composer.y >= 0 && composer.y + composer.height <= 431, 'Composer stays visible above simulated keyboard');
       assert.deepEqual(errors, []);
       await context.close();
-      console.log(`PASS ${width}px: two/three workers cycle in order, counts exclude current, drafts preserved, states, offline recovery, keyboard layout`);
+      console.log(`PASS ${width}px: compact unknown/offline status, live content and drafts preserved, full view, worker cycling, states, recovery, keyboard layout`);
     }
     const context = await browser.newContext({ viewport: { width: 1100, height: 760 }, hasTouch: true, isMobile: true });
     transcript[2] = { ...transcript[2], phase: 'commentary', text: '目前已确认：\n\n- 会话列表显示明确的工作状态。\n- 等待确认时，可以直接打开全文。\n- 手机与电脑使用相同的状态规则。\n\n接下来继续检查输入与网络恢复。\n\n```js\nconsole.log("Checking interactions…");\n```' };

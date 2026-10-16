@@ -25,7 +25,7 @@ export function activityPresentation(session, read = {}, connectionIssue = false
     error: ['执行出错', '本轮未成功完成，请打开全文查看原因。'],
     interrupted: ['已中断', '本轮已中断，可以输入补充要求继续。'],
     unread: ['已完成 · 未读', '本轮工作已完成，有新回复待查看。'],
-    unknown: ['状态待确认', '暂未取得可靠的任务状态，可以打开全文查看。'],
+    unknown: ['状态待确认', '任务状态暂不可用。'],
   }
   const [label, detail] = labels[state === 'busy' ? a.phase in labels ? a.phase : 'working' : state]
     || (a.completed ? ['已完成 · 已读', '本轮工作已完成，可以继续发送新要求。']

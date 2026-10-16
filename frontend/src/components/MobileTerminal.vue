@@ -167,7 +167,8 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer); clearInte
           <ActivityBadge class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
           <span v-if="elapsed" class="elapsed">已运行 {{ elapsed }}</span>
         </div>
-        <div v-if="['waiting', 'error', 'unknown', 'interrupted'].includes(status.state) && !(status.state === 'waiting' && questionPending)" class="status-guidance" :class="status.state">
+        <!-- Unavailable status stays in the title row; it needs no separate action or reading space. -->
+        <div v-if="['waiting', 'error', 'interrupted'].includes(status.state) && !(status.state === 'waiting' && questionPending)" class="status-guidance" :class="status.state">
           <p>{{ status.state === 'waiting' && questionSupport === false ? '此会话需在全文中作答，请按终端提示选择或跳过。' : status.detail }}</p>
           <button v-if="!showExecution" type="button" @click="emit('show-execution', status.state === 'waiting')">查看全文 <span aria-hidden="true">↗</span></button>
         </div>
