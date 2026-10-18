@@ -6,6 +6,8 @@ const STORAGE_TIMEOUT = 500
 let database, liveSessions = null
 export const contentKey = (session, view) => JSON.stringify([session.name, session.createdAt || '', view])
 const allowed = entry => !liveSessions || liveSessions.get(entry.sessionId) === entry.generation
+const needsDialogue = (session, view) => view === 'answer' && (session.shell === 'codex' || session.activity?.detected || session.activity?.available)
+const matchesView = (data, session, view) => !needsDialogue(session, view) || Array.isArray(data?.messages)
 function openDB() {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null)
   if (!database) database = new Promise(resolve => {
@@ -55,7 +57,7 @@ async function persist(entry) {
 }
 export function peekContent(session, view) {
   const entry = memory.get(contentKey(session, view))
-  if (!entry || !allowed(entry)) return null
+  if (!entry || !allowed(entry) || !matchesView(entry.data, session, view)) return null
   entry.used = Date.now(); return remember(entry)
 }
 export async function loadContent(session, view) {
@@ -71,7 +73,7 @@ export async function loadContent(session, view) {
         req.onsuccess = () => { clearTimeout(timer); resolve(req.result) }
         req.onerror = () => { clearTimeout(timer); resolve(null) }
       })
-      if (!entry || !allowed(entry) || !entry.data || typeof entry.bytes !== 'number') return null
+      if (!entry || !allowed(entry) || !entry.data || typeof entry.bytes !== 'number' || !matchesView(entry.data, session, view)) return null
       // A network response may have arrived while the database was opening.
       return peekContent(session, view) || remember(entry)
     } catch { return null }
@@ -93,13 +95,18 @@ export async function fetchContent(session, view, { mobile = true } = {}) {
         signal:controller.signal, cache:'no-store', headers:cached?.etag ? { 'If-None-Match':cached.etag } : {}
       })
       if (response.status === 304 && cached) return cached
-      const data = await response.json()
+      let data = await response.json()
       if (!response.ok) throw new Error(data.error || '读取失败')
       delete data.capturedAt; delete data.activity
+      // Older servers and disk entries may put a full terminal in the answer
+      // slot. Never render that as dialogue or replace a valid cached answer.
+      if (!matchesView(data, session, view)) data = { messages: [], answerUnavailable: true, completed: null, inputReceipts: data.inputReceipts || [] }
+      if (view === 'answer' && data.answerUnavailable && cached?.data.messages?.length) return cached
       const etag = response.headers.get('ETag')
       if (cached && ((etag && cached.etag === etag) || (!etag && JSON.stringify(cached.data) === JSON.stringify(data)))) return cached
       const entry = { key, sessionId:session.name, generation:session.createdAt || '', data, etag, used:Date.now(), bytes:JSON.stringify(data).length * 2 }
       if (!allowed(entry)) throw new Error('会话已删除')
+      if (data.answerUnavailable) return entry // Do not overwrite a valid answer still loading from disk.
       remember(entry); void persist(entry); return entry
     } finally { clearTimeout(timeout); pending.delete(key) }
   })

@@ -379,13 +379,18 @@ class SessionManager extends EventEmitter {
 
   async mobile(name, full = false) {
     await this.ensurePane(name);
-    const activity = this.getSession(name).activity;
+    const session = this.getSession(name), activity = session.activity;
     // Capture before reading history: a later completion must not acknowledge a
     // terminal snapshot taken before that turn finished.
     const completed = activity?.completed || null;
     const messages = this.activity.messages(name);
     const inputReceipts = this.activity.inputReceipts(name);
-    if (!full && messages?.length) return { messages, inputReceipts, completed, activity };
+    if (!full && (messages?.length || session.shell === 'codex' || activity?.detected || activity?.available)) {
+      // Missing dialogue is not terminal output. Keeping the two views distinct
+      // also prevents a transient observer failure from poisoning answer caches.
+      return { messages: messages || [], answerUnavailable: messages == null, inputReceipts,
+        completed: messages?.length ? completed : null, activity };
+    }
     return { ...await this.history(name), inputReceipts, completed, activity };
   }
 

@@ -31,3 +31,35 @@ test('a synchronously rejected fetch cannot leave a permanently pending reading 
   const recovered = await fetchContent(session, 'full');
   assert.equal(calls, 2); assert.equal(recovered.data.text, 'Recovered full view');
 });
+
+test('missing dialogue and old terminal fallbacks cannot replace a cached Codex answer', async t => {
+  const { fetchContent } = await modulePromise;
+  const session = { name: 'answer-gap', createdAt: '2026-10-18', shell: 'codex' };
+  const responses = [
+    { messages: [{ id: 'one', text: 'Actual answer' }], completed: 'one' },
+    { messages: [], answerUnavailable: true, completed: null },
+    { text: 'Legacy terminal fallback', completed: 'two' },
+    { messages: [{ id: 'two', text: 'Recovered answer' }], completed: 'two' },
+  ];
+  t.mock.method(globalThis, 'fetch', async () => Response.json(responses.shift()));
+  const answer = await fetchContent(session, 'answer');
+  assert.equal(await fetchContent(session, 'answer'), answer);
+  assert.equal(await fetchContent(session, 'answer'), answer);
+  assert.equal((await fetchContent(session, 'answer')).data.messages[0].text, 'Recovered answer');
+});
+
+test('a legacy terminal cached before Codex detection is not reused as an answer', async t => {
+  const { fetchContent, peekContent, loadContent } = await modulePromise;
+  const session = { name: 'detected-later', createdAt: '2026-10-18', shell: 'bash' };
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ text: 'Legacy full terminal output' }));
+  assert.equal((await fetchContent(session, 'answer')).data.text, 'Legacy full terminal output');
+  session.activity = { detected: true, available: false };
+  assert.equal(peekContent(session, 'answer'), null);
+  assert.equal(await loadContent(session, 'answer'), null);
+  const answer = await fetchContent(session, 'answer');
+  assert.deepEqual(answer.data.messages, []);
+  assert.equal(answer.data.text, undefined);
+  assert.equal(answer.data.answerUnavailable, true);
+  assert.equal(peekContent(session, 'answer'), null, 'An unavailable response must not overwrite the persistent answer cache');
+  assert.equal((await fetchContent(session, 'full')).data.text, 'Legacy full terminal output');
+});

@@ -6,6 +6,29 @@ for (const [platform, Manager] of [
   ['Linux', require('../server/services/session-manager')],
   ['Windows', require('../server/services/windows-session-manager')],
 ]) {
+  test(`${platform} never substitutes terminal output for an unavailable Codex answer`, async () => {
+    for (const session of [
+      { shell: 'codex', activity: { available: false } },
+      { shell: 'bash', activity: { detected: true, available: false } },
+    ]) {
+      let captures = 0;
+      const manager = {
+        ensurePane: async () => {}, getSession: () => session,
+        activity: { messages: () => null, inputReceipts: () => [] },
+        history: async () => { captures++; return { text: 'Terminal command and tool output' }; },
+      };
+      const answer = await Manager.prototype.mobile.call(manager, 'fixture');
+      assert.deepEqual(answer.messages, []);
+      assert.equal(answer.answerUnavailable, true);
+      assert.equal(answer.completed, null);
+      assert.equal(answer.text, undefined);
+      assert.equal(captures, 0, 'Answer mode must not fetch the full terminal as a fallback');
+      const full = await Manager.prototype.mobile.call(manager, 'fixture', true);
+      assert.equal(full.text, 'Terminal command and tool output');
+      assert.equal(captures, 1);
+    }
+  });
+
   test(`${platform} content acknowledges only the completion present before capture`, async () => {
     const session = { activity: { phase: 'completed', completed: 'old-turn' } };
     const manager = {

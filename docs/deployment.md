@@ -47,6 +47,8 @@ These are templates. Verify DNS, TLS, authentication and clipboard behavior in y
 
 构建后运行 `node tests/mobile-state-browser.cjs`，通过七组控制变量实验核对：正常后台完成；暂扣列表响应但保留 WebSocket；不发送 WebSocket 通知但保留定期核对；挂起 IndexedDB；暂扣正文响应；阅读旧内容；缓存就绪后暂扣网络并反复切换回答／全文。修复前，列表阻塞、磁盘阻塞和正文未显示就被标已读三项可复现失败；修复后均通过，实验不调用输入接口。`node tests/codex-questions-integration.cjs` 使用本机真实 Codex 和临时合成模型端点，另外核对最终完成能独立从任务记录识别，无需追加消息或触发新模型调用。
 
+回答／全文相同的回归补充：测试改为经过正式路由及 `SessionManager.mobile`，再增加对话读取中断、冷启动有效磁盘缓存、旧版错误终端缓存三种场景，共十组。原先没有对话时会把同一份终端输出同时返回给两种模式；现在 Codex 回答接口返回空对话及暂不可读标记，前端保留有效回答缓存，不持久化空缺结果，也不把旧版全文缓存当作回答。普通 shell 的原始终端读取保持可用。Linux 与 Windows 共用该逻辑。
+
 ## Codex 状态兼容检查
 
 Linux 的 Codex 0.162.1 可将任务交给共享 app-server daemon。服务需要 `ss`（iproute2）、Node.js 22.13+ 的 `node:sqlite`，以及读取相同服务用户 `/proc` 和 Codex 状态库的权限。独立进程继续直接读取其主任务 rollout。共享后台仅在当前完整终端标题、项目名与后台打开的主任务唯一匹配时关联；遇到自定义标题、重名或读取失败会显示「状态待确认」。不扫描其他对话来猜当前任务，不改 Codex 全局配置。Windows 共享后台尚未验证。

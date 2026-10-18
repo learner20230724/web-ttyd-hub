@@ -119,7 +119,7 @@ watch([() => store.current, () => props.showExecution], async ([name, full], pre
     if (token === epoch && other === 'answer') reconcilePending(name, entry.data)
   }).catch(() => {})
   if (!cached) void loadContent(selected, view).then(stored => {
-    if (token === epoch && !Object.keys(content.value).length) return display(stored, true)
+    if (token === epoch && (!Object.keys(content.value).length || content.value.answerUnavailable)) return display(stored, true)
   })
   if (token === epoch) { await nextTick(); switching = false }
 }, { immediate: true })
@@ -182,11 +182,12 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer); clearInte
         </div>
       </div>
       <div ref="pane" class="mobile-reading" @scroll.passive="scrolled">
-        <template v-if="!showExecution && messages.length">
+        <template v-if="!showExecution && Array.isArray(content.messages)">
           <article v-for="message in messages" :key="message.id" :class="['message', message.role]">
             <div class="speaker">{{ message.role === 'user' ? '你' : message.phase === 'commentary' ? 'Codex · 工作进展' : 'Codex · 回复' }}</div>
             <div class="markdown" v-html="message.html"></div>
           </article>
+          <div v-if="!messages.length" class="reading-placeholder" role="status">暂无可显示的回答</div>
         </template>
         <div v-else class="terminal-segments">
           <template v-for="(segment, index) in outputSegments" :key="index">
