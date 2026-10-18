@@ -119,7 +119,7 @@ function handleMobileOverlayClick() {
         @usage="showUsageDialog = true; if (isMobile) sidebarCollapsed = true"
       />
 
-      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen"
+      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen" :reading-visible="sidebarCollapsed"
         @show-execution="showExecution = true; navigationOpen ||= $event" />
       <TerminalView v-else @create="showCreateDialog = true" />
     </div>

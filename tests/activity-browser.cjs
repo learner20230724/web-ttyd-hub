@@ -19,9 +19,9 @@ const transcript = [
 let failing = false, version = 0;
 app.get('/api/sessions', (_req, res) => failing ? res.status(503).json({ error: 'fixture offline' }) : res.json({ sessions }));
 app.get('/api/sessions/shells', (_req, res) => res.json({ platform: 'linux', shells: [{ id: 'codex', name: 'Codex' }] }));
-app.get('/api/sessions/:name/mobile', (req, res) => contentResponse(req, res, req.query.view === 'full'
+app.get('/api/sessions/:name/mobile', (req, res) => contentResponse(req, res, { ...(req.query.view === 'full'
   ? { text: 'Would you like to run the following command?\n\n  $ npm run build\n\n› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n\n  Press enter to confirm · esc to cancel', version }
-  : { messages: transcript, version }));
+  : { messages: transcript, version }), completed: sessions.find(s => s.name === req.params.name)?.activity.completed || null }));
 app.use(express.static(path.join(__dirname, '../server/public')));
 (async () => {
   const server = app.listen(0, '127.0.0.1'); const wss = setupWebSocket(server, manager); await once(server, 'listening');

@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { CodexRpc } = require('../server/services/codex-rpc');
 const { CodexQuestions } = require('../server/services/codex-questions');
+const { consumeRollout } = require('../server/services/codex-activity');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn) { for (let i = 0; i < 150; i++) { const value = await fn(); if (value) return value; await delay(100); } throw Error('Fixture timed out'); }
 let home, child, client, bridge, binding, seq = 0;
@@ -47,6 +48,12 @@ const fake = http.createServer(async (req, res) => {
     const before = events.filter(e => e.method === 'turn/started').length;
     assert.deepEqual(await bridge.respond('fixture', view.requests[0].id, { action, answers: { choice: '方案甲\n中文补充' } }), { ok: true });
     await until(() => events.find(e => e.method === 'turn/completed' && e.params.threadId === thread.id));
+    // Observe completion without sending another message or touching the Hub UI.
+    const requestCount = received.length;
+    const state = { path: thread.path, offset: 0, busy: false, completed: null };
+    await until(async () => { await consumeRollout(state, (await fs.stat(thread.path)).size); return state.completed; });
+    assert.equal(state.phase, 'completed'); assert.equal(state.busy, false);
+    assert.equal(received.length, requestCount, 'Completion does not require an extra model request');
     assert(events.some(e => e.method === 'serverRequest/resolved' && e.params.threadId === thread.id));
     assert.equal((await bridge.read('fixture')).requests.length, 0);
     assert.equal(events.filter(e => e.method === 'turn/started').length, before, 'Reply/skip continues the same turn');

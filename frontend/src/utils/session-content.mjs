@@ -2,19 +2,25 @@ import { hubUrl } from './base.mjs'
 // Raw text only on disk; derived HTML is always sanitized again by the renderer.
 const memory = new Map(), pending = new Map(), loads = new Map()
 const MEMORY_LIMIT = 64 * 1024 * 1024, DISK_LIMIT = 128 * 1024 * 1024
+const STORAGE_TIMEOUT = 500
 let database, liveSessions = null
 export const contentKey = (session, view) => JSON.stringify([session.name, session.createdAt || '', view])
 const allowed = entry => !liveSessions || liveSessions.get(entry.sessionId) === entry.generation
 function openDB() {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null)
   if (!database) database = new Promise(resolve => {
-    const req = indexedDB.open('ttyd-hub-content-v1', 1)
+    let settled = false
+    const finish = value => { if (!settled) { settled = true; clearTimeout(timer); resolve(value) } }
+    const timer = setTimeout(() => finish(null), STORAGE_TIMEOUT)
+    let req
+    try { req = indexedDB.open('ttyd-hub-content-v1', 1) }
+    catch { finish(null); return }
     req.onupgradeneeded = () => {
       req.result.createObjectStore('content', { keyPath:'key' })
       req.result.createObjectStore('metadata', { keyPath:'key' })
     }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = req.onblocked = () => resolve(null)
+    req.onsuccess = () => settled ? req.result.close() : finish(req.result)
+    req.onerror = req.onblocked = () => finish(null)
   })
   return database
 }
@@ -60,8 +66,10 @@ export async function loadContent(session, view) {
     try {
       const db = await openDB(); if (!db) return null
       const entry = await new Promise(resolve => {
+        const timer = setTimeout(() => resolve(null), STORAGE_TIMEOUT)
         const req = db.transaction('content').objectStore('content').get(key)
-        req.onsuccess = () => resolve(req.result); req.onerror = () => resolve(null)
+        req.onsuccess = () => { clearTimeout(timer); resolve(req.result) }
+        req.onerror = () => { clearTimeout(timer); resolve(null) }
       })
       if (!entry || !allowed(entry) || !entry.data || typeof entry.bytes !== 'number') return null
       // A network response may have arrived while the database was opening.
@@ -74,8 +82,10 @@ export async function loadContent(session, view) {
 export async function fetchContent(session, view, { mobile = true } = {}) {
   const key = contentKey(session, view)
   if (pending.has(key)) return pending.get(key)
-  const task = (async () => {
-    const cached = await loadContent(session, view)
+  const task = Promise.resolve().then(async () => {
+    // Disk is an optional, independently loaded fallback. It must never gate
+    // the live request or hold both reading modes behind a stuck transaction.
+    const cached = peekContent(session, view)
     const path = view === 'answer' ? 'mobile' : mobile ? 'mobile?view=full' : 'history'
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15000)
     try {
@@ -92,7 +102,7 @@ export async function fetchContent(session, view, { mobile = true } = {}) {
       if (!allowed(entry)) throw new Error('会话已删除')
       remember(entry); void persist(entry); return entry
     } finally { clearTimeout(timeout); pending.delete(key) }
-  })()
+  })
   pending.set(key, task); return task
 }
 export async function pruneContent(sessions) {

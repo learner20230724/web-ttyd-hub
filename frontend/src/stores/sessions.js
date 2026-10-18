@@ -12,10 +12,15 @@ export const useSessionStore = defineStore('sessions', () => {
   const readKey = 'web-ttyd-hub.read.v1'
   const read = ref({})
   try { read.value = JSON.parse(localStorage.getItem(readKey)) || {} } catch {}
+  let readGuard = null
+  function setReadGuard(guard) {
+    readGuard = guard
+    return () => { if (readGuard === guard) readGuard = null }
+  }
   function markRead() {
     if (document.hidden || !document.hasFocus() || connectionIssue.value) return
     const session = sessions.value.find(s => s.name === current.value)
-    if (session && !session.archivedAt && activityState(session) === 'unread') {
+    if (session && !session.archivedAt && activityState(session) === 'unread' && (!readGuard || readGuard(session))) {
       if (sync.enabled) {
         sync.enqueue({ type: 'read', name: session.name, createdAt: session.createdAt, completed: session.activity.completed })
         return
@@ -114,9 +119,21 @@ export const useSessionStore = defineStore('sessions', () => {
   let reconnectTimer = null
   let reconnectDelay = 1000
 
-  let fetchSequence = 0, fetching = 0, refreshPending = false
+  let fetchSequence = 0, fetching = 0, refreshPending = false, activitySequence = 0
+  const liveActivity = new Map()
+  function receiveActivity(value) {
+    const session = sessions.value.find(s => s.name === value?.name && s.createdAt === value.createdAt)
+    if (!session || !value.activity || typeof value.activity !== 'object') return false
+    liveActivity.set(value.name, { sequence: ++activitySequence, createdAt: value.createdAt, activity: value.activity })
+    // The notification already contains the authoritative state. A second HTTP
+    // round trip adds latency and can stall behind an unrelated list request.
+    sessions.value = sessions.value.map(s => s === session ? { ...s, activity: value.activity } : s)
+    connectionIssue.value = false
+    return true
+  }
   async function fetchSessions() {
     const sequence = ++fetchSequence
+    const activityAtStart = activitySequence
     fetching++
     try {
       const res = await fetch(hubUrl('/api/sessions'), { signal: AbortSignal.timeout(10000) })
@@ -126,7 +143,13 @@ export const useSessionStore = defineStore('sessions', () => {
       if (sequence !== fetchSequence) return
       connectionIssue.value = false
       void pruneContent(data.sessions)
-      sessions.value = data.sessions
+      sessions.value = data.sessions.map(session => {
+        const event = liveActivity.get(session.name)
+        return event && event.sequence > activityAtStart && event.createdAt === session.createdAt
+          ? { ...session, activity: event.activity } : session
+      })
+      for (const [name, event] of liveActivity) if (event.sequence <= activityAtStart ||
+        !sessions.value.some(s => s.name === name && s.createdAt === event.createdAt)) liveActivity.delete(name)
       sync.receive(data.shared)
       if (restoreSelection) {
         let saved
@@ -139,7 +162,7 @@ export const useSessionStore = defineStore('sessions', () => {
       } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) select(null)
       loaded.value = true
     } catch (error) {
-      if (sequence === fetchSequence) connectionIssue.value = true
+      if (sequence === fetchSequence && activitySequence === activityAtStart) connectionIssue.value = true
       throw error
     } finally {
       fetching--
@@ -244,7 +267,11 @@ export const useSessionStore = defineStore('sessions', () => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     ws = new WebSocket(`${proto}://${location.host}${hubUrl('/ws')}`)
 
-    ws.onmessage = () => {
+    ws.onmessage = event => {
+      try {
+        const message = JSON.parse(event.data)
+        if (message.event === 'session:activity' && receiveActivity(message.data)) return
+      } catch { /* A malformed notification falls back to a full reconciliation. */ }
       refreshVisible()
     }
 
@@ -302,6 +329,8 @@ export const useSessionStore = defineStore('sessions', () => {
     sessions,
     activityState,
     activityStatus,
+    setReadGuard,
+    markRead,
     connectionIssue,
     sortedSessions,
     archivedSessions,

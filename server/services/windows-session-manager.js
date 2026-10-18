@@ -113,15 +113,6 @@ class WindowsSessionManager extends Base {
     if (this.getSession(name).status !== 'running') throw new Error('会话已停止');
   }
   async history(name) { return this.call(this.getSession(name), '/history'); }
-  async mobile(name, full = false) {
-    await this.ensurePane(name);
-    const inputReceipts = this.activity.inputReceipts(name);
-    if (!full) {
-      const messages = this.activity.messages(name);
-      if (messages?.length) return { messages, inputReceipts, activity: this.getSession(name).activity };
-    }
-    return { ...await this.history(name), inputReceipts, activity: this.getSession(name).activity };
-  }
   input(name, { text, key }) {
     // Keep the fix in the Hub: already running ConPTY workers can keep their
     // terminals alive across this update, including workers from older versions.

@@ -12,7 +12,7 @@ import { useSessionStore } from '../stores/sessions'
 import ActivityBadge from './ActivityBadge.vue'
 import CodexQuestions from './CodexQuestions.vue'
 const emit = defineEmits(['show-execution'])
-const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, fontSize: { type: Number, default: 16 } })
+const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, readingVisible: { type: Boolean, default: true }, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const status = computed(() => session.value ? store.activityStatus(session.value) : null)
@@ -54,15 +54,22 @@ const outputSegments = computed(() => {
 })
 const positions = new Map()
 let timer, disposed = false, epoch = 0, visibleKey = null, switching = false
+// Selection and a completion notification are not proof that the reply was seen.
+// The content snapshot carries the completion it actually includes.
+const releaseReadGuard = store.setReadGuard(selected => props.readingVisible && follow.value &&
+  visibleKey === contentKey(selected, props.showExecution ? 'full' : 'answer') &&
+  content.value.completed === selected.activity?.completed)
+watch(() => props.readingVisible, () => store.markRead(), { flush: 'post' })
 function scrolled() {
   const p = pane.value
   if (!p || switching) return
   follow.value = p.scrollHeight - p.scrollTop - p.clientHeight < 70
   if (visibleKey) positions.set(visibleKey, { top:p.scrollTop, follow:follow.value })
+  store.markRead()
 }
-async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight }
+async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight; store.markRead() }
 async function display(entry, first = false) {
-  if (!entry || entry.data === content.value) return
+  if (!entry || entry.key !== visibleKey || entry.data === content.value) return
   content.value = markRaw(entry.data)
   const key = visibleKey
   await nextTick()
@@ -70,6 +77,7 @@ async function display(entry, first = false) {
   const position = positions.get(key)
   if (first && position && !position.follow) pane.value.scrollTop = position.top
   else if (follow.value && !window.getSelection()?.toString()) pane.value.scrollTop = pane.value.scrollHeight
+  store.markRead()
 }
 async function refresh(token = epoch) {
   if (disposed || token !== epoch) return
@@ -102,17 +110,17 @@ watch([() => store.current, () => props.showExecution], async ([name, full], pre
   const cached = selected ? peekContent(selected, view) : null
   content.value = {} // A different session must never display the previous session's text.
   if (cached) await display(cached, true)
+  if (disposed || token !== epoch) return
   if (!selected) { switching = false; return }
-  // Start current view and the other view independently; never wait for one to fetch the other.
+  // Validate the visible view, and only warm the other view when it is needed.
   void refresh(token)
   const other = full ? 'answer' : 'full'
-  void fetchContent(selected, other).then(entry => {
+  if (name !== previousName || !peekContent(selected, other)) void fetchContent(selected, other).then(entry => {
     if (token === epoch && other === 'answer') reconcilePending(name, entry.data)
   }).catch(() => {})
-  if (!cached) {
-    const stored = await loadContent(selected, view)
-    if (token === epoch && !Object.keys(content.value).length) await display(stored, true)
-  }
+  if (!cached) void loadContent(selected, view).then(stored => {
+    if (token === epoch && !Object.keys(content.value).length) return display(stored, true)
+  })
   if (token === epoch) { await nextTick(); switching = false }
 }, { immediate: true })
 watch(() => props.fontSize, async () => { if (follow.value) await bottom() })
@@ -151,7 +159,7 @@ async function send(key = 'Enter', withText = true) {
   }
   finally { sending.value = false }
 }
-onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer) })
+onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard() })
 </script>
 <template>
   <section class="mobile-terminal" :style="{ '--reading-size': `${fontSize}px` }">

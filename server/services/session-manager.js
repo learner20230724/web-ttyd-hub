@@ -379,11 +379,14 @@ class SessionManager extends EventEmitter {
 
   async mobile(name, full = false) {
     await this.ensurePane(name);
-    if (full) return this.history(name);
+    const activity = this.getSession(name).activity;
+    // Capture before reading history: a later completion must not acknowledge a
+    // terminal snapshot taken before that turn finished.
+    const completed = activity?.completed || null;
     const messages = this.activity.messages(name);
     const inputReceipts = this.activity.inputReceipts(name);
-    if (messages?.length) return { messages, inputReceipts, activity: this.getSession(name).activity };
-    return { ...await this.history(name), inputReceipts, activity: this.getSession(name).activity };
+    if (!full && messages?.length) return { messages, inputReceipts, completed, activity };
+    return { ...await this.history(name), inputReceipts, completed, activity };
   }
 
   input(name, { text, key }) {

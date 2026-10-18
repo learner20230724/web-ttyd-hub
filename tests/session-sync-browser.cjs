@@ -16,7 +16,7 @@ for (const [name, displayName, phase] of [['worker', '正在处理的项目', 'e
     activity: { available: true, phase, busy: phase === 'executing', completed: phase === 'completed' ? `${name}:1` : null } });
 }
 const app = express(); app.use(express.json());
-app.get('/api/sessions/:name/mobile', (_req, res) => res.json({ messages: [{ id: 'example', role: 'assistant', text: '这是一条合成测试回复。手机查看后，电脑上的绿色未读提醒也会消除。', phase: 'final_answer' }], version: 1 }));
+app.get('/api/sessions/:name/mobile', (req, res) => res.json({ messages: [{ id: 'example', role: 'assistant', text: '这是一条合成测试回复。手机查看后，电脑上的绿色未读提醒也会消除。', phase: 'final_answer' }], version: 1, completed: manager.sessions.get(req.params.name)?.activity.completed || null }));
 app.get('/api/sessions/:name/questions', (_req, res) => res.json({ available: false, questions: [] }));
 app.use('/api/sessions', routes(manager)); app.use(express.static(path.join(__dirname, '../server/public')));
 const card = (page, name) => page.locator(`.session-list [data-session-id="${name}"]`);
