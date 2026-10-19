@@ -93,3 +93,27 @@ test('one unreadable pane loses stale status while other panes continue to updat
   await fs.writeFile(file, JSON.stringify({ type: 'event_msg', payload: { type: 'task_started', turn_id: 't' } }) + '\n');
   await activity.update(good, { pid: 'good' }); assert.equal(good.activity.busy, true); assert.equal(good.activity.completed, null);
 });
+
+test('a missing terminal footer cannot discard a verified dialogue or completed turn', async t => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const { CodexActivity } = require('../server/services/codex-activity');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-footer-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'rollout.jsonl');
+  const row = (type, payload) => JSON.stringify({ type, timestamp: 'now', payload }) + '\n';
+  await fs.writeFile(file, row('event_msg', { type: 'task_started', turn_id: 'one' }) +
+    row('response_item', { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: '正在检查' }] }));
+  const session = { name: 'fixture', status: 'running' };
+  const manager = { sessions: new Map([[session.name, session]]), emit() {}, serialize: s => s };
+  const observer = { observe: async () => ({ detected: true, path: file }) };
+  const activity = new CodexActivity(manager, { observer }); activity.close();
+  const pane = { pid: 'fixture', id: '=__hub_missing_footer_fixture__' };
+  await activity.update(session, pane);
+  assert.equal(activity.messages(session.name)?.[0]?.text, '正在检查');
+  assert.equal(session.activity.available, true);
+  await fs.appendFile(file, row('response_item', { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: '这条最终回复必须在回答里显示' }] }) +
+    row('event_msg', { type: 'task_complete', turn_id: 'one' }));
+  await activity.update(session, pane);
+  assert.equal(activity.messages(session.name).at(-1).text, '这条最终回复必须在回答里显示');
+  assert.equal(session.activity.phase, 'completed');
+});

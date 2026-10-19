@@ -3,21 +3,31 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const { EventEmitter, once } = require('node:events');
 const path = require('node:path');
+const fs = require('node:fs/promises');
+const os = require('node:os');
 const { chromium } = require('playwright');
 const setupWebSocket = require('../server/ws');
 const SessionManager = require('../server/services/session-manager');
 const sessionRoutes = require('../server/routes/sessions');
+const SessionSync = require('../server/services/session-sync');
+const { CodexActivity } = require('../server/services/codex-activity');
 const createdAt = '2026-10-18T00:00:00Z';
 const make = name => ({ name, displayName: name, createdAt, shell: 'codex', status: 'running', activity: { available: true, busy: true, phase: 'working' } });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fixture(browser, { blockedStorage = false, unavailableAnswers = false, cachedAnswer = null } = {}) {
+async function fixture(browser, { blockedStorage = false, unavailableAnswers = false, cachedAnswer = null, sharedSync = false, footerFailure = false } = {}) {
   const sessions = [make('reader'), make('background')], manager = new EventEmitter();
+  if (sharedSync) {
+    manager.sessions = new Map(sessions.map(s => [s.name, s]));
+    manager.list = () => sessions;
+    manager.sync = new SessionSync(manager);
+    manager.sync.restore({ revision: 0, read: {}, layout: { order: ['reader', 'background'], pinned: [] } });
+  }
   const app = express(); app.use(express.json());
   const held = []; let holdLists = false, version = 0, inputs = 0, lists = 0, longContent = false;
   app.get('/api/sessions', (_req, res) => {
     lists++;
-    const data = structuredClone({ sessions });
+    const data = structuredClone({ sessions, shared: manager.sync?.snapshot() });
     if (holdLists) held.push(() => { if (!res.destroyed) res.json(data); });
     else res.json(data);
   });
@@ -33,6 +43,29 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     inputReceipts: () => [],
   };
   manager.history = async name => ({ text: `完整终端 ${name} 版本 ${version}` });
+  let sourceDirectory, finishSource;
+  if (footerFailure) {
+    sourceDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-reader-source-'));
+    const filename = path.join(sourceDirectory, 'rollout.jsonl');
+    const row = (type, payload) => JSON.stringify({ type, timestamp: '2026-10-19T00:00:00Z', payload }) + '\n';
+    const reply = (text, phase = 'commentary') => row('response_item', { type: 'message', role: 'assistant', phase, content: [{ type: 'output_text', text }] });
+    await fs.writeFile(filename, row('event_msg', { type: 'task_started', turn_id: 'one' }) +
+      reply('正在检查阅读模式') + row('response_item', { type: 'custom_tool_call', call_id: 'build', name: 'exec', input: 'npm run build' }));
+    manager.sessions = new Map(sessions.map(s => [s.name, s]));
+    manager.serialize = s => s;
+    manager.activity = new CodexActivity(manager, { observer: { observe: async () => ({ detected: true, path: filename }) } });
+    clearInterval(manager.activity.timer);
+    const pane = { pid: 'fixture', id: '=__hub_missing_footer_fixture__' };
+    await manager.activity.update(sessions[0], pane);
+    let finished = false;
+    manager.history = async () => ({ text: '• 正在检查阅读模式\n• Ran npm run build\n  └ TOOL_OUTPUT_FIXTURE\n' + (finished ? '• 最终回复：检查完成。' : '') });
+    finishSource = async () => {
+      await fs.appendFile(filename, row('response_item', { type: 'custom_tool_call_output', call_id: 'build', output: 'TOOL_OUTPUT_FIXTURE' }) +
+        reply('最终回复：检查完成。', 'final_answer') + row('event_msg', { type: 'task_complete', turn_id: 'one' }));
+      finished = true;
+      await manager.activity.update(sessions[0], pane);
+    };
+  }
   manager.mobile = SessionManager.prototype.mobile;
   app.use('/api/sessions', sessionRoutes(manager));
   app.get('/cache-seed', (_req, res) => res.send('<!doctype html><title>Cache fixture</title>'));
@@ -76,9 +109,10 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
   await page.locator('.mobile-session-title').waitFor();
   await pause(100);
   return {
-    page, sessions, manager, held, context,
+    page, sessions, manager, held, context, finishSource,
     get inputs() { return inputs; }, get lists() { return lists; },
     hold() { holdLists = true; },
+    allowNewLists() { holdLists = false; },
     release() { holdLists = false; held.splice(0).forEach(send => send()); },
     complete(name, notify = true) {
       const session = sessions.find(s => s.name === name);
@@ -88,7 +122,10 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     nextContent() { version++; },
     longContent() { longContent = true; version++; },
     answersAvailable(value) { unavailableAnswers = !value; },
-    async close() { await context.close(); wss.clients.forEach(ws => ws.terminate()); wss.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); },
+    async close() {
+      await context.close(); wss.clients.forEach(ws => ws.terminate()); wss.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+      if (sourceDirectory) { manager.activity.close(); await fs.rm(sourceDirectory, { recursive: true, force: true }); }
+    },
   };
 }
 
@@ -122,6 +159,37 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.locator('.unread-badge').waitFor({ timeout: 6500 });
       assert.equal(f.inputs, 0);
     });
+    for (const trigger of ['foreground', 'online']) await experiment(`${trigger} refreshes task states without waiting for a suspended list request`, {}, async f => {
+      f.hold();
+      await f.page.evaluate(() => window.dispatchEvent(new Event('online')));
+      while (!f.held.length) await pause(20);
+      f.complete('background', false); f.allowNewLists();
+      if (trigger === 'online') await f.page.evaluate(() => window.dispatchEvent(new Event('online')));
+      else await f.page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await f.page.locator('.unread-badge').waitFor({ timeout: 1500 });
+      f.release(); await pause(100);
+      assert.equal(await f.page.locator('.unread-badge').textContent(), '1', 'A suspended old list cannot overwrite the fresh completion');
+      assert.equal(f.inputs, 0);
+    });
+    await experiment('remote read and pin broadcasts apply even while every list response is held', { sharedSync: true }, async f => {
+      f.complete('background');
+      await f.page.locator('.unread-badge').waitFor({ timeout: 1500 });
+      f.hold();
+      await f.page.evaluate(() => window.dispatchEvent(new Event('online')));
+      while (!f.held.length) await pause(20);
+      f.manager.sync.apply({ type: 'read', name: 'background', createdAt, completed: 'background:done' });
+      f.manager.sync.apply({ type: 'pin', name: 'background', createdAt, pinned: true });
+      await f.page.locator('.unread-badge').waitFor({ state: 'hidden', timeout: 1500 });
+      await f.page.locator('[data-session-id="background"].pinned').waitFor({ state: 'attached', timeout: 1500 });
+      f.release(); await pause(100);
+      assert.equal(await f.page.locator('.unread-badge').count(), 0);
+      assert.equal(f.inputs, 0);
+    });
     await experiment('remove IndexedDB dependency: live answer/full remain usable', { blockedStorage: true }, async f => {
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 1500 });
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
@@ -129,19 +197,43 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
     });
-    await experiment('missing dialogue keeps live output visible in answer mode', { unavailableAnswers: true }, async f => {
+    await experiment('verified dialogue survives a failed footer capture and still differs from full execution output', { footerFailure: true }, async f => {
+      await f.page.locator('.message.assistant').filter({ hasText: '正在检查阅读模式' }).waitFor({ timeout: 1500 });
+      await f.finishSource();
+      await f.page.locator('.message.assistant').filter({ hasText: '最终回复：检查完成。' }).waitFor({ timeout: 1500 });
+      const reading = f.page.locator('.mobile-reading');
+      assert(!/TOOL_OUTPUT_FIXTURE|npm run build/.test(await reading.innerText()));
+      await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
+      await f.page.getByText(/TOOL_OUTPUT_FIXTURE[\s\S]*最终回复：检查完成。/).waitFor({ timeout: 1500 });
+      assert.match(await reading.innerText(), /npm run build/);
+      assert.equal(await f.page.locator('.message').count(), 0);
+      await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
+      await f.page.locator('.message.assistant').filter({ hasText: '最终回复：检查完成。' }).waitFor({ timeout: 500 });
+      assert(!/TOOL_OUTPUT_FIXTURE|npm run build/.test(await reading.innerText()));
+      assert.equal(f.inputs, 0);
+    });
+    await experiment('missing dialogue stays readable without labelling terminal output as an answer', { unavailableAnswers: true }, async f => {
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 2000 });
       assert.equal(await f.page.getByText('暂无可显示的回答', { exact: true }).count(), 0);
-      await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
-      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
+      const toggle = f.page.locator('.reading-control[aria-pressed]');
+      await f.page.waitForFunction(() => document.querySelector('.reading-control[aria-pressed]')?.textContent === '全文');
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
+      assert.equal(await toggle.textContent(), '回答');
+      await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
+      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
+      await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
+      await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
       f.answersAvailable(false); f.nextContent();
       await f.page.getByText('完整终端 reader 版本 1', { exact: true }).waitFor({ timeout: 2000 });
+      assert.equal(await toggle.textContent(), '全文');
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 1', { exact: true }).waitFor();
+      assert.equal(await toggle.textContent(), '回答');
+      assert.equal(await f.page.evaluate(() => JSON.parse(localStorage.getItem('web-ttyd-hub.mobile-reading.v1')).showExecution), false);
       assert.equal(f.inputs, 0);
     });
     for (const legacy of [false, true]) await experiment(legacy ? 'old disk terminal output does not hide the current output' : 'old disk dialogue does not hide a newer final terminal reply', {
@@ -208,13 +300,10 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     });
     await experiment('cached views switch immediately with network responses held', {}, async f => {
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
-      const modes = f.page.getByRole('group', { name: '阅读模式', exact: true });
-      const answerButton = modes.getByRole('button', { name: '隐藏执行过程', exact: true });
-      const fullButton = modes.getByRole('button', { name: '显示执行过程', exact: true });
-      assert.equal(await answerButton.getAttribute('aria-pressed'), 'true');
-      assert.equal(await fullButton.getAttribute('aria-pressed'), 'false');
-      await answerButton.tap();
-      assert.equal(await answerButton.getAttribute('aria-pressed'), 'true', 'Selecting answer again cannot toggle into full view');
+      const toggle = f.page.locator('.reading-control[aria-pressed]');
+      assert.equal(await toggle.count(), 1, 'Keep the original single toggle');
+      assert.equal(await toggle.textContent(), '回答');
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
@@ -225,8 +314,8 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
         await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
         await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
         await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
-        assert.equal(await answerButton.getAttribute('aria-pressed'), 'true');
-        assert.equal(await fullButton.getAttribute('aria-pressed'), 'false');
+        assert.equal(await toggle.textContent(), '回答');
+        assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
       }
       assert.equal(await f.page.getByLabel('消息输入').inputValue(), '未发送的草稿');
       assert.equal(f.inputs, 0);

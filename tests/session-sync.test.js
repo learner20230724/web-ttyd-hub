@@ -87,11 +87,22 @@ test('Real API broadcasts reads to two clients and returns uncached shared snaps
   const base = `http://127.0.0.1:${server.address().port}`;
   const clients = [new WebSocket(base.replace('http', 'ws') + '/ws'), new WebSocket(base.replace('http', 'ws') + '/ws')];
   t.after(async () => { for (const client of clients) client.terminate(); for (const client of wss.clients) client.terminate(); wss.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const snapshots = clients.map(client => once(client, 'message'));
   await Promise.all(clients.map(client => once(client, 'open')));
+  for (const [message] of await Promise.all(snapshots)) {
+    const snapshot = JSON.parse(message);
+    assert.equal(snapshot.event, 'session:snapshot');
+    assert.equal(snapshot.data.sessions.length, m.list().length);
+    assert.deepEqual(snapshot.data.shared, m.sync.snapshot());
+  }
   const messages = clients.map(client => once(client, 'message'));
   const res = await fetch(base + '/api/sessions/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(read('a')) });
   assert.equal(res.status, 200); assert.equal(res.headers.get('cache-control'), 'no-store');
-  for (const [message] of await Promise.all(messages)) assert.equal(JSON.parse(message).event, 'session:sync');
+  for (const [message] of await Promise.all(messages)) {
+    const notification = JSON.parse(message);
+    assert.equal(notification.event, 'session:sync');
+    assert.equal(notification.data.read.a.completed, 'a:turn-1', 'No second HTTP round trip is needed');
+  }
   const list = await fetch(base + '/api/sessions'); assert.equal(list.headers.get('cache-control'), 'no-store');
   assert.equal((await list.json()).shared.read.a.completed, 'a:turn-1');
 });

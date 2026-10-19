@@ -16,6 +16,12 @@ function setupWebSocket(server, sessionManager) {
   heartbeat.unref();
   server.on('close', () => clearInterval(heartbeat));
 
+  wss.on('connection', ws => {
+    if (sessionManager.list) ws.send(JSON.stringify({ event: 'session:snapshot', data: {
+      sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot(),
+    } }));
+  });
+
   function broadcast(event, data) {
     const message = JSON.stringify({ event, data });
     for (const client of wss.clients) {

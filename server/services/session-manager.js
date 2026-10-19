@@ -379,6 +379,10 @@ class SessionManager extends EventEmitter {
 
   async mobile(name, full = false) {
     await this.ensurePane(name);
+    // Discovery can still be in flight after startup or a temporary observation
+    // failure. Join it before substituting terminal output for an answer.
+    const session = this.getSession(name);
+    if (!full && (session.shell === 'codex' || session.activity?.detected) && !this.activity.messages(name)?.length) await this.activity.poll?.();
     const activity = this.getSession(name).activity;
     // Capture before reading history: a later completion must not acknowledge a
     // terminal snapshot taken before that turn finished.

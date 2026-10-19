@@ -116,7 +116,7 @@ async function consumeRollout(state, size) {
 }
 class CodexActivity {
   constructor(manager, { observer = new LinuxCodexObserver(), interval = 1500 } = {}) {
-    this.manager = manager; this.states = new Map(); this.polling = false; this.updates = new Map();
+    this.manager = manager; this.states = new Map(); this.polling = null; this.updates = new Map();
     this.questions = new (require('./codex-questions').CodexQuestions)(this);
     this.usage = new (require('./codex-usage').CodexUsage)();
     this.observer = observer;
@@ -140,11 +140,17 @@ class CodexActivity {
         : await this.observer.observe(pane.pid, pane.title);
       const filename = observed.path;
       let screenPhase = null;
-      if (observed.detected && process.platform !== 'win32') {
-        const { stdout } = await run('tmux', ['capture-pane', '-p', '-t', pane.id], { timeout: 2000, maxBuffer: 1024 * 1024 });
-        screenPhase = terminalStatus(stdout);
-      }
+      const readScreen = async () => {
+        if (!observed.detected || process.platform === 'win32') return;
+        // The footer supplements approval/retry status. A resize, detached pane
+        // or capture timeout cannot invalidate a verified rollout or its replies.
+        try {
+          const { stdout } = await run('tmux', ['capture-pane', '-p', '-t', pane.id], { timeout: 1000, maxBuffer: 1024 * 1024 });
+          screenPhase = terminalStatus(stdout);
+        } catch { /* Structured task events and dialogue remain authoritative. */ }
+      };
       if (!filename) {
+        await readScreen();
         this.states.delete(session.name);
         this.publish(session, { available: false, detected: observed.detected, busy: Boolean(screenPhase), phase: screenPhase || 'unknown', completed: null, source: screenPhase ? 'terminal' : null });
         return;
@@ -163,6 +169,7 @@ class CodexActivity {
       }
       await consumeRollout(state, stat.size);
       state.binding = threadId && observed.socket ? { threadId, socket: observed.socket, checkedAt: Date.now() } : null;
+      if (state.busy) await readScreen();
       // Approval dialogs aren't always persisted. Only a live footer can override
       // a working turn; it cannot turn an explicit completion into a new turn.
       const phase = this.questions.hasBlocking(threadId) ? 'waiting' : state.busy && ['waiting', 'retrying'].includes(screenPhase) ? screenPhase : state.phase;
@@ -175,9 +182,11 @@ class CodexActivity {
       this.publish(session, { available: false, busy: false, phase: 'unknown', completed: null, source: null });
     }
   }
-  async poll() {
-    if (this.polling) return;
-    this.polling = true;
+  poll() {
+    if (!this.polling) this.polling = this.pollSessions().finally(() => { this.polling = null; });
+    return this.polling;
+  }
+  async pollSessions() {
     try {
       let panes, windowsPaths;
       if (process.platform === 'win32') {
@@ -195,7 +204,6 @@ class CodexActivity {
     } catch {
       for (const session of this.manager.sessions.values()) this.publish(session, { available: false, busy: false, phase: 'unknown', completed: null, source: null });
     }
-    finally { this.polling = false; }
   }
   messages(name) { return this.states.get(name)?.messages || null; }
   inputReceipts(name) { return this.states.get(name)?.inputReceipts || []; }

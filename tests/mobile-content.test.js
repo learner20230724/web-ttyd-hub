@@ -6,6 +6,27 @@ for (const [platform, Manager] of [
   ['Linux', require('../server/services/session-manager')],
   ['Windows', require('../server/services/windows-session-manager')],
 ]) {
+  test(`${platform} loads the bound dialogue before falling back during the first observation`, async () => {
+    const session = { shell: 'codex', activity: { available: false } };
+    const replies = [{ id: 'final', role: 'assistant', text: 'Actual final reply' }];
+    let messages = null, polls = 0;
+    const manager = {
+      ensurePane: async () => {}, getSession: () => session,
+      activity: { messages: () => messages, inputReceipts: () => [], poll: async () => {
+        polls++; messages = replies; session.activity = { available: true, phase: 'completed', completed: 'one' };
+      } },
+      history: async () => ({ text: 'Terminal command and tool output\nActual final reply' }),
+    };
+    const answer = await Manager.prototype.mobile.call(manager, 'fixture');
+    assert.deepEqual(answer.messages, replies);
+    assert.equal(answer.completed, 'one');
+    assert.equal(answer.text, undefined);
+    assert.equal(polls, 1);
+    const full = await Manager.prototype.mobile.call(manager, 'fixture', true);
+    assert.match(full.text, /Terminal command and tool output/);
+    assert.equal(polls, 1, 'Full view does not wait on dialogue discovery');
+  });
+
   test(`${platform} keeps the final terminal reply readable when Codex dialogue is unavailable`, async () => {
     for (const session of [
       { shell: 'codex', activity: { available: false } },

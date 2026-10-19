@@ -76,7 +76,7 @@ class SessionSync {
       try { this.manager.state?.save(this.manager.list(), next); }
       catch { this.value = previous; throw Object.assign(new Error('无法保存会话状态，请稍后重试'), { status: 503 }); }
       // Persist before broadcasting so a successful receipt survives restart.
-      this.manager.emit('session:sync', { revision: next.revision });
+      this.manager.emit('session:sync', next);
     }
     return { shared: this.value, accepted: true };
   }

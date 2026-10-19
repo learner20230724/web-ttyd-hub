@@ -6,7 +6,7 @@ import { normalizeLayout, moveSession } from './session-layout.mjs'
 export function createSessionSync({ sessions, legacyRead, legacyLayout, apply, error, refresh }) {
   const migrationKey = 'web-ttyd-hub.shared-migrated.v1'
   const pendingKey = 'web-ttyd-hub.shared-pending.v1'
-  let shared = null, sending = false, disposed = false, migrated = false, pending = []
+  let shared = null, sending = null, disposed = false, migrated = false, pending = []
   try { migrated = localStorage.getItem(migrationKey) === '1' } catch {}
   try {
     const saved = JSON.parse(sessionStorage.getItem(pendingKey))
@@ -49,30 +49,39 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, apply, e
   }
   async function flush() {
     if (!shared || sending || disposed || !pending.length) return
-    sending = true
+    const request = new AbortController()
+    sending = request
+    const current = () => !disposed && sending === request && !request.signal.aborted
     try {
-      while (pending.length && !disposed) {
-        const res = await fetch(hubUrl('/api/sessions/sync'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(pending[0]), signal: AbortSignal.timeout(10000) })
+      while (pending.length && current()) {
+        let res
+        const timeout = setTimeout(() => request.abort(), 10000)
+        try {
+          res = await fetch(hubUrl('/api/sessions/sync'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pending[0]), signal: request.signal })
+          if (!current()) return
+          if (res.ok) {
+            const result = await res.json()
+            if (!current()) return
+            if (!accept(result.shared)) throw new Error('会话状态同步失败，稍后自动重试。')
+            pending.shift(); save(); render()
+            if (!result.accepted) refresh()
+          }
+        } finally { clearTimeout(timeout) }
         if (!res.ok) {
           if (res.status === 400) { pending.shift(); save(); render(); refresh() }
           throw new Error('会话状态尚未同步，联网后会自动重试。')
         }
-        const result = await res.json()
-        if (disposed) return
-        if (!accept(result.shared)) throw new Error('会话状态同步失败，稍后自动重试。')
-        pending.shift(); save(); render()
-        if (!result.accepted) refresh()
       }
-      error('')
+      if (current()) error('')
     } catch {
-      if (!disposed) error('会话状态尚未同步，联网后会自动重试。')
-    } finally { sending = false }
+      if (!disposed && sending === request) error('会话状态尚未同步，联网后会自动重试。')
+    } finally { if (sending === request) sending = null }
   }
   return {
     get enabled() { return shared !== null },
     receive(value) {
-      if (!accept(value)) return
+      if (!accept(value)) return false
       if (!migrated) {
         // Only the first device seeds ordering. Later devices cannot overwrite it
         // with an old local snapshot. Matching legacy reads can safely be merged.
@@ -85,8 +94,10 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, apply, e
         try { localStorage.setItem(migrationKey, '1') } catch {}
       }
       render(); void flush()
+      return true
     },
     enqueue(op) { pending.push(op); save(); render(); void flush() },
-    dispose() { disposed = true },
+    retry() { sending?.abort(); sending = null; void flush() },
+    dispose() { disposed = true; sending?.abort() },
   }
 }

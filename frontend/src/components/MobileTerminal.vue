@@ -11,8 +11,8 @@ import { ansiToRuns } from '../utils/ansi.mjs'
 import { useSessionStore } from '../stores/sessions'
 import ActivityBadge from './ActivityBadge.vue'
 import CodexQuestions from './CodexQuestions.vue'
-const emit = defineEmits(['show-execution'])
-const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, readingVisible: { type: Boolean, default: true }, fontSize: { type: Number, default: 16 } })
+const emit = defineEmits(['show-execution', 'answer-fallback'])
+const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, refreshRequest: Number, readingVisible: { type: Boolean, default: true }, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const status = computed(() => session.value ? store.activityStatus(session.value) : null)
@@ -26,6 +26,11 @@ const elapsed = computed(() => {
   return seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`
 })
 const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
+// The control describes what is actually visible. A temporary terminal fallback
+// must not masquerade as a successfully loaded answer or change the saved choice.
+watch([content, () => props.showExecution], ([data, full]) => {
+  emit('answer-fallback', !full && !data.messages?.length && ('text' in data || 'ansi' in data))
+}, { immediate: true })
 const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
 const drafts = new Map()
@@ -105,7 +110,7 @@ window.addEventListener('online', resumeReading)
 watch(() => [store.current, session.value?.activity?.completed], ([name, completed], previous) => {
   if (name === previous?.[0] && completed && completed !== previous?.[1]) void refresh(epoch, true)
 })
-watch([() => store.current, () => props.showExecution], async ([name, full], previous) => {
+watch([() => store.current, () => props.showExecution, () => props.refreshRequest], async ([name, full], previous) => {
   const previousName = previous?.[0]
   if (visibleKey && pane.value) positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
   if (previousName && name !== previousName) drafts.set(previousName, draft.value)

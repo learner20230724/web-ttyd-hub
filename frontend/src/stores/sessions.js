@@ -119,7 +119,7 @@ export const useSessionStore = defineStore('sessions', () => {
   let reconnectTimer = null
   let reconnectDelay = 1000
 
-  let fetchSequence = 0, fetching = 0, refreshPending = false, activitySequence = 0
+  let listRequest = null, refreshPending = false, activitySequence = 0
   const liveActivity = new Map()
   function receiveActivity(value) {
     const session = sessions.value.find(s => s.name === value?.name && s.createdAt === value.createdAt)
@@ -131,42 +131,59 @@ export const useSessionStore = defineStore('sessions', () => {
     connectionIssue.value = false
     return true
   }
+  function receiveList(data) {
+    connectionIssue.value = false
+    void pruneContent(data.sessions)
+    sessions.value = data.sessions
+    sync.receive(data.shared)
+    if (restoreSelection) {
+      let saved
+      try { saved = JSON.parse(localStorage.getItem(selectionKey)) } catch {}
+      // A failed request must not discard selection or attach to a replacement.
+      const previous = data.sessions.find(s => s.name === saved?.name &&
+        (s.createdAt || null) === saved?.createdAt && !s.archivedAt)
+      select(previous?.name || null)
+    } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) select(null)
+    loaded.value = true
+  }
+  function receiveSnapshot(data) {
+    if (!Array.isArray(data?.sessions)) return false
+    // The opening snapshot supersedes all HTTP work issued before reconnecting.
+    // It also recovers events sent while the new socket was being established.
+    listRequest?.abort(); listRequest = null; refreshPending = false
+    liveActivity.clear(); activitySequence++
+    receiveList(data)
+    return true
+  }
   async function fetchSessions() {
-    const sequence = ++fetchSequence
+    listRequest?.abort()
+    const request = new AbortController()
+    listRequest = request
+    const timeout = setTimeout(() => request.abort(), 10000)
     const activityAtStart = activitySequence
-    fetching++
     try {
-      const res = await fetch(hubUrl('/api/sessions'), { signal: AbortSignal.timeout(10000) })
+      const res = await fetch(hubUrl('/api/sessions'), { signal: request.signal, cache: 'no-store' })
       if (!res.ok) throw new Error('无法读取会话列表')
       const data = await res.json()
       if (!Array.isArray(data.sessions)) throw new Error('会话列表格式无效')
-      if (sequence !== fetchSequence) return
-      connectionIssue.value = false
-      void pruneContent(data.sessions)
-      sessions.value = data.sessions.map(session => {
+      if (listRequest !== request || request.signal.aborted) return
+      data.sessions = data.sessions.map(session => {
         const event = liveActivity.get(session.name)
         return event && event.sequence > activityAtStart && event.createdAt === session.createdAt
           ? { ...session, activity: event.activity } : session
       })
       for (const [name, event] of liveActivity) if (event.sequence <= activityAtStart ||
-        !sessions.value.some(s => s.name === name && s.createdAt === event.createdAt)) liveActivity.delete(name)
-      sync.receive(data.shared)
-      if (restoreSelection) {
-        let saved
-        try { saved = JSON.parse(localStorage.getItem(selectionKey)) } catch {}
-        // Restore only after a successful list response; failed requests must not
-        // discard the saved selection or attach to an unrelated recreated session.
-        const previous = data.sessions.find(s => s.name === saved?.name &&
-          (s.createdAt || null) === saved?.createdAt && !s.archivedAt)
-        select(previous?.name || null)
-      } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) select(null)
-      loaded.value = true
+        !data.sessions.some(s => s.name === name && s.createdAt === event.createdAt)) liveActivity.delete(name)
+      receiveList(data)
     } catch (error) {
-      if (sequence === fetchSequence && activitySequence === activityAtStart) connectionIssue.value = true
+      if (listRequest === request && activitySequence === activityAtStart) connectionIssue.value = true
       throw error
     } finally {
-      fetching--
-      if (!fetching && refreshPending) { refreshPending = false; refreshVisible() }
+      clearTimeout(timeout)
+      if (listRequest === request) {
+        listRequest = null
+        if (refreshPending) { refreshPending = false; refreshVisible() }
+      }
     }
   }
 
@@ -270,15 +287,17 @@ export const useSessionStore = defineStore('sessions', () => {
     ws.onmessage = event => {
       try {
         const message = JSON.parse(event.data)
+        if (message.event === 'session:snapshot' && receiveSnapshot(message.data)) return
         if (message.event === 'session:activity' && receiveActivity(message.data)) return
+        if (message.event === 'session:sync' && sync.receive(message.data)) return
       } catch { /* A malformed notification falls back to a full reconciliation. */ }
-      refreshVisible()
+      refreshVisible(true)
     }
 
     ws.onopen = () => {
       reconnectDelay = 1000
       // Recover completions that happened while a phone's connection was asleep.
-      refreshVisible()
+      refreshVisible(true)
     }
 
     ws.onclose = () => {
@@ -302,23 +321,35 @@ export const useSessionStore = defineStore('sessions', () => {
     fetchShells().catch(() => {})
     connectWs()
     refreshTimer = setInterval(refreshVisible, 5000)
-    document.addEventListener('visibilitychange', refreshVisible)
-    window.addEventListener('online', refreshVisible)
+    document.addEventListener('visibilitychange', resume)
+    window.addEventListener('online', resume)
   }
 
   // Phones can suspend a WebSocket without delivering close. Refresh on return
   // and periodically reconcile, even when no activity notification arrives.
-  const refreshVisible = () => {
+  const refreshVisible = (fresh = false) => {
     if (document.hidden) return
-    if (fetching) { refreshPending = true; return }
+    if (listRequest && !fresh) { refreshPending = true; return }
+    refreshPending = false
     fetchSessions().catch(() => {})
+  }
+  const resume = () => {
+    if (document.hidden) return
+    refreshVisible(true)
+    sync.retry()
+    // WebViews can keep an OPEN socket whose network connection died in the
+    // background. A fresh connection must not depend on its missing close event.
+    clearTimeout(reconnectTimer); reconnectTimer = null
+    if (ws) { ws.onopen = ws.onmessage = ws.onclose = null; ws.close() }
+    connectWs()
   }
   let refreshTimer
   onScopeDispose(() => {
     clearInterval(refreshTimer); clearTimeout(reconnectTimer)
+    listRequest?.abort(); listRequest = null
     if (ws) { ws.onclose = null; ws.close() }
-    document.removeEventListener('visibilitychange', refreshVisible)
-    window.removeEventListener('online', refreshVisible)
+    document.removeEventListener('visibilitychange', resume)
+    window.removeEventListener('online', resume)
   })
 
   async function create({ command, name, cwd, resumeThreadId }) {

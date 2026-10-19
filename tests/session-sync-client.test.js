@@ -59,3 +59,30 @@ test('Upgrade merges matching legacy reads, but never replaces an established se
   assert.deepEqual(requests, [readOp('turn-1')]);
   assert.deepEqual(f.view.value.layout, initial().layout);
 });
+
+test('foreground retry replaces a suspended write without letting its late response consume the next operation', async t => {
+  const f = await setup(t); let oldResponse, nextResponse, oldSignal, calls = 0;
+  const accepted = { ...initial(), revision: 1, read: { a: marker('turn-1') } };
+  t.mock.method(globalThis, 'fetch', (_url, options) => {
+    calls++;
+    if (calls === 1) {
+      oldSignal = options.signal;
+      return new Promise(resolve => { oldResponse = resolve });
+    }
+    if (calls === 3) return new Promise(resolve => { nextResponse = resolve });
+    return Promise.resolve(Response.json({ accepted: true, shared: accepted }));
+  });
+  const sync = f.open(); sync.receive(initial()); sync.enqueue(readOp('turn-1'));
+  sync.retry(); await settle();
+  assert.equal(oldSignal.aborted, true);
+  assert.equal(calls, 2);
+  assert.equal(JSON.parse(f.tab.get(pendingKey)).length, 0);
+  sync.enqueue({ type: 'pin', name: 'b', createdAt, pinned: true });
+  oldResponse(Response.json({ accepted: true, shared: initial() })); await settle();
+  assert.equal(f.view.value.read.a, 'turn-1');
+  assert.equal(JSON.parse(f.tab.get(pendingKey)).length, 1, 'An obsolete reply cannot remove the newer pending pin');
+  nextResponse(Response.json({ accepted: true, shared: { ...accepted, revision: 2, layout: { order: ['b', 'a'], pinned: ['b'] } } })); await settle();
+  assert.equal(JSON.parse(f.tab.get(pendingKey)).length, 0);
+  assert.deepEqual(f.view.value.layout.pinned, ['b']);
+  assert.equal(f.view.error, '');
+});

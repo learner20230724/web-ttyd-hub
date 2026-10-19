@@ -49,8 +49,21 @@ function transition(name, phase, completed = null) {
     }
     const phone = await client(true), desktop = await client(false);
     await select(phone.page, 'worker'); await phone.page.getByLabel('消息输入').fill('手机未发送的草稿');
+    // Hold the other device's list transport. Shared reads must still arrive
+    // over its socket, including the race while that socket reconnects.
+    const heldLists = [];
+    const holdList = async route => {
+      const response = await route.fetch();
+      heldLists.push(() => route.fulfill({ response }).catch(() => {}));
+    };
+    await desktop.context.route('**/api/sessions', holdList);
+    await desktop.page.evaluate(() => window.dispatchEvent(new Event('online')));
+    for (let i = 0; !heldLists.length && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert(heldLists.length, 'The old list must be held before reading on the phone');
     await select(phone.page, 'done');
-    await state(desktop.page, 'done', 'idle');
+    await card(desktop.page, 'done').locator('.activity-badge.idle').first().waitFor({ state: 'attached', timeout: 1500 });
+    await desktop.context.unroute('**/api/sessions', holdList);
+    await Promise.all(heldLists.map(release => release()));
     assert.match(await card(desktop.page, 'done').textContent(), /已完成 · 已读/);
     assert.equal(await desktop.page.locator('.session-card.active').count(), 0, 'Remote reads never switch selection');
     await select(desktop.page, 'second'); await state(phone.page, 'second', 'idle');
