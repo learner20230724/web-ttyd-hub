@@ -110,7 +110,20 @@ function transition(name, phase, completed = null) {
     await select(phone.page, 'done'); await state(desktop.page, 'done', 'idle');
 
     // Existing lifecycle broadcasts still synchronize names and archive/restore.
-    manager.rename('done', '各端已读状态一致');
+    await desktop.page.bringToFront(); await sidebar(desktop.page);
+    await card(desktop.page, 'done').getByLabel('会话操作菜单').click();
+    await desktop.page.getByRole('button', { name: '修改名称', exact: true }).click();
+    await card(desktop.page, 'done').getByLabel('会话名称 / Session name').fill('各端已读状态一致');
+    heldLists.length = 0;
+    await desktop.context.route('**/api/sessions', holdList);
+    await card(desktop.page, 'done').getByRole('button', { name: '保存 / Save', exact: true }).click();
+    for (let i = 0; !heldLists.length && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert(heldLists.length);
+    await desktop.page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await card(desktop.page, 'done').locator('.rename-form').waitFor({ state: 'detached', timeout: 1500 });
+    assert.equal(await card(desktop.page, 'done').getByRole('alert').count(), 0, 'Replacing a refresh must not report a successful edit as failed');
+    await desktop.context.unroute('**/api/sessions', holdList);
+    await Promise.all(heldLists.map(release => release()));
     await desktop.page.waitForFunction(() => document.querySelector('[data-session-id="done"] .session-name')?.textContent === '各端已读状态一致');
     manager.archive('second'); await card(desktop.page, 'second').waitFor({ state: 'detached' }); await card(phone.page, 'second').waitFor({ state: 'detached' });
     manager.restoreArchived('second'); await card(desktop.page, 'second').waitFor(); await card(phone.page, 'second').waitFor({ state: 'attached' });

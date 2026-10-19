@@ -176,7 +176,10 @@ export const useSessionStore = defineStore('sessions', () => {
         !data.sessions.some(s => s.name === name && s.createdAt === event.createdAt)) liveActivity.delete(name)
       receiveList(data)
     } catch (error) {
-      if (listRequest === request && activitySequence === activityAtStart) connectionIssue.value = true
+      // Reconnect/snapshot intentionally replaces this read; callers of a
+      // successful rename/create must not receive a spurious cancellation error.
+      if (listRequest !== request) return
+      if (activitySequence === activityAtStart) connectionIssue.value = true
       throw error
     } finally {
       clearTimeout(timeout)
