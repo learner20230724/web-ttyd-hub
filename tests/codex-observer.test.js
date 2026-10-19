@@ -27,6 +27,35 @@ test('unix socket peers bind only a client actually connected to the managed dae
   assert.deepEqual([...daemonPeers(rows)], [['10', '20']]);
 });
 
+test('default Codex titles truncate thread and project names without losing identity', () => {
+  const name = '修复'.repeat(25), project = 'a-project-directory-name-longer-than-24';
+  const root = candidate('root', name, 'cli', '/work/' + project);
+  const displayed = '修复'.repeat(22) + '修... | a-project-directory-n...';
+  assert.equal(selectRollout([root], displayed, true), root);
+  assert.equal(selectRollout([root], '⠋ ' + displayed, true), root);
+  assert.equal(selectRollout([root], '[ ! ] Action Required | ' + displayed, true), root);
+  assert.equal(selectRollout([root, candidate('duplicate', name + '二', 'cli', '/work/' + project)], displayed, true), null,
+    'Truncation collisions must not mix two conversations');
+});
+
+test('shared title uses the project root when Codex starts in a nested directory', async t => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const { DatabaseSync } = require('node:sqlite');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-title-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const project = path.join(dir, 'project'), cwd = path.join(project, 'src', 'nested');
+  await fs.mkdir(cwd, { recursive: true });
+  await fs.mkdir(path.join(project, '.git'));
+  await fs.mkdir(path.join(dir, 'sessions', 'today'), { recursive: true });
+  const file = path.join(dir, 'sessions', 'today', 'rollout-one.jsonl');
+  await fs.writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id: 'one', source: 'cli', cwd } }) + '\n');
+  const dbfile = path.join(dir, 'state_5.sqlite'), db = new DatabaseSync(dbfile);
+  db.exec('CREATE TABLE threads (id TEXT, name TEXT)');
+  db.prepare('INSERT INTO threads VALUES (?, ?)').run('one', '项目子目录任务'); db.close();
+  assert.equal(await resolveRollout([file, dbfile], '项目子目录任务 | project', true), file);
+  assert.equal(await resolveRollout([file, dbfile], '项目子目录任务 | unrelated', true), null);
+});
+
 test('action-required title animation keeps the same thread bound without relaxing identity checks', () => {
   const root = candidate('root', '当前工作');
   const other = candidate('other', '其他工作');

@@ -11,11 +11,12 @@ const SessionManager = require('../server/services/session-manager');
 const sessionRoutes = require('../server/routes/sessions');
 const SessionSync = require('../server/services/session-sync');
 const { CodexActivity } = require('../server/services/codex-activity');
+const { resolveRollout } = require('../server/services/codex-observer');
 const createdAt = '2026-10-18T00:00:00Z';
 const make = name => ({ name, displayName: name, createdAt, shell: 'codex', status: 'running', activity: { available: true, busy: true, phase: 'working' } });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fixture(browser, { blockedStorage = false, unavailableAnswers = false, cachedAnswer = null, sharedSync = false, footerFailure = false } = {}) {
+async function fixture(browser, { blockedStorage = false, unavailableAnswers = false, cachedAnswer = null, sharedSync = false, footerFailure = false, titleBinding = false } = {}) {
   const sessions = [make('reader'), make('background')], manager = new EventEmitter();
   if (sharedSync) {
     manager.sessions = new Map(sessions.map(s => [s.name, s]));
@@ -44,18 +45,33 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
   };
   manager.history = async name => ({ text: `完整终端 ${name} 版本 ${version}` });
   let sourceDirectory, finishSource;
-  if (footerFailure) {
+  if (footerFailure || titleBinding) {
     sourceDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-reader-source-'));
-    const filename = path.join(sourceDirectory, 'rollout.jsonl');
+    const directory = path.join(sourceDirectory, 'sessions', 'today');
+    await fs.mkdir(directory, { recursive: true });
+    const filename = path.join(directory, 'rollout-fixture.jsonl');
+    let observe = async () => ({ detected: true, path: filename });
+    let metadata = '';
+    if (titleBinding) {
+      const { DatabaseSync } = require('node:sqlite');
+      const project = path.join(sourceDirectory, 'project-name-longer-than-terminal-limit'), cwd = path.join(project, 'frontend', 'src');
+      await fs.mkdir(cwd, { recursive: true }); await fs.mkdir(path.join(project, '.git'));
+      const database = path.join(sourceDirectory, 'state_5.sqlite'), db = new DatabaseSync(database);
+      db.exec('CREATE TABLE threads (id TEXT, name TEXT, cwd TEXT)');
+      db.prepare('INSERT INTO threads VALUES (?, ?, ?)').run('fixture', '对话'.repeat(25), cwd); db.close();
+      metadata = JSON.stringify({ type: 'session_meta', payload: { id: 'fixture', source: 'cli', cwd } }) + '\n';
+      observe = async () => ({ detected: true, path: await resolveRollout([filename, database],
+        '⠋ ' + '对话'.repeat(22) + '对... | project-name-longer-t...', true) });
+    }
     const row = (type, payload) => JSON.stringify({ type, timestamp: '2026-10-19T00:00:00Z', payload }) + '\n';
     const reply = (text, phase = 'commentary') => row('response_item', { type: 'message', role: 'assistant', phase, content: [{ type: 'output_text', text }] });
-    await fs.writeFile(filename, row('event_msg', { type: 'task_started', turn_id: 'one' }) +
+    await fs.writeFile(filename, metadata + row('event_msg', { type: 'task_started', turn_id: 'one' }) +
       row('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<send_user_message_question_reply>\n' +
         JSON.stringify([{ answer: '查看实际界面', question: '要看哪里？', questionItemId: 'transport-id-must-stay-hidden' }]) + '\n</send_user_message_question_reply>' }] }) +
       reply('正在检查阅读模式') + row('response_item', { type: 'custom_tool_call', call_id: 'build', name: 'exec', input: 'npm run build' }));
     manager.sessions = new Map(sessions.map(s => [s.name, s]));
     manager.serialize = s => s;
-    manager.activity = new CodexActivity(manager, { observer: { observe: async () => ({ detected: true, path: filename }) } });
+    manager.activity = new CodexActivity(manager, { observer: { observe } });
     clearInterval(manager.activity.timer);
     const pane = { pid: 'fixture', id: '=__hub_missing_footer_fixture__' };
     await manager.activity.update(sessions[0], pane);
@@ -199,12 +215,16 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
     });
-    await experiment('verified dialogue survives a failed footer capture and still differs from full execution output', { footerFailure: true }, async f => {
+    for (const titleBinding of [false, true]) await experiment(titleBinding
+      ? 'truncated nested-project title discovers the final answer and completion without input'
+      : 'verified dialogue survives a failed footer capture and still differs from full execution output',
+    titleBinding ? { titleBinding: true } : { footerFailure: true }, async f => {
       await f.page.locator('.message.assistant').filter({ hasText: '正在检查阅读模式' }).waitFor({ timeout: 1500 });
       assert.equal(await f.page.locator('.message.user .markdown').innerText(), '查看实际界面');
       assert(!/send_user_message_question_reply|transport-id/.test(await f.page.locator('.mobile-reading').innerText()));
       await f.finishSource();
       await f.page.locator('.message.assistant').filter({ hasText: '最终回复：检查完成。' }).waitFor({ timeout: 1500 });
+      assert.match(await f.page.locator('.mobile-session-header').innerText(), /已完成/);
       const reading = f.page.locator('.mobile-reading');
       assert(!/TOOL_OUTPUT_FIXTURE|npm run build/.test(await reading.innerText()));
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
@@ -216,14 +236,16 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       assert(!/TOOL_OUTPUT_FIXTURE|npm run build/.test(await reading.innerText()));
       assert.equal(f.inputs, 0);
     });
-    await experiment('missing dialogue stays readable without labelling terminal output as an answer', { unavailableAnswers: true }, async f => {
+    await experiment('missing dialogue never takes ownership of the reading toggle', { unavailableAnswers: true }, async f => {
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 2000 });
       assert.equal(await f.page.getByText('暂无可显示的回答', { exact: true }).count(), 0);
       const toggle = f.page.locator('.reading-control[aria-pressed]');
-      await f.page.waitForFunction(() => document.querySelector('.reading-control[aria-pressed]')?.textContent === '全文');
-      assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
-      await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
-      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
+      for (const full of [true, false, true, false]) {
+        await toggle.tap();
+        assert.equal(await toggle.getAttribute('aria-pressed'), String(full));
+        assert.equal(await toggle.textContent(), full ? '全文' : '回答');
+        assert.equal(await f.page.evaluate(() => JSON.parse(localStorage.getItem('web-ttyd-hub.mobile-reading.v1')).showExecution), full);
+      }
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
       assert.equal(await toggle.textContent(), '回答');
@@ -233,7 +255,7 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
       f.answersAvailable(false); f.nextContent();
       await f.page.getByText('完整终端 reader 版本 1', { exact: true }).waitFor({ timeout: 2000 });
-      assert.equal(await toggle.textContent(), '全文');
+      assert.equal(await toggle.textContent(), '回答');
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 1', { exact: true }).waitFor();
       assert.equal(await toggle.textContent(), '回答');

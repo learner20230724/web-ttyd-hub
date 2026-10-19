@@ -56,6 +56,24 @@ async function metadata(filename) {
   } finally { await file.close(); }
 }
 function plainTitle(title) { return String(title || '').replace(/^(?:[\u2800-\u28ff✓✔●]+\s+)+/u, '').trim(); }
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+function titlePart(value, limit) {
+  const chars = [...graphemes.segment(value)].map(part => part.segment);
+  return chars.length <= limit ? value : chars.slice(0, limit - 3).join('') + '...';
+}
+async function projectName(cwd) {
+  // Codex's default project label is the repository root, even when the CLI
+  // starts in a subdirectory. Worktrees use a .git file instead of a directory.
+  let dir = cwd, configuredRoot;
+  while (dir && path.isAbsolute(dir)) {
+    if (await fs.stat(path.join(dir, '.git')).then(() => true, () => false)) return path.basename(dir);
+    if (!configuredRoot && await fs.stat(path.join(dir, '.codex', 'config.toml')).then(s => s.isFile(), () => false)) configuredRoot = dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.basename(configuredRoot || cwd);
+}
 function selectRollout(candidates, title, shared) {
   const roots = candidates.filter(c => c.meta?.id && !JSON.stringify(c.meta.source || '').includes('subagent'));
   if (!shared && roots.length === 1) return roots[0];
@@ -66,7 +84,13 @@ function selectRollout(candidates, title, shared) {
   const labels = new Set([label, plainTitle(label.replace(/^\[ [!.] \] Action Required \| /, ''))]);
   // Match the full title, including project, and require uniqueness. In particular,
   // a saved Hub thread id is NOT proof after /new, /resume or a process restart.
-  const matches = roots.filter(c => c.name && labels.has(`${c.name} | ${path.basename(c.meta.cwd || '')}`));
+  const matches = roots.filter(c => {
+    if (!c.name) return false;
+    const name = c.name.trim(), project = c.projectName ?? path.basename(c.meta.cwd || '');
+    // Codex 0.162 renders at most 48/24 graphemes. Compare the exact rendered
+    // title, and still reject collisions introduced by the truncation itself.
+    return labels.has(`${name} | ${project}`) || labels.has(`${titlePart(name, 48)} | ${titlePart(project, 24)}`);
+  });
   return matches.length === 1 ? matches[0] : null;
 }
 async function resolveRollout(files, title, shared = false) {
@@ -82,11 +106,22 @@ async function resolveRollout(files, title, shared = false) {
       let db;
       try {
         db = new DatabaseSync(filename, { readOnly: true });
-        const query = db.prepare('SELECT name FROM threads WHERE id = ?');
-        for (const candidate of candidates) candidate.name = query.get(candidate.meta?.id)?.name;
+        const hasCwd = db.prepare('PRAGMA table_info(threads)').all().some(column => column.name === 'cwd');
+        const query = db.prepare(`SELECT name${hasCwd ? ', cwd' : ''} FROM threads WHERE id = ?`);
+        for (const candidate of candidates) {
+          const row = query.get(candidate.meta?.id);
+          candidate.name = row?.name;
+          candidate.cwd = row?.cwd || candidate.meta?.cwd || '';
+        }
       } finally { db?.close(); }
     }
   } catch { /* Unavailable metadata leaves an ambiguous daemon unbound. */ }
+  const projects = new Map();
+  for (const candidate of candidates) if (candidate.name) {
+    const cwd = candidate.cwd || candidate.meta?.cwd || '';
+    if (!projects.has(cwd)) projects.set(cwd, projectName(cwd));
+    candidate.projectName = await projects.get(cwd);
+  }
   return selectRollout(candidates, title, shared)?.path || null;
 }
 

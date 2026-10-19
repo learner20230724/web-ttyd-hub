@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, provide, watch, defineAsyncComponent } from "vue";
+import { ref, provide, watch, defineAsyncComponent } from "vue";
 import Sidebar from "./components/Sidebar.vue";
 import MobileTerminal from "./components/MobileTerminal.vue";
 const TerminalView = defineAsyncComponent(() => import("./components/TerminalView.vue"));
@@ -18,12 +18,6 @@ let savedReading = {};
 try { savedReading = JSON.parse(localStorage.getItem(readingKey)) || {}; } catch {}
 const navigationOpen = ref(false);
 const showExecution = ref(savedReading.showExecution === true);
-const answerFallback = ref(false), readingRefresh = ref(0);
-const displayingExecution = computed(() => showExecution.value || answerFallback.value);
-function toggleReading() {
-  if (answerFallback.value && !showExecution.value) readingRefresh.value++;
-  else showExecution.value = !showExecution.value;
-}
 const readingSize = ref(Number.isFinite(savedReading.fontSize) ? Math.max(4, Math.min(24, savedReading.fontSize)) : 16);
 watch([showExecution, readingSize], () => {
   try { localStorage.setItem(readingKey, JSON.stringify({ showExecution: showExecution.value, fontSize: readingSize.value })); } catch {}
@@ -102,10 +96,10 @@ function handleMobileOverlayClick() {
         <button type="button" class="reading-control navigation-toggle" :class="{ selected: navigationOpen }"
           aria-label="方向键与回车" :aria-expanded="navigationOpen" aria-controls="mobile-navigation"
           @click="navigationOpen = !navigationOpen">✥</button>
-        <button type="button" class="reading-control" :class="{ selected: displayingExecution }"
-          :aria-pressed="displayingExecution" :aria-label="displayingExecution ? '隐藏执行过程' : '显示执行过程'"
-          :title="answerFallback ? '暂时显示终端全文，点击重试回答' : showExecution ? '显示全部终端输出，点击只看回答' : '只看回答，点击显示全部终端输出'"
-          @click="toggleReading">{{ displayingExecution ? '全文' : '回答' }}</button>
+        <button type="button" class="reading-control" :class="{ selected: showExecution }"
+          :aria-pressed="showExecution" :aria-label="showExecution ? '隐藏执行过程' : '显示执行过程'"
+          :title="showExecution ? '显示全部终端输出，点击只看回答' : '只看回答，点击显示全部终端输出'"
+          @click="showExecution = !showExecution">{{ showExecution ? '全文' : '回答' }}</button>
         <button type="button" class="reading-control" aria-label="缩小字体" :disabled="readingSize <= 4" @click="readingSize = Math.max(4, readingSize - 1)">A−</button>
         <button type="button" class="reading-control" aria-label="放大字体" :disabled="readingSize >= 24" @click="readingSize = Math.min(24, readingSize + 1)">A+</button>
       </div>
@@ -125,8 +119,8 @@ function handleMobileOverlayClick() {
         @usage="showUsageDialog = true; if (isMobile) sidebarCollapsed = true"
       />
 
-      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :refresh-request="readingRefresh" :font-size="readingSize" :navigation-open="navigationOpen" :reading-visible="sidebarCollapsed"
-        @answer-fallback="answerFallback = $event" @show-execution="showExecution = true; navigationOpen ||= $event" />
+      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen" :reading-visible="sidebarCollapsed"
+        @show-execution="showExecution = true; navigationOpen ||= $event" />
       <TerminalView v-else @create="showCreateDialog = true" />
     </div>
 

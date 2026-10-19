@@ -10,6 +10,7 @@ test('completion colors respect outcomes, availability, read markers, and connec
     assert.equal(status({ ...s, activity: { ...s.activity, phase, busy: ['thinking', 'executing', 'waiting'].includes(phase) } }).state, expected);
   }
   assert.equal(status({ ...s, activity: { available: false, completed: 'old' } }).state, 'unknown');
+  assert.equal(status({ ...s, activity: { available: false, phase: 'unknown' } }).label, '已连接');
   assert.equal(status(s, {}, true).label, '连接中断');
   assert.equal(status({ ...s, status: 'stopped' }).state, 'idle');
   assert.equal(status({ ...s, shell: 'bash', activity: { available: false } }).label, '终端就绪');
