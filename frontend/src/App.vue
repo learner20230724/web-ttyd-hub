@@ -96,10 +96,14 @@ function handleMobileOverlayClick() {
         <button type="button" class="reading-control navigation-toggle" :class="{ selected: navigationOpen }"
           aria-label="方向键与回车" :aria-expanded="navigationOpen" aria-controls="mobile-navigation"
           @click="navigationOpen = !navigationOpen">✥</button>
-        <button type="button" class="reading-control" :class="{ selected: showExecution }"
-          :aria-pressed="showExecution" :aria-label="showExecution ? '隐藏执行过程' : '显示执行过程'"
-          :title="showExecution ? '显示全部终端输出，点击只看回答' : '只看回答，点击显示全部终端输出'"
-          @click="showExecution = !showExecution">{{ showExecution ? '全文' : '回答' }}</button>
+        <div class="reading-modes" role="group" aria-label="阅读模式">
+          <button type="button" class="reading-control" :class="{ selected: !showExecution }"
+            :aria-pressed="!showExecution" aria-label="隐藏执行过程" title="回答：显示对话内容"
+            @click="showExecution = false">回答</button>
+          <button type="button" class="reading-control" :class="{ selected: showExecution }"
+            :aria-pressed="showExecution" aria-label="显示执行过程" title="全文：显示终端及执行记录"
+            @click="showExecution = true">全文</button>
+        </div>
         <button type="button" class="reading-control" aria-label="缩小字体" :disabled="readingSize <= 4" @click="readingSize = Math.max(4, readingSize - 1)">A−</button>
         <button type="button" class="reading-control" aria-label="放大字体" :disabled="readingSize >= 24" @click="readingSize = Math.min(24, readingSize + 1)">A+</button>
       </div>
@@ -141,6 +145,8 @@ function handleMobileOverlayClick() {
 @keyframes working-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .working-badge::before { animation:none; } }
 .reading-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+.reading-modes { display:flex; border:1px solid #344259; border-radius:8px; }
+.reading-modes .reading-control { min-width:36px; padding-left:5px; padding-right:5px; }
 .reading-control { min-width:40px; min-height:44px; padding:4px 6px; border:0; border-radius:7px; background:transparent; color:#a8b6ca; font-size:13px; cursor:pointer; }
 .navigation-toggle { font-size:20px; }
 .reading-control.selected { color:#7dd3fc; background:#19344b; }
@@ -150,6 +156,10 @@ function handleMobileOverlayClick() {
   .toolbar-left { gap:6px !important; min-width:0; }
   .toolbar-title { font-size:14px !important; white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   .logo-wrapper { display:none !important; }
+}
+@media (max-width: 359px) {
+  .toolbar-title { display:none; }
+  .reading-controls > .reading-control { min-width:34px; padding-left:4px; padding-right:4px; }
 }
 
 .app-layout {

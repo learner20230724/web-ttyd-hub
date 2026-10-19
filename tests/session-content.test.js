@@ -32,34 +32,51 @@ test('a synchronously rejected fetch cannot leave a permanently pending reading 
   assert.equal(calls, 2); assert.equal(recovered.data.text, 'Recovered full view');
 });
 
-test('missing dialogue and old terminal fallbacks cannot replace a cached Codex answer', async t => {
+test('a live terminal reply is not hidden behind an older structured answer', async t => {
   const { fetchContent } = await modulePromise;
   const session = { name: 'answer-gap', createdAt: '2026-10-18', shell: 'codex' };
   const responses = [
     { messages: [{ id: 'one', text: 'Actual answer' }], completed: 'one' },
-    { messages: [], answerUnavailable: true, completed: null },
-    { text: 'Legacy terminal fallback', completed: 'two' },
+    { text: 'New final reply from the live terminal', completed: 'two' },
     { messages: [{ id: 'two', text: 'Recovered answer' }], completed: 'two' },
   ];
   t.mock.method(globalThis, 'fetch', async () => Response.json(responses.shift()));
-  const answer = await fetchContent(session, 'answer');
-  assert.equal(await fetchContent(session, 'answer'), answer);
-  assert.equal(await fetchContent(session, 'answer'), answer);
+  assert.equal((await fetchContent(session, 'answer')).data.messages[0].text, 'Actual answer');
+  assert.equal((await fetchContent(session, 'answer')).data.text, 'New final reply from the live terminal');
   assert.equal((await fetchContent(session, 'answer')).data.messages[0].text, 'Recovered answer');
 });
 
-test('a legacy terminal cached before Codex detection is not reused as an answer', async t => {
+test('detecting Codex cannot discard readable output already cached on the phone', async t => {
   const { fetchContent, peekContent, loadContent } = await modulePromise;
   const session = { name: 'detected-later', createdAt: '2026-10-18', shell: 'bash' };
   t.mock.method(globalThis, 'fetch', async () => Response.json({ text: 'Legacy full terminal output' }));
   assert.equal((await fetchContent(session, 'answer')).data.text, 'Legacy full terminal output');
   session.activity = { detected: true, available: false };
-  assert.equal(peekContent(session, 'answer'), null);
-  assert.equal(await loadContent(session, 'answer'), null);
+  assert.equal(peekContent(session, 'answer').data.text, 'Legacy full terminal output');
+  assert.equal((await loadContent(session, 'answer')).data.text, 'Legacy full terminal output');
   const answer = await fetchContent(session, 'answer');
-  assert.deepEqual(answer.data.messages, []);
-  assert.equal(answer.data.text, undefined);
-  assert.equal(answer.data.answerUnavailable, true);
-  assert.equal(peekContent(session, 'answer'), null, 'An unavailable response must not overwrite the persistent answer cache');
+  assert.equal(answer.data.text, 'Legacy full terminal output');
   assert.equal((await fetchContent(session, 'full')).data.text, 'Legacy full terminal output');
+});
+
+test('foreground refresh replaces a suspended request and a late response cannot overwrite the final reply', async t => {
+  const { fetchContent, peekContent } = await modulePromise;
+  const session = { name: 'suspended-request', createdAt: '2026-10-19', shell: 'codex' };
+  let finishOld, oldSignal, calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, { signal }) => {
+    if (++calls === 1) {
+      oldSignal = signal;
+      // Simulate a WebView transport that does not settle promptly on abort.
+      return new Promise(resolve => { finishOld = () => resolve(Response.json({ messages: [{ text: 'Old progress' }] })); });
+    }
+    return Response.json({ messages: [{ text: 'Final answer' }], completed: 'done' });
+  });
+  const old = fetchContent(session, 'answer');
+  const rejected = assert.rejects(old, { name: 'AbortError' });
+  await Promise.resolve();
+  const fresh = await fetchContent(session, 'answer', { fresh: true });
+  assert.equal(oldSignal.aborted, true);
+  assert.equal(fresh.data.messages[0].text, 'Final answer');
+  finishOld(); await rejected;
+  assert.equal(peekContent(session, 'answer'), fresh);
 });

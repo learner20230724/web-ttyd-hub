@@ -53,7 +53,7 @@ const outputSegments = computed(() => {
   return renderedOutput.get(data)
 })
 const positions = new Map()
-let timer, disposed = false, epoch = 0, visibleKey = null, switching = false
+let timer, disposed = false, epoch = 0, refreshSequence = 0, visibleKey = null, switching = false
 // Selection and a completion notification are not proof that the reply was seen.
 // The content snapshot carries the completion it actually includes.
 const releaseReadGuard = store.setReadGuard(selected => props.readingVisible && follow.value &&
@@ -79,14 +79,16 @@ async function display(entry, first = false) {
   else if (follow.value && !window.getSelection()?.toString()) pane.value.scrollTop = pane.value.scrollHeight
   store.markRead()
 }
-async function refresh(token = epoch) {
+async function refresh(token = epoch, fresh = false) {
   if (disposed || token !== epoch) return
   clearTimeout(timer)
   const selected = session.value, view = props.showExecution ? 'full' : 'answer'
-  if (!selected || document.hidden) { timer = setTimeout(() => refresh(token), 1200); return }
+  if (!selected || document.hidden) return
+  const sequence = ++refreshSequence
+  const current = () => !disposed && token === epoch && sequence === refreshSequence
   try {
-    const entry = await fetchContent(selected, view)
-    if (disposed || token !== epoch) return
+    const entry = await fetchContent(selected, view, { fresh })
+    if (!current()) return
     if (view === 'answer') reconcilePending(selected.name, entry.data)
     await display(entry)
     error.value = ''
@@ -94,9 +96,15 @@ async function refresh(token = epoch) {
       void fetchContent(selected, 'answer').then(answer => { if (token === epoch) reconcilePending(selected.name, answer.data) }).catch(() => {})
     }
   } catch (e) {
-    if (token === epoch) error.value = Object.keys(content.value).length ? '正在显示缓存，暂时无法更新。' : e.message
-  } finally { if (!disposed && token === epoch) { clearTimeout(timer); timer = setTimeout(() => refresh(token), 1200) } }
+    if (current()) error.value = Object.keys(content.value).length ? '正在显示缓存，暂时无法更新。' : e.message
+  } finally { if (current() && !document.hidden) { clearTimeout(timer); timer = setTimeout(() => refresh(token), 1200) } }
 }
+function resumeReading() { if (!document.hidden) void refresh(epoch, true); else clearTimeout(timer) }
+document.addEventListener('visibilitychange', resumeReading)
+window.addEventListener('online', resumeReading)
+watch(() => [store.current, session.value?.activity?.completed], ([name, completed], previous) => {
+  if (name === previous?.[0] && completed && completed !== previous?.[1]) void refresh(epoch, true)
+})
 watch([() => store.current, () => props.showExecution], async ([name, full], previous) => {
   const previousName = previous?.[0]
   if (visibleKey && pane.value) positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
@@ -113,13 +121,13 @@ watch([() => store.current, () => props.showExecution], async ([name, full], pre
   if (disposed || token !== epoch) return
   if (!selected) { switching = false; return }
   // Validate the visible view, and only warm the other view when it is needed.
-  void refresh(token)
+  void refresh(token, true)
   const other = full ? 'answer' : 'full'
   if (name !== previousName || !peekContent(selected, other)) void fetchContent(selected, other).then(entry => {
     if (token === epoch && other === 'answer') reconcilePending(name, entry.data)
   }).catch(() => {})
   if (!cached) void loadContent(selected, view).then(stored => {
-    if (token === epoch && (!Object.keys(content.value).length || content.value.answerUnavailable)) return display(stored, true)
+    if (token === epoch && !Object.keys(content.value).length) return display(stored, true)
   })
   if (token === epoch) { await nextTick(); switching = false }
 }, { immediate: true })
@@ -159,7 +167,10 @@ async function send(key = 'Enter', withText = true) {
   }
   finally { sending.value = false }
 }
-onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard() })
+onBeforeUnmount(() => {
+  disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
+  document.removeEventListener('visibilitychange', resumeReading); window.removeEventListener('online', resumeReading)
+})
 </script>
 <template>
   <section class="mobile-terminal" :style="{ '--reading-size': `${fontSize}px` }">
@@ -182,12 +193,11 @@ onBeforeUnmount(() => { disposed = true; epoch++; clearTimeout(timer); clearInte
         </div>
       </div>
       <div ref="pane" class="mobile-reading" @scroll.passive="scrolled">
-        <template v-if="!showExecution && Array.isArray(content.messages)">
+        <template v-if="!showExecution && messages.length">
           <article v-for="message in messages" :key="message.id" :class="['message', message.role]">
             <div class="speaker">{{ message.role === 'user' ? '你' : message.phase === 'commentary' ? 'Codex · 工作进展' : 'Codex · 回复' }}</div>
             <div class="markdown" v-html="message.html"></div>
           </article>
-          <div v-if="!messages.length" class="reading-placeholder" role="status">暂无可显示的回答</div>
         </template>
         <div v-else class="terminal-segments">
           <template v-for="(segment, index) in outputSegments" :key="index">

@@ -53,6 +53,7 @@ const fake = http.createServer(async (req, res) => {
     const state = { path: thread.path, offset: 0, busy: false, completed: null };
     await until(async () => { await consumeRollout(state, (await fs.stat(thread.path)).size); return state.completed; });
     assert.equal(state.phase, 'completed'); assert.equal(state.busy, false);
+    assert.equal(state.messages.filter(message => message.role === 'assistant').at(-1).text, 'Fixture completed.', 'The final reply must be available to the answer view before another input');
     assert.equal(received.length, requestCount, 'Completion does not require an extra model request');
     assert(events.some(e => e.method === 'serverRequest/resolved' && e.params.threadId === thread.id));
     assert.equal((await bridge.read('fixture')).requests.length, 0);

@@ -6,7 +6,7 @@ for (const [platform, Manager] of [
   ['Linux', require('../server/services/session-manager')],
   ['Windows', require('../server/services/windows-session-manager')],
 ]) {
-  test(`${platform} never substitutes terminal output for an unavailable Codex answer`, async () => {
+  test(`${platform} keeps the final terminal reply readable when Codex dialogue is unavailable`, async () => {
     for (const session of [
       { shell: 'codex', activity: { available: false } },
       { shell: 'bash', activity: { detected: true, available: false } },
@@ -15,17 +15,16 @@ for (const [platform, Manager] of [
       const manager = {
         ensurePane: async () => {}, getSession: () => session,
         activity: { messages: () => null, inputReceipts: () => [] },
-        history: async () => { captures++; return { text: 'Terminal command and tool output' }; },
+        history: async () => { captures++; return { text: 'Terminal command and tool output\nFinal reply remains readable.' }; },
       };
       const answer = await Manager.prototype.mobile.call(manager, 'fixture');
-      assert.deepEqual(answer.messages, []);
-      assert.equal(answer.answerUnavailable, true);
+      assert.equal(answer.messages, undefined);
       assert.equal(answer.completed, null);
-      assert.equal(answer.text, undefined);
-      assert.equal(captures, 0, 'Answer mode must not fetch the full terminal as a fallback');
+      assert.match(answer.text, /Final reply remains readable/);
+      assert.equal(captures, 1, 'Missing structured dialogue must not hide available output');
       const full = await Manager.prototype.mobile.call(manager, 'fixture', true);
-      assert.equal(full.text, 'Terminal command and tool output');
-      assert.equal(captures, 1);
+      assert.equal(full.text, answer.text);
+      assert.equal(captures, 2);
     }
   });
 

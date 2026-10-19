@@ -129,34 +129,56 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
     });
-    await experiment('missing Codex dialogue never makes answer and full modes identical', { unavailableAnswers: true }, async f => {
-      await f.page.getByText('暂无可显示的回答', { exact: true }).waitFor();
-      assert.equal(await f.page.locator('.mobile-output').count(), 0);
+    await experiment('missing dialogue keeps live output visible in answer mode', { unavailableAnswers: true }, async f => {
+      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 2000 });
+      assert.equal(await f.page.getByText('暂无可显示的回答', { exact: true }).count(), 0);
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
-      await f.page.getByText('暂无可显示的回答', { exact: true }).waitFor();
-      assert.equal(await f.page.locator('.mobile-output').count(), 0);
+      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
-      f.answersAvailable(false);
-      await f.page.waitForTimeout(1600);
-      await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
-      assert.equal(await f.page.locator('.mobile-output').count(), 0, 'An observer gap keeps the last answer, not terminal output');
-      f.answersAvailable(true); f.nextContent();
+      f.answersAvailable(false); f.nextContent();
+      await f.page.getByText('完整终端 reader 版本 1', { exact: true }).waitFor({ timeout: 2000 });
+      f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 1', { exact: true }).waitFor();
       assert.equal(f.inputs, 0);
     });
-    for (const legacy of [false, true]) await experiment(legacy ? 'legacy disk terminal output is never rendered as a Codex answer' : 'cold start preserves the last valid disk answer during an observer gap', {
+    for (const legacy of [false, true]) await experiment(legacy ? 'old disk terminal output does not hide the current output' : 'old disk dialogue does not hide a newer final terminal reply', {
       unavailableAnswers: true,
       cachedAnswer: legacy ? { text: '旧版误存的终端全文' } : { messages: [{ id: 'saved', role: 'assistant', text: '之前已读过的回答' }], completed: 'previous-turn' },
     }, async f => {
-      await f.page.getByText(legacy ? '暂无可显示的回答' : '之前已读过的回答', { exact: true }).waitFor();
+      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 2000 });
       await f.page.waitForTimeout(700);
-      assert.equal(await f.page.locator('.mobile-output').count(), 0);
+      assert.equal(await f.page.locator('.mobile-output').count(), 1);
       assert.equal(await f.page.getByText('旧版误存的终端全文', { exact: true }).count(), 0);
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
+    });
+    for (const trigger of ['completion', 'foreground', 'switch']) await experiment(`${trigger} retrieves the final answer despite a suspended earlier request`, {}, async f => {
+      await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
+      let first = true, held;
+      const heldRequest = new Promise(resolve => { held = resolve; });
+      await f.context.route('**/api/sessions/reader/mobile', route => {
+        if (first) { first = false; held(); return; }
+        return route.continue();
+      });
+      await heldRequest;
+      f.nextContent();
+      if (trigger === 'completion') f.complete('reader');
+      else if (trigger === 'foreground') await f.page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      else {
+        await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
+        await f.page.getByText(/完整终端 reader/).waitFor();
+        await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
+      }
+      await f.page.getByText('精简回答 reader 版本 1', { exact: true }).waitFor({ timeout: 1500 });
+      assert.equal(f.inputs, 0);
     });
     await experiment('completion is unread until its content has actually rendered', {}, async f => {
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
@@ -186,6 +208,13 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     });
     await experiment('cached views switch immediately with network responses held', {}, async f => {
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
+      const modes = f.page.getByRole('group', { name: '阅读模式', exact: true });
+      const answerButton = modes.getByRole('button', { name: '隐藏执行过程', exact: true });
+      const fullButton = modes.getByRole('button', { name: '显示执行过程', exact: true });
+      assert.equal(await answerButton.getAttribute('aria-pressed'), 'true');
+      assert.equal(await fullButton.getAttribute('aria-pressed'), 'false');
+      await answerButton.tap();
+      assert.equal(await answerButton.getAttribute('aria-pressed'), 'true', 'Selecting answer again cannot toggle into full view');
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
@@ -196,6 +225,8 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
         await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
         await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
         await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
+        assert.equal(await answerButton.getAttribute('aria-pressed'), 'true');
+        assert.equal(await fullButton.getAttribute('aria-pressed'), 'false');
       }
       assert.equal(await f.page.getByLabel('消息输入').inputValue(), '未发送的草稿');
       assert.equal(f.inputs, 0);
