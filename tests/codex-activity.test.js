@@ -29,6 +29,20 @@ test('Mobile feed hides initial environment/AGENTS metadata and shows explicit C
   assert.equal(s.busy, false); assert.match(s.messages[0].text, /CLI upgrade required/);
 });
 
+test('question reply envelopes display the user answer without transport JSON or internal identifiers', () => {
+  const s = state();
+  const append = text => applyEvent(s, { type: 'response_item', timestamp: 'now', payload: {
+    type: 'message', role: 'user', content: [{ type: 'input_text', text }],
+  } });
+  const envelope = rows => '<send_user_message_question_reply>\n' + JSON.stringify(rows) + '\n</send_user_message_question_reply>';
+  append(envelope([{ answer: '你自己看', question: '显示哪一种内容？', questionItemId: 'transport-id-must-stay-hidden' }]));
+  assert.equal(s.messages[0].text, '你自己看');
+  append(envelope([{ answer: '第一条\n保留换行', questionItemId: 'one' }, { answer: '第二条', questionItemId: 'two' }]));
+  assert.equal(s.messages[1].text, '第一条\n保留换行\n\n第二条');
+  const ordinary = '请检查这段代码：<send_user_message_question_reply>并保留原文';
+  append(ordinary); assert.equal(s.messages[2].text, ordinary, 'Ordinary user text mentioning the tag must not be stripped');
+});
+
 test('question answer and user_note results confirm input without exposing other tool output', () => {
   const s = state();
   const call = (id, name = 'request_user_input') => applyEvent(s, { type: 'response_item', payload: { type: 'function_call', name, call_id: id } });

@@ -50,6 +50,8 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     const row = (type, payload) => JSON.stringify({ type, timestamp: '2026-10-19T00:00:00Z', payload }) + '\n';
     const reply = (text, phase = 'commentary') => row('response_item', { type: 'message', role: 'assistant', phase, content: [{ type: 'output_text', text }] });
     await fs.writeFile(filename, row('event_msg', { type: 'task_started', turn_id: 'one' }) +
+      row('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<send_user_message_question_reply>\n' +
+        JSON.stringify([{ answer: '查看实际界面', question: '要看哪里？', questionItemId: 'transport-id-must-stay-hidden' }]) + '\n</send_user_message_question_reply>' }] }) +
       reply('正在检查阅读模式') + row('response_item', { type: 'custom_tool_call', call_id: 'build', name: 'exec', input: 'npm run build' }));
     manager.sessions = new Map(sessions.map(s => [s.name, s]));
     manager.serialize = s => s;
@@ -199,6 +201,8 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     });
     await experiment('verified dialogue survives a failed footer capture and still differs from full execution output', { footerFailure: true }, async f => {
       await f.page.locator('.message.assistant').filter({ hasText: '正在检查阅读模式' }).waitFor({ timeout: 1500 });
+      assert.equal(await f.page.locator('.message.user .markdown').innerText(), '查看实际界面');
+      assert(!/send_user_message_question_reply|transport-id/.test(await f.page.locator('.mobile-reading').innerText()));
       await f.finishSource();
       await f.page.locator('.message.assistant').filter({ hasText: '最终回复：检查完成。' }).waitFor({ timeout: 1500 });
       const reading = f.page.locator('.mobile-reading');

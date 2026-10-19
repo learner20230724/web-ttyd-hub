@@ -19,6 +19,20 @@ function message(state, value) {
   if (state.messages.length > 300) state.messages.shift();
 }
 
+function dialogueText(text, role) {
+  if (typeof text !== 'string' || /^(?:<environment_context>|# AGENTS\.md instructions\b)/.test(text)) return '';
+  // The CLI persists asynchronous question replies in a transport envelope.
+  // Its question IDs and JSON are not part of what the user wrote.
+  const envelope = role === 'user' && /^<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>$/.exec(text.trim());
+  if (envelope) try {
+    const replies = JSON.parse(envelope[1]);
+    if (Array.isArray(replies) && replies.length && replies.every(reply => typeof reply?.answer === 'string')) {
+      return replies.map(reply => reply.answer).join('\n\n');
+    }
+  } catch { /* Preserve ordinary or malformed user text instead of losing it. */ }
+  return text;
+}
+
 function applyEvent(state, event) {
   const p = event.payload || {};
   const at = event.timestamp;
@@ -92,7 +106,7 @@ function applyEvent(state, event) {
     if (state.busy && p.type === 'message' && p.role === 'assistant' && !['analysis', 'summary'].includes(p.channel)) setPhase(state, 'responding', at);
   }
   if (event.type === 'response_item' && p.type === 'message' && ['user', 'assistant'].includes(p.role) && !['analysis', 'summary'].includes(p.channel)) {
-    const text = (p.content || []).filter(x => ['input_text', 'output_text'].includes(x.type) && !/^(?:<environment_context>|# AGENTS\.md instructions\b)/.test(x.text || '')).map(x => x.text).join('\n');
+    const text = (p.content || []).filter(x => ['input_text', 'output_text'].includes(x.type)).map(x => dialogueText(x.text, p.role)).filter(Boolean).join('\n');
     if (text && !text.startsWith('<environment_context>')) {
       message(state, { role: p.role, text, timestamp: at, ...(p.phase ? { phase: p.phase } : {}) });
     }
