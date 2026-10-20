@@ -5,13 +5,17 @@ import { ref, computed, onScopeDispose, watch } from 'vue'
 import { LAYOUT_KEY, normalizeLayout, orderedSessions, moveSession } from '../utils/session-layout.mjs'
 import { activityState as classifyActivity, activityPresentation } from '../utils/activity.mjs'
 import { createSessionSync } from '../utils/session-sync.mjs'
+import { loadMetadata, saveMetadata, scopedStorageKey } from '../utils/session-metadata.mjs'
 
 export const useSessionStore = defineStore('sessions', () => {
-  const sessions = ref([])
-  const connectionIssue = ref(false)
-  const readKey = 'web-ttyd-hub.read.v1'
-  const read = ref({})
-  try { read.value = JSON.parse(localStorage.getItem(readKey)) || {} } catch {}
+  const cached = loadMetadata()
+  const sessions = ref(cached?.sessions || [])
+  const cachedSnapshot = ref(Boolean(cached))
+  const connectionIssue = ref(Boolean(cached))
+  const readKey = scopedStorageKey('web-ttyd-hub.read.v1')
+  const layoutKey = scopedStorageKey(LAYOUT_KEY)
+  const read = ref(cached?.read || {})
+  if (!cached) try { read.value = JSON.parse(localStorage.getItem(readKey)) || {} } catch {}
   let readGuard = null
   function setReadGuard(guard) {
     readGuard = guard
@@ -20,7 +24,7 @@ export const useSessionStore = defineStore('sessions', () => {
   function markRead() {
     if (document.hidden || !document.hasFocus() || connectionIssue.value) return
     const session = sessions.value.find(s => s.name === current.value)
-    if (session && !session.archivedAt && activityState(session) === 'unread' && (!readGuard || readGuard(session))) {
+    if (session && !session.archivedAt && activityState(session) === 'unread' && readGuard?.(session)) {
       if (sync.enabled) {
         sync.enqueue({ type: 'read', name: session.name, createdAt: session.createdAt, completed: session.activity.completed })
         return
@@ -35,35 +39,57 @@ export const useSessionStore = defineStore('sessions', () => {
   function activityState(session) {
     return connectionIssue.value ? 'unknown' : classifyActivity(session, read.value)
   }
-  const activityStatus = session => activityPresentation(session, read.value, connectionIssue.value)
+  const activityStatus = session => cachedSnapshot.value
+    ? { state: 'unknown', label: '本地缓存', detail: '正在连接并更新状态，当前显示上次保存的内容。' }
+    : activityPresentation(session, read.value, connectionIssue.value)
   document.addEventListener('visibilitychange', markRead)
   window.addEventListener('focus', markRead)
   onScopeDispose(() => { document.removeEventListener('visibilitychange', markRead); window.removeEventListener('focus', markRead) })
-  const shells = ref([])
-  const platform = ref('')
-  const current = ref(null)
-  const loaded = ref(false)
-  const selectionKey = 'web-ttyd-hub.last-session.v1'
+  const shells = ref(cached?.shells || [])
+  const platform = ref(cached?.platform || '')
+  const selectionKey = scopedStorageKey('web-ttyd-hub.last-session.v1')
+  let savedSelection = cached?.selection
+  try { savedSelection = JSON.parse(localStorage.getItem(selectionKey)) || savedSelection } catch {}
+  const current = ref(cached?.sessions.find(s => s.name === savedSelection?.name &&
+    s.createdAt === savedSelection?.createdAt && !s.archivedAt)?.name || null)
+  const loaded = ref(Boolean(cached))
   let restoreSelection = true
+  let metadataTimer = null, lastShared = null, hasConfirmedList = Boolean(cached)
+  function persistMetadata() {
+    clearTimeout(metadataTimer); metadataTimer = null
+    if (!hasConfirmedList) return
+    const confirmedRead = lastShared ? Object.fromEntries(sessions.value.filter(s => lastShared.read?.[s.name]?.createdAt === s.createdAt)
+      .map(s => [s.name, lastShared.read[s.name].completed])) : read.value
+    const selected = sessions.value.find(s => s.name === current.value && !s.archivedAt)
+    saveMetadata({ sessions: sessions.value, read: confirmedRead, layout: lastShared?.layout || layout.value,
+      shells: shells.value, platform: platform.value,
+      selection: selected ? { name: selected.name, createdAt: selected.createdAt } : null })
+  }
+  function scheduleMetadata() {
+    if (!metadataTimer) metadataTimer = setTimeout(persistMetadata, 500)
+  }
   function rememberSelection(session) {
+    savedSelection = session && !session.archivedAt ? { name: session.name, createdAt: session.createdAt || null } : null
     try {
       if (session && !session.archivedAt) {
-        localStorage.setItem(selectionKey, JSON.stringify({ name: session.name, createdAt: session.createdAt || null }))
+        localStorage.setItem(selectionKey, JSON.stringify(savedSelection))
       } else localStorage.removeItem(selectionKey)
     } catch {} // Storage restrictions must not prevent opening a terminal.
+    scheduleMetadata()
   }
   watch([current, sessions], markRead)
-  const layout = ref(normalizeLayout(null))
+  const layout = ref(normalizeLayout(cached?.layout))
   const layoutError = ref('')
-  try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY))) } catch {}
+  if (!cached) try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(layoutKey))) } catch {}
   const sync = createSessionSync({
-    sessions: () => sessions.value, legacyRead: { ...read.value }, legacyLayout: layout.value,
+    sessions: () => sessions.value, legacyRead: cached ? {} : { ...read.value }, legacyLayout: layout.value,
     apply: value => {
       read.value = value.read; layout.value = value.layout
       try {
         localStorage.setItem(readKey, JSON.stringify(value.read))
-        localStorage.setItem(LAYOUT_KEY, JSON.stringify(value.layout))
+        localStorage.setItem(layoutKey, JSON.stringify(value.layout))
       } catch {} // Confirmed shared state is durable even when local storage is unavailable.
+      scheduleMetadata()
     },
     error: message => { layoutError.value = message },
     refresh: () => refreshVisible(),
@@ -79,11 +105,12 @@ export const useSessionStore = defineStore('sessions', () => {
   function saveLayout(value) {
     layout.value = value
     try {
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify(value))
+      localStorage.setItem(layoutKey, JSON.stringify(value))
       layoutError.value = ''
     } catch {
       layoutError.value = '无法保存排列，刷新后可能丢失。请允许浏览器存储。'
     }
+    scheduleMetadata()
   }
   function togglePin(name) {
     const session = sessions.value.find(s => s.name === name)
@@ -110,8 +137,9 @@ export const useSessionStore = defineStore('sessions', () => {
   }
   function syncLayout(event) {
     if (sync.enabled) return
-    if (event.key !== LAYOUT_KEY && event.key !== null) return
+    if (event.key !== layoutKey && event.key !== null) return
     try { layout.value = normalizeLayout(JSON.parse(event.newValue)) } catch {}
+    scheduleMetadata()
   }
   window.addEventListener('storage', syncLayout)
   onScopeDispose(() => window.removeEventListener('storage', syncLayout))
@@ -121,6 +149,13 @@ export const useSessionStore = defineStore('sessions', () => {
 
   let listRequest = null, refreshPending = false, activitySequence = 0
   const liveActivity = new Map()
+  function receiveShared(value) {
+    if (!value || !Number.isSafeInteger(value.revision) || !value.read) return false
+    if (!lastShared || value.revision >= lastShared.revision) lastShared = value
+    const accepted = sync.receive(value)
+    if (accepted) scheduleMetadata()
+    return accepted
+  }
   function receiveActivity(value) {
     const session = sessions.value.find(s => s.name === value?.name && s.createdAt === value.createdAt)
     if (!session || !value.activity || typeof value.activity !== 'object') return false
@@ -128,17 +163,21 @@ export const useSessionStore = defineStore('sessions', () => {
     // The notification already contains the authoritative state. A second HTTP
     // round trip adds latency and can stall behind an unrelated list request.
     sessions.value = sessions.value.map(s => s === session ? { ...s, activity: value.activity } : s)
-    connectionIssue.value = false
+    // One fresh event cannot validate every other session restored from disk.
+    if (!cachedSnapshot.value) connectionIssue.value = false
+    scheduleMetadata()
     return true
   }
   function receiveList(data) {
     const selected = sessions.value.find(s => s.name === current.value)
+    cachedSnapshot.value = false
     connectionIssue.value = false
+    hasConfirmedList = true
     void pruneContent(data.sessions)
     sessions.value = data.sessions
-    sync.receive(data.shared)
+    receiveShared(data.shared)
     if (restoreSelection) {
-      let saved
+      let saved = savedSelection
       try { saved = JSON.parse(localStorage.getItem(selectionKey)) } catch {}
       // A failed request must not discard selection or attach to a replacement.
       const previous = data.sessions.find(s => s.name === saved?.name &&
@@ -147,6 +186,7 @@ export const useSessionStore = defineStore('sessions', () => {
     } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt &&
       (!selected || (s.createdAt || null) === (selected.createdAt || null)))) select(null)
     loaded.value = true
+    scheduleMetadata()
   }
   function receiveSnapshot(data) {
     if (!Array.isArray(data?.sessions)) return false
@@ -194,9 +234,12 @@ export const useSessionStore = defineStore('sessions', () => {
 
   async function fetchShells() {
     const res = await fetch(hubUrl('/api/sessions/shells'))
+    if (!res.ok) throw new Error('无法读取终端类型')
     const data = await res.json()
+    if (!Array.isArray(data.shells)) throw new Error('终端类型格式无效')
     shells.value = data.shells
     platform.value = data.platform || ''
+    scheduleMetadata()
   }
 
   async function createSession(name, shell, cwd, resumeThreadId) {
@@ -294,7 +337,7 @@ export const useSessionStore = defineStore('sessions', () => {
         const message = JSON.parse(event.data)
         if (message.event === 'session:snapshot' && receiveSnapshot(message.data)) return
         if (message.event === 'session:activity' && receiveActivity(message.data)) return
-        if (message.event === 'session:sync' && sync.receive(message.data)) return
+        if (message.event === 'session:sync' && receiveShared(message.data)) return
       } catch { /* A malformed notification falls back to a full reconciliation. */ }
       refreshVisible(true)
     }
@@ -339,7 +382,7 @@ export const useSessionStore = defineStore('sessions', () => {
     fetchSessions().catch(() => {})
   }
   const resume = () => {
-    if (document.hidden) return
+    if (document.hidden) { persistMetadata(); return }
     refreshVisible(true)
     sync.retry()
     // WebViews can keep an OPEN socket whose network connection died in the
@@ -350,12 +393,15 @@ export const useSessionStore = defineStore('sessions', () => {
   }
   let refreshTimer
   onScopeDispose(() => {
+    persistMetadata()
     clearInterval(refreshTimer); clearTimeout(reconnectTimer)
     listRequest?.abort(); listRequest = null
     if (ws) { ws.onclose = null; ws.close() }
     document.removeEventListener('visibilitychange', resume)
     window.removeEventListener('online', resume)
   })
+  window.addEventListener('pagehide', persistMetadata)
+  onScopeDispose(() => window.removeEventListener('pagehide', persistMetadata))
 
   async function create({ command, name, cwd, resumeThreadId }) {
     return createSession(name || null, command || null, cwd, resumeThreadId)
@@ -368,6 +414,7 @@ export const useSessionStore = defineStore('sessions', () => {
     setReadGuard,
     markRead,
     connectionIssue,
+    cachedSnapshot,
     sortedSessions,
     archivedSessions,
     unreadCount,

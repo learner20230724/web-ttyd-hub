@@ -1,11 +1,12 @@
 import { hubUrl } from './base.mjs'
 import { normalizeLayout, moveSession } from './session-layout.mjs'
+import { scopedStorageKey } from './session-metadata.mjs'
 
 // One outbox per tab/WebView, retained through reload. Confirmed state always
 // comes from the Hub; local caches only seed the first upgrade.
 export function createSessionSync({ sessions, legacyRead, legacyLayout, apply, error, refresh }) {
-  const migrationKey = 'web-ttyd-hub.shared-migrated.v1'
-  const pendingKey = 'web-ttyd-hub.shared-pending.v1'
+  const migrationKey = scopedStorageKey('web-ttyd-hub.shared-migrated.v1')
+  const pendingKey = scopedStorageKey('web-ttyd-hub.shared-pending.v1')
   let shared = null, sending = null, disposed = false, migrated = false, pending = []
   try { migrated = localStorage.getItem(migrationKey) === '1' } catch {}
   try {

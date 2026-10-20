@@ -20,6 +20,9 @@ async function setup(t, initialLayout, initialRead = {}, initialSelection) {
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value });
   const pinia = createPinia();
   const store = useSessionStore(pinia);
+  // These store-only tests simulate a renderer that has already displayed the
+  // selected content; application renderers supply their own stricter guards.
+  store.setReadGuard(() => true);
   t.after(() => {
     disposePinia(pinia);
     for (const [key, descriptor] of Object.entries(originals)) {
@@ -31,6 +34,18 @@ async function setup(t, initialLayout, initialRead = {}, initialSelection) {
     update: async sessions => { store.sessions = structuredClone(sessions); await nextTick(); } };
 }
 const session = (name, activity = {}) => ({ name, status: 'running', activity });
+
+test('A missing renderer never marks a selected completion read; explicit rendering confirmation can do so', async t => {
+  const f = await setup(t, { order: [], pinned: [] });
+  const release = f.store.setReadGuard(() => false); release();
+  await f.update([session('cached', { completed: 'new-completion' })]);
+  f.store.select('cached'); await f.nextTick();
+  f.win.dispatchEvent(new Event('focus'));
+  assert.equal(f.store.activityState(f.store.sessions[0]), 'unread');
+  assert.equal(JSON.parse(f.saved.get(readKey)).cached, undefined);
+  f.store.setReadGuard(() => true); f.store.markRead();
+  assert.equal(f.store.activityState(f.store.sessions[0]), 'idle');
+});
 
 test('Reading green sessions moves each to the top of gray, preserves other groups, and saves the result', async t => {
   const layout = { order: ['gray-1', 'gray-2', 'busy', 'green-1', 'green-2'], pinned: [] };

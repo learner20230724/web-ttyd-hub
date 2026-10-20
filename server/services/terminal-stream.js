@@ -1,8 +1,44 @@
 const { spawn } = require('node:child_process');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { WebSocketServer } = require('ws');
 
 const LIMIT = 16 * 1024 * 1024;
+const snapshotFields = ['screen', 'normal', 'history', 'alternate', 'pending'];
+
+// This is only an optional transfer optimization. Missing/evicted baselines and
+// server restarts always fall back to the authoritative complete snapshot.
+class SnapshotCache {
+  constructor(limit = 32 * 1024 * 1024) { this.limit = limit; this.bytes = 0; this.entries = new Map(); }
+  response(scope, snapshot, digest) {
+    const { digest: _previousDigest, ...body } = snapshot;
+    snapshot.digest = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    const key = `${scope}:${snapshot.digest}`, baseKey = `${scope}:${digest}`;
+    const baseEntry = this.entries.get(baseKey), baseline = baseEntry?.snapshot;
+    if (baseEntry) { this.entries.delete(baseKey); this.entries.set(baseKey, baseEntry); }
+    const bytes = Buffer.byteLength(JSON.stringify(snapshot));
+    const current = this.entries.get(key);
+    if (current) { this.entries.delete(key); this.entries.set(key, current); }
+    if (!this.entries.has(key) && bytes <= this.limit) {
+      this.entries.set(key, { snapshot: { ...snapshot, meta: { ...snapshot.meta } }, bytes }); this.bytes += bytes;
+      for (const [oldKey, item] of this.entries) {
+        if (this.bytes <= this.limit) break;
+        this.entries.delete(oldKey); this.bytes -= item.bytes;
+      }
+    }
+    if (!baseline) return snapshot;
+    const delta = { type: 'snapshot-delta', base: digest, digest: snapshot.digest, meta: snapshot.meta, changes: {} };
+    for (const field of ['generation', 'completed']) if (Object.hasOwn(snapshot, field)) delta[field] = snapshot[field];
+    for (const field of snapshotFields) {
+      const old = baseline[field], next = snapshot[field];
+      if (old === next) continue;
+      let start = 0, suffix = 0;
+      while (start < old.length && start < next.length && old[start] === next[start]) start++;
+      while (suffix < old.length - start && suffix < next.length - start && old[old.length - 1 - suffix] === next[next.length - 1 - suffix]) suffix++;
+      delta.changes[field] = [start, old.length - start - suffix, next.slice(start, next.length - suffix)];
+    }
+    return Buffer.byteLength(JSON.stringify(delta)) < bytes * 0.85 ? delta : snapshot;
+  }
+}
 const fields = ['pane_id', 'pane_width', 'pane_height', 'history_size', 'cursor_x', 'cursor_y',
   'alternate_on', 'alternate_saved_x', 'alternate_saved_y', 'cursor_flag', 'insert_flag',
   'keypad_cursor_flag', 'keypad_flag', 'origin_flag', 'wrap_flag', 'mouse_all_flag',
@@ -29,10 +65,13 @@ function quoteBytes(data) {
 }
 
 class TerminalStream {
-  constructor(ws, name, manager) {
+  constructor(ws, name, manager, cache) {
     this.ws = ws;
     this.name = name;
     this.manager = manager;
+    this.cache = cache;
+    this.generation = manager.getSession(name).createdAt || '';
+    this.cacheScope = JSON.stringify([name, this.generation]);
     this.pending = [];
     this.buffer = Buffer.alloc(0);
     this.closed = false;
@@ -58,6 +97,7 @@ class TerminalStream {
   async start() {
     await this.manager.ensurePane(this.name);
     if (this.closed) return;
+    if ((this.manager.getSession(this.name).createdAt || '') !== this.generation) throw new Error('Session was replaced');
     // A control client observes the inner PTY. It does not put the browser in
     // tmux's alternate screen and never enters the shared pane's copy mode.
     const env = { ...process.env, TERM: 'xterm-256color', PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH || ''}` };
@@ -138,6 +178,10 @@ class TerminalStream {
 
   async snapshot() {
     if (this.closed) return;
+    // Bind the read receipt to the completion known before capture. A task
+    // finishing while tmux is capturing must never stamp its newer token onto
+    // output that may predate the final reply.
+    const completed = this.manager.getSession(this.name).activity?.completed || null;
     // The commands run together in tmux's event loop. Output before the last
     // reply is covered by this snapshot; subsequent output belongs to the live
     // stream. Deliver/reset at the final reply, not a later event-loop tick.
@@ -162,11 +206,14 @@ class TerminalStream {
       }
       this.pane = meta.pane_id;
       const decode = b => unescape(b.subarray(0, Math.max(0, b.length - 1))).toString('utf8');
-      this.send({ type: 'snapshot', meta, screen: decode(replies[1]),
+      const snapshot = { type: 'snapshot', generation: this.generation, completed, meta, screen: decode(replies[1]),
         normal: meta.alternate_on ? decode(replies[2]) : '',
         history: meta.alternate_on && meta.history_size ? decode(replies[3]) : '',
         alternate: meta.alternate_on ? decode(replies[4]) : '',
-        pending: unescape(replies[5].subarray(0, Math.max(0, replies[5].length - 1))).toString('base64') });
+        pending: unescape(replies[5].subarray(0, Math.max(0, replies[5].length - 1))).toString('base64') };
+      const response = this.cache.response(this.cacheScope, snapshot, this.cacheEnabled ? this.cacheDigest : null);
+      this.send(response);
+      this.cacheDigest = snapshot.digest;
       this.snapshotting = false;
       this.ready = true;
       clearTimeout(this.startTimer);
@@ -184,6 +231,9 @@ class TerminalStream {
       if (!Number.isInteger(msg.cols) || !Number.isInteger(msg.rows) || msg.cols < 2 || msg.cols > 500 || msg.rows < 2 || msg.rows > 300) return this.close(1008, 'Invalid terminal size');
       this.size = { cols: msg.cols, rows: msg.rows };
       if (!this.initialized) {
+        if (msg.generation !== undefined && msg.generation !== this.generation) return this.close(1008, 'Session was replaced');
+        this.cacheEnabled = msg.cache === 'splice-v1';
+        this.cacheDigest = this.cacheEnabled && /^[a-f0-9]{64}$/.test(msg.digest || '') ? msg.digest : null;
         this.initialized = true;
         this.start().catch(() => this.close(1011, 'Unable to open terminal'));
       } else if (this.proc) {
@@ -194,6 +244,9 @@ class TerminalStream {
         }, 60);
       }
       return;
+    }
+    if (msg.type === 'checkpoint' && this.ready && this.cacheEnabled) {
+      this.scheduleSnapshot(); return;
     }
     if (!this.ready || !['input', 'paste', 'binary'].includes(msg.type) || typeof msg.data !== 'string') return this.close(1008, 'Terminal is not ready');
     const bytes = Buffer.from(msg.data, msg.type === 'binary' ? 'latin1' : 'utf8');
@@ -237,6 +290,7 @@ class TerminalStream {
 function setupTerminalStreams(server, manager) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const streams = new Set();
+  const cache = new SnapshotCache();
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       if (ws.alive === false) ws.terminate();
@@ -258,7 +312,7 @@ function setupTerminalStreams(server, manager) {
     wss.handleUpgrade(req, socket, head, ws => {
       ws.alive = true;
       ws.on('pong', () => { ws.alive = true; });
-      const stream = new TerminalStream(ws, match[1], manager);
+      const stream = new TerminalStream(ws, match[1], manager, cache);
       streams.add(stream);
       ws.on('close', () => streams.delete(stream));
     });
@@ -271,4 +325,4 @@ function setupTerminalStreams(server, manager) {
   return { close() { clearInterval(heartbeat); for (const stream of streams) stream.close(1001, 'Server restarting'); wss.close(); } };
 }
 
-module.exports = { setupTerminalStreams, unescape, quoteBytes };
+module.exports = { setupTerminalStreams, unescape, quoteBytes, SnapshotCache, TerminalStream };

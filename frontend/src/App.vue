@@ -28,7 +28,7 @@ const isMobile = window.matchMedia('(pointer: coarse)').matches || window.innerW
 if (isMobile) sidebarCollapsed.value = true;
 watch([() => store.current, () => store.loaded], ([name, loaded]) => {
   if (isMobile && loaded) sidebarCollapsed.value = Boolean(name);
-});
+}, { immediate: true });
 
 provide("toast", toastRef);
 store.init();

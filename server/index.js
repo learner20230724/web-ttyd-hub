@@ -80,10 +80,7 @@ app.use('/api/sessions', sessionsRoute(sessionManager));
 
 // Serve frontend static files in production
 const publicDir = process.env.HUB_PUBLIC_DIR || path.join(__dirname, 'public');
-app.use(express.static(publicDir));
-app.get(/^\/(?!api).*/, (req, res) => {
-  res.sendFile(path.join(publicDir, 'index.html'));
-});
+require('./services/frontend-static')(app, publicDir);
 
 // WebSocket
 setupWebSocket(server, sessionManager);

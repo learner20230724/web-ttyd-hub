@@ -42,9 +42,15 @@ jobs:
       - run: node tests/mobile-state-browser.cjs
       - run: node tests/mobile-cold-start-browser.cjs
       - run: node tests/session-sync-browser.cjs
+      - run: node tests/session-metadata-browser.cjs
+      - run: node tests/mobile-local-cache-browser.cjs
+      - run: node tests/content-cache-browser.cjs
+      - run: node tests/terminal-read-browser.cjs
       - run: node tests/codex-mobile-browser.cjs
       - if: runner.os == 'Linux'
         run: npm run test:terminal
+      - if: runner.os == 'Linux'
+        run: node tests/terminal-cache-browser.cjs
       - if: always()
         uses: actions/upload-artifact@v4
         with:

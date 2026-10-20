@@ -13,14 +13,14 @@ test('control output preserves escaped bytes, literal escapes and split UTF-8', 
 test('terminal stream restores history, streams raw output, pastes safely and detaches without killing tasks', { timeout: 30000, skip: process.platform === 'win32' ? 'Requires Linux tmux/ttyd' : false }, async () => {
   const f = await fixture();
   const sockets = [];
-  async function open(origin) {
+  async function open(origin, digest) {
     const ws = new WebSocket(f.base.replace('http:', 'ws:') + `/ws/terminal/${f.session.name}`, origin ? { origin } : {});
     sockets.push(ws);
     const messages = [], output = [];
     ws.on('message', (data, binary) => { if (binary) output.push(data); else messages.push(JSON.parse(data)); });
     await once(ws, 'open');
-    ws.send(JSON.stringify({ type: 'resize', cols: 100, rows: 30 }));
-    await until(() => messages.some(m => m.type === 'snapshot'));
+    ws.send(JSON.stringify({ type: 'resize', cols: 100, rows: 30, generation: f.session.createdAt, ...(digest ? { cache: 'splice-v1', digest } : {}) }));
+    await until(() => messages.some(m => m.type === 'snapshot' || m.type === 'snapshot-delta'));
     return { ws, messages, output, send: msg => ws.send(JSON.stringify(msg)) };
   }
   try {
@@ -32,9 +32,27 @@ test('terminal stream restores history, streams raw output, pastes safely and de
     assert.ok(a.messages[0].screen.includes('中文 \\033'));
     assert.ok(a.messages[0].screen.includes('\x1b[31m'));
     assert.equal(a.messages[0].pending, '');
+    assert.equal(a.messages[0].generation, f.session.createdAt);
+    const { applyTerminalDelta } = await import('../frontend/src/utils/terminal-cache.mjs');
+    const cached = await open(null, a.messages[0].digest);
+    assert.equal(cached.messages[0].type, 'snapshot-delta', 'An unchanged cached terminal must not download history again');
+    assert.deepEqual(applyTerminalDelta(a.messages[0], cached.messages[0]), a.messages[0]);
     const b = await open();
     f.output('\x1b[32mSTREAM_END中文\x1b[0m\r\n');
     await until(() => Buffer.concat(a.output).includes('STREAM_END中文') && Buffer.concat(b.output).includes('STREAM_END中文'));
+    const appended = await open(null, a.messages[0].digest);
+    assert.equal(appended.messages[0].type, 'snapshot-delta');
+    assert(applyTerminalDelta(a.messages[0], appended.messages[0]).screen.includes('STREAM_END中文'));
+    appended.send({ type: 'checkpoint' });
+    await until(() => appended.messages.length === 2);
+    assert.equal(appended.messages[1].type, 'snapshot-delta');
+    cached.ws.close(); appended.ws.close();
+    await until(() => f.tm('list-clients', '-F', '#{client_name}').split('\n').filter(Boolean).length === 2);
+    const replaced = new WebSocket(f.base.replace('http:', 'ws:') + `/ws/terminal/${f.session.name}`);
+    sockets.push(replaced); await once(replaced, 'open');
+    replaced.send(JSON.stringify({ type: 'resize', cols: 90, rows: 25, generation: 'old-generation' }));
+    assert.equal((await once(replaced, 'close'))[0], 1008, 'A stale selected generation cannot attach or resize a replacement');
+    assert.equal(f.tm('list-clients', '-F', '#{client_name}').split('\n').filter(Boolean).length, 2);
     assert.equal(f.tm('display-message', '-p', '-t', f.target, '#{pane_in_mode}'), '0');
     const typed = 'x中文\x1b[D';
     const paste = '粘贴\n"; kill-server ; # \\ $()\n末尾';

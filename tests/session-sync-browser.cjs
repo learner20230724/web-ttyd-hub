@@ -9,6 +9,7 @@ const { chromium } = require('playwright');
 const Manager = require('../server/services/session-manager');
 const routes = require('../server/routes/sessions');
 const sockets = require('../server/ws');
+const syntheticTerminals = require('./synthetic-terminal.cjs');
 const createdAt = '2026-10-14T00:00:00.000Z';
 const manager = new Manager(19800, 19801); manager.activity.close(); clearInterval(manager.archiveSweep);
 for (const [name, displayName, phase] of [['worker', '正在处理的项目', 'executing'], ['done', '手机已查看的回复', 'completed'], ['second', '电脑已查看的回复', 'completed']]) {
@@ -36,7 +37,7 @@ function transition(name, phase, completed = null) {
 }
 (async () => {
   const server = app.listen(0, '127.0.0.1'), wss = sockets(server, manager); await once(server, 'listening');
-  server.on('upgrade', (req, socket) => { if (req.url.startsWith('/ws/terminal/')) socket.destroy(); });
+  const terminals = syntheticTerminals(server, manager);
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   const errors = [], contexts = [];
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -138,6 +139,6 @@ function transition(name, phase, completed = null) {
     assert.deepEqual(errors, []);
     console.log('PASS: independent phone/desktop read receipts, phases, pins/order, reload, offline retry, stale receipts, drafts and lifecycle sync');
   } finally {
-    await browser.close(); manager.cleanup(); for (const client of wss.clients) client.terminate(); wss.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    await browser.close(); terminals.close(); manager.cleanup(); for (const client of wss.clients) client.terminate(); wss.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -29,7 +29,8 @@ const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(
 const answerStartedAt = ref(Date.now()), structuredAnswers = new Map()
 const codexAnswer = computed(() => !props.showExecution && (session.value?.shell === 'codex' || session.value?.activity?.detected))
 const answerUnavailable = computed(() => codexAnswer.value && !Array.isArray(content.value.messages))
-const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话还没有回答。' :
+const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话还没有回答。' : store.cachedSnapshot
+  ? '此视图暂无本地缓存，联网后自动加载。' :
   error.value || now.value - answerStartedAt.value >= 10000 ? '暂时无法读取回答，正在自动重试。' : '正在读取回答…')
 const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
@@ -80,7 +81,7 @@ const outputSegments = computed(() => {
   return renderedOutput.get(data)
 })
 const positions = new Map()
-let timer, disposed = false, epoch = 0, refreshSequence = 0, visibleKey = null, switching = false
+let timer, disposed = false, epoch = 0, refreshSequence = 0, visibleKey = null, switching = false, quickRefreshUntil = 0
 // Selection and a completion notification are not proof that the reply was seen.
 // The content snapshot carries the completion it actually includes.
 const releaseReadGuard = store.setReadGuard(selected => props.readingVisible && follow.value &&
@@ -111,11 +112,18 @@ async function display(entry, first = false) {
   else if (follow.value && !window.getSelection()?.toString()) pane.value.scrollTop = pane.value.scrollHeight
   store.markRead()
 }
+function refreshDelay() {
+  const activity = session.value?.activity || {}
+  return activity.busy || activity.available === false || activity.phase === 'unknown' || answerUnavailable.value ||
+    pendingMessages.value.length || sending.value || questionPending.value || Date.now() < quickRefreshUntil ? 1200 : 15000
+}
 async function refresh(token = epoch, fresh = false) {
   if (disposed || token !== epoch) return
   clearTimeout(timer)
   const selected = session.value, view = props.showExecution ? 'full' : 'answer'
-  if (!selected || document.hidden) return
+  // A cached name may now belong to a replacement session on the server. Keep
+  // disk readable, but wait for the authoritative list before requesting data.
+  if (!selected || document.hidden || store.cachedSnapshot) return
   const sequence = ++refreshSequence
   const current = () => !disposed && token === epoch && sequence === refreshSequence
   try {
@@ -129,15 +137,16 @@ async function refresh(token = epoch, fresh = false) {
     }
   } catch (e) {
     if (current()) error.value = Object.keys(content.value).length ? '正在显示缓存，暂时无法更新。' : e.message
-  } finally { if (current() && !document.hidden) { clearTimeout(timer); timer = setTimeout(() => refresh(token), 1200) } }
+  } finally { if (current() && !document.hidden && !store.cachedSnapshot) { clearTimeout(timer); timer = setTimeout(() => refresh(token), refreshDelay()) } }
 }
 function resumeReading() { if (!document.hidden) void refresh(epoch, true); else clearTimeout(timer) }
 document.addEventListener('visibilitychange', resumeReading)
 window.addEventListener('online', resumeReading)
-watch(() => [store.current, session.value?.activity?.completed], ([name, completed], previous) => {
-  if (name === previous?.[0] && completed && completed !== previous?.[1]) void refresh(epoch, true)
+watch(() => [store.current, session.value?.activity?.phase, session.value?.activity?.busy,
+  session.value?.activity?.completed, session.value?.activity?.available], (value, previous) => {
+  if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, true)
 })
-watch([() => store.current, () => props.showExecution], async ([name, full], previous) => {
+watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot], async ([name, full], previous) => {
   const previousName = previous?.[0]
   if (visibleKey && pane.value) positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
   if (previousName && name !== previousName) drafts.set(previousName, draft.value)
@@ -152,20 +161,22 @@ watch([() => store.current, () => props.showExecution], async ([name, full], pre
   if (cached) await display(cached, true)
   if (disposed || token !== epoch) return
   if (!selected) { switching = false; return }
-  // Validate the visible view, and only warm the other view when it is needed.
-  void refresh(token, true)
-  const other = full ? 'answer' : 'full'
-  if (name !== previousName || !peekContent(selected, other)) void fetchContent(selected, other).then(entry => {
-    if (token === epoch && other === 'answer') reconcilePending(name, entry.data)
-  }).catch(() => {})
+  // Disk reads run independently of the network, so unavailable browser storage
+  // cannot hold up a fresh response. The unseen view only warms from local disk;
+  // downloading full terminal logs waits until the user actually opens them.
   if (!cached) void loadContent(selected, view).then(stored => {
     if (token === epoch && !Object.keys(content.value).length) return display(stored, true)
   })
+  const other = full ? 'answer' : 'full'
+  if (!peekContent(selected, other)) void loadContent(selected, other).then(entry => {
+    if (entry && token === epoch && other === 'answer') reconcilePending(name, entry.data)
+  }).catch(() => {})
+  if (!store.cachedSnapshot) void refresh(token, true)
   if (token === epoch) { await nextTick(); switching = false }
 }, { immediate: true })
 watch(() => props.fontSize, async () => { if (follow.value) await bottom() })
 async function send(key = 'Enter', withText = true) {
-  if (sending.value || !session.value) return
+  if (sending.value || !session.value || store.cachedSnapshot) return
   // Vue postpones v-model updates during IME composition; send the visible text.
   const name = session.value.name, text = withText ? (composerInput.value?.value ?? draft.value) : ''
   const generation = session.value.createdAt || ''
@@ -173,6 +184,7 @@ async function send(key = 'Enter', withText = true) {
   const kind = inputKind(text, session.value)
   if (withText) draft.value = text
   sending.value = true; error.value = ''
+  quickRefreshUntil = Date.now() + 10000
   delete inputNotices.value[name]
   delete inputErrors.value[name]
   const pending = text && key === 'Enter' && kind === 'prompt' ? { id: `${Date.now()}-${Math.random()}`, text, codex: true, status: 'sending', before: transcriptIds.get(name) || [] } : null
@@ -230,7 +242,7 @@ onBeforeUnmount(() => {
     <div v-if="navigationOpen" id="mobile-navigation" class="mobile-navigation" role="group" aria-label="终端方向键、回车、组合键和 ESC">
       <button v-for="key in ['Up', 'Down', 'Left', 'Right', 'Enter', 'S-Left', 'Escape']" :key="key" type="button" :class="{ 'wide-key': ['Enter', 'S-Left', 'Escape'].includes(key) }"
         :aria-label="{Up:'方向键上', Down:'方向键下', Left:'方向键左', Right:'方向键右', Enter:'终端回车', 'S-Left':'Shift 加左方向键', Escape:'终端 ESC'}[key]"
-        :disabled="sending || session?.status !== 'running'" @click="send(key, false)">{{ {Up:'↑', Down:'↓', Left:'←', Right:'→', Enter:'↵ 回车', 'S-Left':'Shift+←', Escape:'ESC'}[key] }}</button>
+        :disabled="sending || store.cachedSnapshot || session?.status !== 'running'" @click="send(key, false)">{{ {Up:'↑', Down:'↓', Left:'←', Right:'→', Enter:'↵ 回车', 'S-Left':'Shift+←', Escape:'ESC'}[key] }}</button>
     </div>
     <template v-if="session">
       <div class="mobile-session-header">
@@ -271,17 +283,17 @@ onBeforeUnmount(() => {
             <button v-if="item.status !== 'sending'" type="button" aria-label="关闭发送提示" @click="dismissPending(item.id)">×</button>
           </div>
         </article>
-        <div v-if="!codexAnswer && !Object.keys(content).length && !error" class="reading-placeholder" role="status">正在加载会话…</div>
+        <div v-if="!codexAnswer && !Object.keys(content).length && !error" class="reading-placeholder" role="status">{{ store.cachedSnapshot ? '此视图暂无本地缓存，联网后自动加载。' : '正在加载会话…' }}</div>
       </div>
       <button v-if="!follow" class="latest" @click="bottom">↓ 回到最新</button>
       <p v-if="inputError || (error && !answerUnavailable)" class="mobile-error" role="alert">{{ inputError || error }}</p>
-      <CodexQuestions v-if="session.status === 'running' && session.activity?.detected" :session-name="session.name" @handled="refresh()" @pending="questionPending = $event" @support="questionSupport = $event" />
+      <CodexQuestions v-if="!store.cachedSnapshot && session.status === 'running' && session.activity?.detected" :session-name="session.name" @handled="refresh()" @pending="questionPending = $event" @support="questionSupport = $event" />
       <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
         <p v-if="inputNotice" class="input-notice" role="status">{{ inputNotice }}</p>
-        <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || !draft" @click="send(null)">仅输入</button></div>
+        <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
           <textarea ref="composerInput" v-model="draft" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
-          <button class="send" :disabled="sending" type="submit">{{ sending ? '…' : draft ? '发送' : '回车' }}</button></div>
+          <button class="send" :disabled="sending || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft ? '发送' : '回车' }}</button></div>
       </form>
     </template>
     <div v-else class="mobile-empty">从左上角选择会话，继续你的工作。</div>

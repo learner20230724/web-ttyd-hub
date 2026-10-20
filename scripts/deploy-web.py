@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Deploy the server and online Android UI without terminating tmux tasks (systemd)."""
-import json, os, pathlib, subprocess, time, urllib.request
+import json, os, pathlib, subprocess, tempfile, time, urllib.request
 from datetime import datetime, timezone
 
 root = pathlib.Path(__file__).resolve().parents[1]
@@ -14,7 +14,14 @@ def api(path='', data=None, method=None):
 
 if command('systemctl', 'show', service, '-p', 'KillMode', '--value') != 'process':
     raise SystemExit('Refusing restart: configure KillMode=process to preserve tmux tasks first.')
-subprocess.run(['npm', 'run', 'build'], cwd=root, check=True)
+asset_helper = root / 'scripts' / 'retain-web-assets.cjs'
+public_dir = root / 'server' / 'public'
+# Keep old lazy-loaded chunks available to already-open pages after Vite
+# replaces the build. Only bounded, recent hashed assets cross generations.
+with tempfile.TemporaryDirectory(prefix='hub-web-assets-') as retained_assets:
+    subprocess.run(['node', str(asset_helper), str(public_dir), retained_assets], cwd=root, check=True)
+    subprocess.run(['npm', 'run', 'build'], cwd=root, check=True)
+    subprocess.run(['node', str(asset_helper), retained_assets, str(public_dir)], cwd=root, check=True)
 sessions = api()['sessions']
 panes = command('tmux', 'list-panes', '-a', '-F', '#{session_name}\t#{pane_id}\t#{pane_pid}') if sessions else ''
 backup = pathlib.Path(os.environ.get('HUB_BACKUP_DIR', '/root/hub-deploy-backups')) / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')

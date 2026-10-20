@@ -5,6 +5,14 @@ const { history, pathKey } = require('../services/codex-history');
 
 module.exports = function (sessionManager) {
   const router = express.Router();
+  const sendContent = contentResponse.create();
+  const replacedSession = () => Object.assign(new Error('会话已更换，请重新读取'), { status:409 });
+  const contentScope = (req, view) => {
+    const name = req.params.name, generation = sessionManager.getSession(name).createdAt || '';
+    const requested = req.headers['x-ttyd-generation'];
+    if (requested !== undefined && requested !== generation) throw replacedSession();
+    return JSON.stringify([name, generation, view]);
+  };
   const resumeLocks = new Map();
   router.get('/codex-usage', async (req, res) => {
     res.set('Cache-Control', 'no-store');
@@ -98,16 +106,27 @@ module.exports = function (sessionManager) {
   router.get('/:name/history', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
-      contentResponse(req, res, await sessionManager.history(req.params.name));
+      const scope = contentScope(req, 'history');
+      const data = await sessionManager.history(req.params.name);
+      // A deleted/recreated session must not reuse the previous generation's
+      // body even if the request was already capturing its terminal output.
+      if (scope !== contentScope(req, 'history')) throw replacedSession();
+      sendContent(req, res, data, scope);
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(err.status || 400).json({ error: err.message });
     }
   });
 
   router.get('/:name/mobile', async (req, res) => {
     res.set('Cache-Control', 'no-store');
-    try { contentResponse(req, res, await sessionManager.mobile(req.params.name, req.query.view === 'full')); }
-    catch (err) { res.status(400).json({ error: err.message }); }
+    try {
+      const full = req.query.view === 'full';
+      const scope = contentScope(req, full ? 'full' : 'answer');
+      const data = await sessionManager.mobile(req.params.name, full);
+      if (scope !== contentScope(req, full ? 'full' : 'answer')) throw replacedSession();
+      sendContent(req, res, data, scope);
+    }
+    catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
   router.post('/:name/input', async (req, res) => {
     try { res.json(await sessionManager.input(req.params.name, req.body)); }
