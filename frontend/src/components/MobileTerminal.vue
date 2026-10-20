@@ -17,7 +17,18 @@ const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const status = computed(() => session.value ? store.activityStatus(session.value) : null)
 const now = ref(Date.now())
-const elapsedTimer = setInterval(() => { now.value = Date.now() }, 1000)
+let lastHidden = document.hidden
+const elapsedTimer = setInterval(() => {
+  now.value = Date.now()
+  // Some WebViews change visibility after the initial read was skipped without
+  // delivering visibilitychange. Reuse the clock to recover that missed read.
+  if (document.hidden !== lastHidden) {
+    // Replace a list request suspended during startup too; otherwise cached
+    // metadata can keep the reader gated until that old request times out.
+    if (!document.hidden) void store.fetchSessions().catch(() => {})
+    resumeReading()
+  }
+}, 1000)
 const elapsed = computed(() => {
   if (!session.value?.activity?.busy || store.connectionIssue) return ''
   const start = Date.parse(session.value.activity.startedAt)
@@ -139,9 +150,16 @@ async function refresh(token = epoch, fresh = false) {
     if (current()) error.value = Object.keys(content.value).length ? '正在显示缓存，暂时无法更新。' : e.message
   } finally { if (current() && !document.hidden && !store.cachedSnapshot) { clearTimeout(timer); timer = setTimeout(() => refresh(token), refreshDelay()) } }
 }
-function resumeReading() { if (!document.hidden) void refresh(epoch, true); else clearTimeout(timer) }
+function resumeReading() {
+  lastHidden = document.hidden
+  if (!lastHidden) void refresh(epoch, true)
+  else clearTimeout(timer)
+}
+function restoredPage(event) { if (event.persisted) resumeReading() }
 document.addEventListener('visibilitychange', resumeReading)
 window.addEventListener('online', resumeReading)
+window.addEventListener('focus', resumeReading)
+window.addEventListener('pageshow', restoredPage)
 watch(() => [store.current, session.value?.activity?.phase, session.value?.activity?.busy,
   session.value?.activity?.completed, session.value?.activity?.available], (value, previous) => {
   if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, true)
@@ -235,6 +253,7 @@ onBeforeUnmount(() => {
   disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
   inputRequest?.abort()
   document.removeEventListener('visibilitychange', resumeReading); window.removeEventListener('online', resumeReading)
+  window.removeEventListener('focus', resumeReading); window.removeEventListener('pageshow', restoredPage)
 })
 </script>
 <template>

@@ -330,7 +330,13 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function connectWs() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    ws = new WebSocket(`${proto}://${location.host}${hubUrl('/ws')}`)
+    try { ws = new WebSocket(`${proto}://${location.host}${hubUrl('/ws')}`) }
+    catch {
+      // WebViews may reject a socket before any close event can be delivered.
+      // Keep the HTTP startup/reconciliation path and the page usable.
+      scheduleReconnect()
+      return
+    }
 
     ws.onmessage = event => {
       try {
@@ -371,6 +377,8 @@ export const useSessionStore = defineStore('sessions', () => {
     refreshTimer = setInterval(refreshVisible, 5000)
     document.addEventListener('visibilitychange', resume)
     window.addEventListener('online', resume)
+    window.addEventListener('focus', resume)
+    window.addEventListener('pageshow', resumePage)
   }
 
   // Phones can suspend a WebSocket without delivering close. Refresh on return
@@ -391,6 +399,9 @@ export const useSessionStore = defineStore('sessions', () => {
     if (ws) { ws.onopen = ws.onmessage = ws.onclose = null; ws.close() }
     connectWs()
   }
+  // A restored browser page or Android WebView can return to the foreground
+  // without changing document.hidden. Neither path should need a terminal input.
+  const resumePage = event => { if (event.persisted) resume() }
   let refreshTimer
   onScopeDispose(() => {
     persistMetadata()
@@ -399,6 +410,8 @@ export const useSessionStore = defineStore('sessions', () => {
     if (ws) { ws.onclose = null; ws.close() }
     document.removeEventListener('visibilitychange', resume)
     window.removeEventListener('online', resume)
+    window.removeEventListener('focus', resume)
+    window.removeEventListener('pageshow', resumePage)
   })
   window.addEventListener('pagehide', persistMetadata)
   onScopeDispose(() => window.removeEventListener('pagehide', persistMetadata))
