@@ -116,15 +116,20 @@ class WindowsSessionManager extends Base {
   input(name, { text, key }) {
     // Keep the fix in the Hub: already running ConPTY workers can keep their
     // terminals alive across this update, including workers from older versions.
-    this.getSession(name);
+    const session = this.getSession(name);
+    const checkSession = () => {
+      if (this.sessions.get(name) !== session) throw new Error('会话已更换，请确认后重新发送');
+    };
     if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'S-Left', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
     const previous = this.inputQueues.get(name) || Promise.resolve();
     const task = previous.catch(() => {}).then(async () => {
+      checkSession();
       await this.ensurePane(name);
-      const session = this.getSession(name);
+      checkSession();
       if (text && key) {
         await this.call(session, '/input', { text });
         await waitAfterPaste(key);
+        checkSession();
         return this.call(session, '/input', { key });
       }
       return this.call(session, '/input', { text, key });

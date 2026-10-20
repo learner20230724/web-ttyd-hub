@@ -2,6 +2,20 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { applyEvent } = require('../server/services/codex-activity');
 
+test('Codex commands use terminal delivery; paths, prose and multiline prompts still require model receipts', async () => {
+  const { inputKind } = await import('../frontend/src/utils/input-receipts.mjs');
+  const codex = { shell: 'codex', activity: { available: false } };
+  for (const text of ['/', '/model', '/status', '/new', '/resume', '/review', '/prompts:custom extra arguments', '/unknown-command']) {
+    assert.equal(inputKind(text, codex), 'command', text);
+  }
+  for (const text of ['/home/ubuntu/project', '/tmp/file.md 请检查', '/model\n这是一个例子', '解释 /model 的含义', '普通中文消息']) {
+    assert.equal(inputKind(text, codex), 'prompt', text);
+  }
+  assert.equal(inputKind('/status', { shell: 'bash', activity: { detected: true } }), 'command', 'Codex can be launched in a shell session');
+  assert.equal(inputKind('/status', { shell: 'bash' }), 'terminal');
+  assert.equal(inputKind('ls -al', { shell: 'bash' }), 'terminal');
+});
+
 test('question tool acknowledgement clears the pending mobile input although chat history stays unchanged', async () => {
   const { reconcileInputs, receiptCandidates } = await import('../frontend/src/utils/input-receipts.mjs');
   const state = { messages: [], sequence: 0 };

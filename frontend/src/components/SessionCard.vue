@@ -9,7 +9,7 @@ const props = defineProps({
   collapsed: Boolean,
 });
 
-const emit = defineEmits(["drag-start"]);
+const emit = defineEmits(["drag-start", "select"]);
 const store = useSessionStore();
 const confirming = ref(false);
 const editing = ref(false);
@@ -117,7 +117,10 @@ function cancelRemove(e) {
     </Teleport>
     <div class="card-content" v-show="!collapsed">
       <div class="card-top">
-        <div class="session-name">{{ session.displayName || session.name }}</div>
+        <button v-if="!session.archivedAt" type="button" class="session-name session-select"
+          :aria-label="`打开会话：${session.displayName || session.name}`" :aria-current="active ? 'true' : undefined"
+          @click.stop="emit('select', session.name)">{{ session.displayName || session.name }}</button>
+        <div v-else class="session-name">{{ session.displayName || session.name }}</div>
         <button v-if="!confirming && !editing" class="session-menu-btn" type="button"
           aria-label="会话操作菜单" aria-haspopup="dialog" :aria-expanded="menuOpen"
           @click.stop="openMenu">⋯</button>
@@ -226,6 +229,8 @@ function cancelRemove(e) {
   flex: 1;
   min-width: 0;
 }
+.session-select { min-height:40px; border:0; background:transparent; color:inherit; padding:0; text-align:left; cursor:pointer; }
+.session-select:focus-visible { outline:2px solid var(--accent-primary); outline-offset:3px; border-radius:3px; }
 
 .session-info {
   display: flex;
@@ -246,7 +251,7 @@ function cancelRemove(e) {
 .confirm-text { color: var(--danger); font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
 .confirm-actions { display: flex; flex-direction: column; gap: 8px; }
 .confirm-actions button { min-height: 40px; padding: 8px; }
-.card-top > button { flex: 0 0 36px; width: 36px; height: 40px; }
+.card-top > .session-menu-btn { flex: 0 0 36px; width: 36px; height: 40px; }
 
 
 .confirm-yes,

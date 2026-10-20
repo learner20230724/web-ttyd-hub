@@ -115,7 +115,14 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       await page.locator('[data-session-id="done"] .activity-badge.unread').waitFor();
       await page.locator('.sidebar').evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished)));
       await page.screenshot({ path: path.join(output, `status-list-${width}.png`) });
-      await page.locator('[data-session-id="done"]').tap();
+      await page.getByRole('button', { name: '打开会话：移动端适配与交互优化', exact: true }).tap();
+      assert.equal(await page.getByRole('button', { name: '会话列表', exact: true }).getAttribute('aria-expanded'), 'false',
+        'Choosing the already selected session must close the phone drawer');
+      await page.getByRole('button', { name: '会话列表', exact: true }).tap();
+      const openCompleted = page.getByRole('button', { name: '打开会话：整理项目说明', exact: true });
+      assert.equal(await openCompleted.count(), 1, 'Session selection must expose a keyboard-operable control');
+      await openCompleted.focus();
+      await page.keyboard.press('Enter');
       await page.waitForFunction(() => document.querySelector('.mobile-session-title')?.textContent === '整理项目说明');
       await page.locator('.unread-shortcut').waitFor({ state: 'detached' });
       assert.equal(await page.locator('.working-badge').textContent(), '2', 'Leaving a worker for a completed session counts both background workers');

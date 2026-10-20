@@ -132,6 +132,7 @@ export const useSessionStore = defineStore('sessions', () => {
     return true
   }
   function receiveList(data) {
+    const selected = sessions.value.find(s => s.name === current.value)
     connectionIssue.value = false
     void pruneContent(data.sessions)
     sessions.value = data.sessions
@@ -143,7 +144,8 @@ export const useSessionStore = defineStore('sessions', () => {
       const previous = data.sessions.find(s => s.name === saved?.name &&
         (s.createdAt || null) === saved?.createdAt && !s.archivedAt)
       select(previous?.name || null)
-    } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt)) select(null)
+    } else if (current.value && !data.sessions.some(s => s.name === current.value && !s.archivedAt &&
+      (!selected || (s.createdAt || null) === (selected.createdAt || null)))) select(null)
     loaded.value = true
   }
   function receiveSnapshot(data) {

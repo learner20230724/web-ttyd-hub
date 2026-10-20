@@ -330,3 +330,16 @@ test('Newly created sessions are remembered and archiving the selected session c
   await f.store.fetchSessions();
   assert.equal(f.store.current, null);
 });
+
+test('An open session cannot silently attach to a replacement with the same name', async t => {
+  const original = { ...session('reused-name'), createdAt: '2026-10-18T00:00:00Z' };
+  const f = await setup(t, { order: [], pinned: [] }, {}, { name: original.name, createdAt: original.createdAt });
+  let list = [original];
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ sessions: list }));
+  await f.store.fetchSessions();
+  assert.equal(f.store.current, original.name);
+  list = [{ ...original, createdAt: '2026-10-20T00:00:00Z' }];
+  await f.store.fetchSessions(); await f.nextTick();
+  assert.equal(f.store.current, null, 'Clear selection before any component can read or send to a replacement terminal');
+  assert.equal(f.saved.has(selectionKey), false);
+});

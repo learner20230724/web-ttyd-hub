@@ -8,8 +8,9 @@ defineProps({
   mobile: Boolean, // New prop to detect if we are in mobile mode (optional, or just use css media queries)
 });
 
-const emit = defineEmits(["create", "usage"]);
+const emit = defineEmits(["create", "usage", "select"]);
 const store = useSessionStore();
+function select(name) { store.select(name); emit('select'); }
 const list = ref(null);
 const dragging = ref(null);
 const dropTarget = ref(null);
@@ -119,7 +120,8 @@ onBeforeUnmount(() => finishDrag());
         :collapsed="collapsed"
         :class="{ dragging: dragging === s.name, 'drop-before': dropTarget === s.name && !dropAfter, 'drop-after': dropTarget === s.name && dropAfter }"
         @drag-start="startDrag"
-        @click="store.select(s.name)"
+        @click="select(s.name)"
+        @select="select"
       />
 
       <div v-if="!store.sortedSessions.length" class="empty-hint" v-show="!collapsed">

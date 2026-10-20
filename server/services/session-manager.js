@@ -379,29 +379,37 @@ class SessionManager extends EventEmitter {
 
   async mobile(name, full = false) {
     await this.ensurePane(name);
-    // Discovery can still be in flight after startup or a temporary observation
-    // failure. Join it before substituting terminal output for an answer.
+    // A resumed Codex daemon can initialize over several observations. Give
+    // that bounded warm-up time to recover its saved answer without new input.
     const session = this.getSession(name);
-    if (!full && (session.shell === 'codex' || session.activity?.detected) && !this.activity.messages(name)?.length) await this.activity.poll?.();
+    if (!full && (session.shell === 'codex' || session.activity?.detected) && !this.activity.messages(name)?.length) {
+      if (this.activity.ready) await this.activity.ready(name);
+      else await this.activity.poll?.();
+    }
     const activity = this.getSession(name).activity;
     // Capture before reading history: a later completion must not acknowledge a
     // terminal snapshot taken before that turn finished.
     const completed = activity?.completed || null;
     const messages = this.activity.messages(name);
     const inputReceipts = this.activity.inputReceipts(name);
-    if (!full && messages?.length) return { messages, inputReceipts, completed, activity };
+    if (!full && (messages?.length || activity?.available)) return { messages: messages || [], inputReceipts, completed, activity };
     // Keep output readable when structured dialogue is unavailable. A live
     // terminal snapshot can contain the final reply that an older cache lacks.
     return { ...await this.history(name), inputReceipts, completed, activity };
   }
 
   input(name, { text, key }) {
-    this.getSession(name);
+    const session = this.getSession(name);
+    const checkSession = () => {
+      if (this.sessions.get(name) !== session) throw new Error('会话已更换，请确认后重新发送');
+    };
     if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'S-Left', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
     if (text != null && (typeof text !== 'string' || Buffer.byteLength(text) > 64000 || /[\x00-\x08\x0b-\x1f\x7f]/.test(text))) throw new Error('输入文字无效或超过 64 KB');
     const previous = this.inputQueues.get(name) || Promise.resolve();
     const task = previous.catch(() => {}).then(async () => {
+      checkSession();
       await this.ensurePane(name);
+      checkSession();
       if (text) {
         const buffer = `hub-${randomUUID()}`;
         // stdin + named tmux buffer avoids shell interpolation and preserves multiline paste.
@@ -411,11 +419,11 @@ class SessionManager extends EventEmitter {
           child.on('close', code => code === 0 ? resolve() : reject(new Error('无法写入终端')));
           child.stdin.end(text);
         });
-        try { await runFile('tmux', ['paste-buffer', '-d', '-p', '-b', buffer, '-t', `=${name}:`]); }
+        try { checkSession(); await runFile('tmux', ['paste-buffer', '-d', '-p', '-b', buffer, '-t', `=${name}:`]); }
         finally { await runFile('tmux', ['delete-buffer', '-b', buffer]).catch(() => {}); }
         await waitAfterPaste(key);
       }
-      if (key) await runFile('tmux', ['send-keys', '-t', `=${name}:`, key]);
+      if (key) { checkSession(); await runFile('tmux', ['send-keys', '-t', `=${name}:`, key]); }
       return { ok: true };
     });
     this.inputQueues.set(name, task);

@@ -29,11 +29,18 @@ jobs:
       - run: npm ci --prefix frontend
       - run: npm test
       - run: npm run build
+      - if: runner.os == 'Linux'
+        run: npm install --global @openai/codex@0.163.0
+      - if: runner.os == 'Linux'
+        run: node tests/codex-cold-start-integration.cjs
+      - if: runner.os == 'Linux'
+        run: node tests/mobile-command-integration.cjs
       - run: npx playwright install --with-deps chromium
       - run: node tests/codex-picker-browser.cjs
       - run: node tests/mobile-input-browser.cjs
       - run: node tests/activity-browser.cjs
       - run: node tests/mobile-state-browser.cjs
+      - run: node tests/mobile-cold-start-browser.cjs
       - run: node tests/session-sync-browser.cjs
       - run: node tests/codex-mobile-browser.cjs
       - if: runner.os == 'Linux'

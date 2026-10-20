@@ -117,6 +117,7 @@ function handleMobileOverlayClick() {
         :collapsed="sidebarCollapsed"
         @create="showCreateDialog = true"
         @usage="showUsageDialog = true; if (isMobile) sidebarCollapsed = true"
+        @select="isMobile && (sidebarCollapsed = true)"
       />
 
       <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen" :reading-visible="sidebarCollapsed"

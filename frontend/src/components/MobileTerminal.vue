@@ -3,7 +3,7 @@ import { hubUrl } from '../utils/base.mjs'
 
 import { ref, shallowRef, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { contentKey, peekContent, loadContent, fetchContent } from '../utils/session-content.mjs'
-import { receiptCandidates, reconcileInputs } from '../utils/input-receipts.mjs'
+import { inputKind, receiptCandidates, reconcileInputs } from '../utils/input-receipts.mjs'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { terminalSegments, tableMarkdown } from '../utils/terminal-tables.mjs'
@@ -26,19 +26,46 @@ const elapsed = computed(() => {
   return seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`
 })
 const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
+const answerStartedAt = ref(Date.now()), structuredAnswers = new Map()
+const codexAnswer = computed(() => !props.showExecution && (session.value?.shell === 'codex' || session.value?.activity?.detected))
+const answerUnavailable = computed(() => codexAnswer.value && !Array.isArray(content.value.messages))
+const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话还没有回答。' :
+  error.value || now.value - answerStartedAt.value >= 10000 ? '暂时无法读取回答，正在自动重试。' : '正在读取回答…')
 const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
 const drafts = new Map()
 const pendingBySession = ref({})
+const inputNotices = ref({})
+const inputErrors = ref({})
+let inputRequest = null
 const transcriptIds = new Map()
+let inputGenerations = new Map()
+watch(() => store.sessions.map(s => [s.name, s.createdAt || '']), entries => {
+  const next = new Map(entries)
+  for (const [name, generation] of inputGenerations) {
+    if (next.get(name) === generation) continue
+    drafts.delete(name); transcriptIds.delete(name)
+    delete pendingBySession.value[name]; delete inputNotices.value[name]; delete inputErrors.value[name]
+    // The selection watcher runs after this list update. Clear before it can
+    // save the removed terminal's visible draft under a reused name.
+    if (store.current === name) draft.value = ''
+  }
+  inputGenerations = next
+}, { immediate: true, flush: 'sync' })
 const pendingMessages = computed(() => pendingBySession.value[store.current] || [])
+const inputError = computed(() => inputErrors.value[store.current] || '')
+const inputNotice = computed(() => {
+  const notice = inputNotices.value[store.current]
+  return notice?.expiresAt > now.value ? notice.text : ''
+})
 function reconcilePending(name, data) {
   pendingBySession.value[name] = reconcileInputs(pendingBySession.value[name] || [], data)
   transcriptIds.set(name, receiptCandidates(data).map(m => m.id))
 }
 function dismissPending(id) { pendingBySession.value[store.current] = pendingMessages.value.filter(item => item.id !== id) }
 const renderedMessages = new Map(), renderedOutput = new WeakMap()
-const messages = computed(() => (content.value.messages || []).map(m => {
+const messages = computed(() => (content.value.messages || (codexAnswer.value && session.value
+  ? structuredAnswers.get(contentKey(session.value, 'answer'))?.messages : null) || []).map(m => {
   const key = `${m.role}:${m.id}`
   const old = renderedMessages.get(key)
   if (old?.text === m.text) return old
@@ -57,6 +84,7 @@ let timer, disposed = false, epoch = 0, refreshSequence = 0, visibleKey = null, 
 // Selection and a completion notification are not proof that the reply was seen.
 // The content snapshot carries the completion it actually includes.
 const releaseReadGuard = store.setReadGuard(selected => props.readingVisible && follow.value &&
+  (!codexAnswer.value || Array.isArray(content.value.messages)) &&
   visibleKey === contentKey(selected, props.showExecution ? 'full' : 'answer') &&
   content.value.completed === selected.activity?.completed)
 watch(() => props.readingVisible, () => store.markRead(), { flush: 'post' })
@@ -70,6 +98,10 @@ function scrolled() {
 async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight; store.markRead() }
 async function display(entry, first = false) {
   if (!entry || entry.key !== visibleKey || entry.data === content.value) return
+  if (Array.isArray(entry.data.messages)) {
+    structuredAnswers.delete(entry.key); structuredAnswers.set(entry.key, entry.data)
+    if (structuredAnswers.size > 32) structuredAnswers.delete(structuredAnswers.keys().next().value)
+  }
   content.value = markRaw(entry.data)
   const key = visibleKey
   await nextTick()
@@ -111,7 +143,7 @@ watch([() => store.current, () => props.showExecution], async ([name, full], pre
   if (previousName && name !== previousName) drafts.set(previousName, draft.value)
   if (name !== previousName) { draft.value = drafts.get(name) || ''; more.value = false }
   const token = ++epoch, selected = session.value
-  clearTimeout(timer); error.value = ''; switching = true
+  clearTimeout(timer); error.value = ''; answerStartedAt.value = Date.now(); switching = true
   const view = full ? 'full' : 'answer'
   visibleKey = selected ? contentKey(selected, view) : null
   follow.value = positions.get(visibleKey)?.follow ?? true
@@ -136,20 +168,32 @@ async function send(key = 'Enter', withText = true) {
   if (sending.value || !session.value) return
   // Vue postpones v-model updates during IME composition; send the visible text.
   const name = session.value.name, text = withText ? (composerInput.value?.value ?? draft.value) : ''
+  const generation = session.value.createdAt || ''
+  const sameSession = () => inputGenerations.get(name) === generation
+  const kind = inputKind(text, session.value)
   if (withText) draft.value = text
   sending.value = true; error.value = ''
-  const pending = text && key === 'Enter' ? { id: `${Date.now()}-${Math.random()}`, text, codex: session.value.activity?.available === true, status: 'sending', before: transcriptIds.get(name) || [] } : null
+  delete inputNotices.value[name]
+  delete inputErrors.value[name]
+  const pending = text && key === 'Enter' && kind === 'prompt' ? { id: `${Date.now()}-${Math.random()}`, text, codex: true, status: 'sending', before: transcriptIds.get(name) || [] } : null
   if (pending) {
     pendingBySession.value[name] = [...(pendingBySession.value[name] || []), pending]
     await bottom()
   }
+  if (disposed || !sameSession()) { sending.value = false; return }
+  if (text && kind === 'command') emit('show-execution', true)
+  const request = new AbortController()
+  inputRequest = request
+  let timedOut = false
+  const confirmationTimeout = setTimeout(() => { timedOut = true; request.abort() }, 10000)
   try {
-    const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, key }) })
+    const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, key }), signal: request.signal })
     const data = await res.json(); if (!res.ok) throw new Error(data.error)
+    if (disposed || !sameSession()) return
     if (pending) {
       const item = pendingBySession.value[name]?.find(item => item.id === pending.id)
       if (item) item.status = 'delivered'
-    }
+    } else if (text) inputNotices.value[name] = { text: key ? '已发送到终端' : '已输入终端，尚未按回车', expiresAt: Date.now() + 4000 }
     if (withText) {
       drafts.delete(name)
       if (store.current === name && draft.value === text) {
@@ -161,14 +205,23 @@ async function send(key = 'Enter', withText = true) {
     }
     if (store.current === name) { await bottom(); refresh() }
   } catch (e) {
+    if (disposed || !sameSession()) return
     const item = pending && pendingBySession.value[name]?.find(item => item.id === pending.id)
-    if (item) item.status = 'uncertain'
-    error.value = `未确认发送成功，请检查终端后重试：${e.message}`
+    const message = timedOut
+      ? '发送确认超时，终端可能已收到。请先查看全文，确认后再决定是否重发。'
+      : `未确认发送成功，请先查看全文，再决定是否重发：${e.message}`
+    if (item) { item.status = 'uncertain'; item.error = message }
+    else inputErrors.value[name] = message
   }
-  finally { sending.value = false }
+  finally {
+    clearTimeout(confirmationTimeout)
+    if (inputRequest === request) inputRequest = null
+    sending.value = false
+  }
 }
 onBeforeUnmount(() => {
   disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
+  inputRequest?.abort()
   document.removeEventListener('visibilitychange', resumeReading); window.removeEventListener('online', resumeReading)
 })
 </script>
@@ -199,7 +252,7 @@ onBeforeUnmount(() => {
             <div class="markdown" v-html="message.html"></div>
           </article>
         </template>
-        <div v-else class="terminal-segments">
+        <div v-else-if="showExecution || !codexAnswer" class="terminal-segments">
           <template v-for="(segment, index) in outputSegments" :key="index">
             <div v-if="segment.type === 'table'" class="terminal-table" role="region" aria-label="终端表格，可左右滑动" tabindex="0">
               <table><tbody><tr v-for="(row, r) in segment.rows" :key="r"><td v-for="(cell, c) in row" :key="c">{{ cell }}</td></tr></tbody></table>
@@ -207,19 +260,24 @@ onBeforeUnmount(() => {
             <pre v-else class="mobile-output"><span v-for="(run, i) in segment.runs" :key="i" :style="run.style">{{ run.text }}</span></pre>
           </template>
         </div>
-        <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" role="status">
+        <div v-if="codexAnswer && (answerUnavailable || !messages.length)" class="reading-placeholder answer-placeholder" role="status">
+          <p>{{ answerPlaceholder }}</p>
+          <button type="button" @click="emit('show-execution', true)">查看全文</button>
+        </div>
+        <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" :role="item.status === 'uncertain' ? 'alert' : 'status'">
           <div class="pending-text">{{ item.text }}</div>
           <div class="pending-status">
-            <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? (item.codex ? '已送达终端 · 等待 Codex 确认接收' : '已发送到终端') : '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
+            <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? (item.codex ? '已送达终端 · 等待 Codex 确认接收' : '已发送到终端') : item.error || '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
             <button v-if="item.status !== 'sending'" type="button" aria-label="关闭发送提示" @click="dismissPending(item.id)">×</button>
           </div>
         </article>
-        <div v-if="!Object.keys(content).length && !error" class="reading-placeholder" role="status">正在加载会话…</div>
+        <div v-if="!codexAnswer && !Object.keys(content).length && !error" class="reading-placeholder" role="status">正在加载会话…</div>
       </div>
       <button v-if="!follow" class="latest" @click="bottom">↓ 回到最新</button>
-      <p v-if="error" class="mobile-error" role="alert">{{ error }}</p>
+      <p v-if="inputError || (error && !answerUnavailable)" class="mobile-error" role="alert">{{ inputError || error }}</p>
       <CodexQuestions v-if="session.status === 'running' && session.activity?.detected" :session-name="session.name" @handled="refresh()" @pending="questionPending = $event" @support="questionSupport = $event" />
       <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
+        <p v-if="inputNotice" class="input-notice" role="status">{{ inputNotice }}</p>
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
           <textarea ref="composerInput" v-model="draft" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
@@ -250,6 +308,7 @@ onBeforeUnmount(() => {
 .status-guidance p { flex:1; min-width:0; }.status-guidance button { flex-shrink:0; padding:6px 8px; font-size:12px; background:transparent; color:inherit; text-decoration:underline; }
 .mobile-reading { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:18px 16px; touch-action:pan-x pan-y pinch-zoom; }
 .reading-placeholder { color:#98a9c0; font-size:14px; text-align:center; padding:24px 0; }
+.answer-placeholder p { margin:0 0 12px; }.answer-placeholder button { color:#a9d7ff; background:transparent; text-decoration:underline; }
 .message { margin:0 0 24px; line-height:1.75; font-size:var(--reading-size); overflow-wrap:anywhere; user-select:text }
 .pending-message { margin:16px 0; padding:12px 14px; border:1px dashed #52729b; border-radius:14px; background:#18273d; }
 .pending-text { font-size:var(--reading-size); white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.6; }
@@ -282,6 +341,7 @@ button { min-height:44px; border:0; border-radius:10px; padding:8px 12px; backgr
 .keys { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px }
 .latest { position:absolute; right:16px; bottom:110px; box-shadow:0 3px 15px #0008 }
 .mobile-error { padding:8px 16px; color:#fda4af; font-size:13px }
+.input-notice { margin:0 0 6px; color:#98a9c0; font-size:12px; }
 .mobile-empty { margin:auto; padding:20px; color:#94a3b8 }
 @media (max-height: 550px) {
   .mobile-session-header { padding:6px 12px; }.status-guidance { padding:4px 8px; margin-top:4px; }

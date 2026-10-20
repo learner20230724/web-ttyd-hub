@@ -1,11 +1,48 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const contentResponse = require('../server/services/content-response');
+const { CodexActivity } = require('../server/services/codex-activity');
 
 for (const [platform, Manager] of [
   ['Linux', require('../server/services/session-manager')],
   ['Windows', require('../server/services/windows-session-manager')],
 ]) {
+  test(`${platform} holds the first answer through source warm-up while full remains immediate`, async t => {
+    const session = { name: 'fixture', status: 'running', shell: 'codex', activity: { available: false } };
+    const replies = [{ id: 'final', role: 'assistant', text: 'Saved final reply before any new input' }];
+    const activity = new CodexActivity({ sessions: new Map([[session.name, session]]), emit() {}, serialize: s => s }, { interval: 60000 });
+    t.after(() => activity.close()); clearInterval(activity.timer);
+    let polls = 0, answered = false, captures = 0;
+    activity.poll = async () => { polls++; };
+    const manager = { activity, ensurePane: async () => {}, getSession: () => session,
+      history: async () => { captures++; return { text: 'Full terminal output' }; } };
+    const first = Manager.prototype.mobile.call(manager, session.name).then(data => { answered = true; return data; });
+    const second = Manager.prototype.mobile.call(manager, session.name);
+    await new Promise(resolve => setImmediate(resolve));
+    const full = await Manager.prototype.mobile.call(manager, session.name, true);
+    assert.equal(full.text, 'Full terminal output');
+    assert.equal(answered, false, 'First answer must wait for initialization instead of returning terminal output');
+    assert.equal(polls, 1, 'Concurrent answer requests share one warm-up observation');
+    activity.states.set(session.name, { messages: replies });
+    activity.publish(session, { available: true, busy: false, phase: 'completed', completed: 'saved-turn' });
+    for (const result of await Promise.all([first, second])) {
+      assert.deepEqual(result.messages, replies); assert.equal(result.completed, 'saved-turn');
+      assert.equal(result.text, undefined);
+    }
+    assert.equal(captures, 1, 'Only the explicit full request captures terminal output');
+  });
+
+  test(`${platform} a verified new conversation has an empty answer instead of masquerading as terminal output`, async () => {
+    const session = { shell: 'codex', activity: { available: true, phase: 'idle' } };
+    let captures = 0;
+    const manager = { ensurePane: async () => {}, getSession: () => session,
+      activity: { messages: () => [], inputReceipts: () => [] },
+      history: async () => { captures++; return { text: 'Welcome to the terminal' }; } };
+    const answer = await Manager.prototype.mobile.call(manager, 'fixture');
+    assert.deepEqual(answer.messages, []); assert.equal(answer.text, undefined); assert.equal(captures, 0);
+    assert.equal((await Manager.prototype.mobile.call(manager, 'fixture', true)).text, 'Welcome to the terminal');
+  });
+
   test(`${platform} loads the bound dialogue before falling back during the first observation`, async () => {
     const session = { shell: 'codex', activity: { available: false } };
     const replies = [{ id: 'final', role: 'assistant', text: 'Actual final reply' }];
@@ -65,6 +102,19 @@ for (const [platform, Manager] of [
     assert.equal(full.text, 'Old terminal snapshot');
   });
 }
+
+test('source warm-up is bounded and shutdown releases pending answer readers', async t => {
+  const session = { name: 'fixture', status: 'running', shell: 'codex', activity: { available: false } };
+  const activity = new CodexActivity({ sessions: new Map([[session.name, session]]), emit() {}, serialize: s => s }, { interval: 60000 });
+  t.after(() => activity.close()); clearInterval(activity.timer);
+  let polls = 0; activity.poll = async () => { polls++; };
+  await activity.ready(session.name, 20);
+  assert.equal(polls, 1, 'Unresolvable identity does not create a polling loop');
+  const pending = activity.ready(session.name, 4000);
+  await new Promise(resolve => setImmediate(resolve));
+  activity.close(); await pending;
+  assert.equal(polls, 2);
+});
 
 test('completion changes invalidate a content ETag even when the reply text is unchanged', () => {
   const response = () => ({ headers: {}, code: 200, set(key, value) { this.headers[key] = value; },

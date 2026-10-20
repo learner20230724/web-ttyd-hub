@@ -131,15 +131,17 @@ async function consumeRollout(state, size) {
 class CodexActivity {
   constructor(manager, { observer = new LinuxCodexObserver(), interval = 1500 } = {}) {
     this.manager = manager; this.states = new Map(); this.polling = null; this.updates = new Map();
+    this.readiness = new Map();
     this.questions = new (require('./codex-questions').CodexQuestions)(this);
     this.usage = new (require('./codex-usage').CodexUsage)();
     this.observer = observer;
     this.timer = setInterval(() => this.poll(), interval); this.timer.unref();
   }
   publish(session, activity) {
-    if (JSON.stringify(session.activity) === JSON.stringify(activity)) return;
+    const changed = JSON.stringify(session.activity) !== JSON.stringify(activity);
     session.activity = activity;
-    this.manager.emit('session:activity', this.manager.serialize(session));
+    this.readiness.get(session.name)?.check();
+    if (changed) this.manager.emit('session:activity', this.manager.serialize(session));
   }
   async update(session, pane, windowsPaths) {
     const previous = this.updates.get(session.name) || Promise.resolve();
@@ -200,6 +202,32 @@ class CodexActivity {
     if (!this.polling) this.polling = this.pollSessions().finally(() => { this.polling = null; });
     return this.polling;
   }
+  ready(name, timeout = 4000) {
+    const available = () => {
+      const session = this.manager.sessions.get(name);
+      return !session || session.status !== 'running' || session.activity?.available || this.messages(name)?.length;
+    };
+    if (available()) return Promise.resolve();
+    if (this.readiness.has(name)) return this.readiness.get(name).promise;
+    // Codex's daemon/title can take a few observations to initialize after
+    // resume. Share the existing observer rather than returning a terminal
+    // snapshot as an answer after its very first unavailable result.
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    const entry = { promise, timer: null };
+    entry.finish = () => {
+      if (this.readiness.get(name) !== entry) return;
+      clearTimeout(entry.timer); this.readiness.delete(name); resolve();
+    };
+    entry.check = () => { if (available()) entry.finish(); };
+    this.readiness.set(name, entry);
+    entry.timer = setTimeout(entry.finish, timeout);
+    Promise.resolve().then(() => {
+      entry.check();
+      if (this.readiness.get(name) === entry) return this.poll();
+    }).catch(() => {}).then(entry.check);
+    return promise;
+  }
   async pollSessions() {
     try {
       let panes, windowsPaths;
@@ -237,6 +265,10 @@ class CodexActivity {
     await this.update(session, { pid, id, title: title.join('\t') });
     return this.binding(name);
   }
-  close() { clearInterval(this.timer); this.questions.close(); this.usage.close(); }
+  close() {
+    clearInterval(this.timer);
+    for (const request of this.readiness.values()) request.finish();
+    this.questions.close(); this.usage.close();
+  }
 }
 module.exports = { CodexActivity, applyEvent, consumeRollout };

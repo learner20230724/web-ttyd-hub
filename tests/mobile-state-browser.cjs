@@ -16,8 +16,12 @@ const createdAt = '2026-10-18T00:00:00Z';
 const make = name => ({ name, displayName: name, createdAt, shell: 'codex', status: 'running', activity: { available: true, busy: true, phase: 'working' } });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fixture(browser, { blockedStorage = false, unavailableAnswers = false, cachedAnswer = null, sharedSync = false, footerFailure = false, titleBinding = false } = {}) {
+async function fixture(browser, { blockedStorage = false, unavailableAnswers = false, emptyAnswers = false, shell = 'codex', cachedAnswer = null, sharedSync = false, footerFailure = false, titleBinding = false } = {}) {
   const sessions = [make('reader'), make('background')], manager = new EventEmitter();
+  sessions.forEach(session => {
+    session.shell = shell;
+    if (unavailableAnswers) session.activity = { available: false, detected: shell === 'codex', busy: false, phase: 'unknown', completed: null };
+  });
   if (sharedSync) {
     manager.sessions = new Map(sessions.map(s => [s.name, s]));
     manager.list = () => sessions;
@@ -40,7 +44,7 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
   manager.ensurePane = async () => {};
   manager.getSession = name => sessions.find(s => s.name === name);
   manager.activity = {
-    messages: name => unavailableAnswers ? null : [{ id: 'progress', role: 'assistant', phase: 'commentary', text: `精简回答 ${name} 版本 ${version}` + (longContent ? '\n\n' + '用于检查阅读位置的历史内容。\n\n'.repeat(60) : '') }],
+    messages: name => unavailableAnswers ? null : emptyAnswers ? [] : [{ id: 'progress', role: 'assistant', phase: 'commentary', text: `精简回答 ${name} 版本 ${version}` + (longContent ? '\n\n' + '用于检查阅读位置的历史内容。\n\n'.repeat(60) : '') }],
     inputReceipts: () => [],
   };
   manager.history = async name => ({ text: `完整终端 ${name} 版本 ${version}` });
@@ -139,7 +143,10 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     },
     nextContent() { version++; },
     longContent() { longContent = true; version++; },
-    answersAvailable(value) { unavailableAnswers = !value; },
+    answersAvailable(value) {
+      unavailableAnswers = !value;
+      sessions[0].activity = { available: value, detected: shell === 'codex', busy: value, phase: value ? 'working' : 'unknown', completed: null };
+    },
     async close() {
       await context.close(); wss.clients.forEach(ws => ws.terminate()); wss.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
       if (sourceDirectory) { manager.activity.close(); await fs.rm(sourceDirectory, { recursive: true, force: true }); }
@@ -237,14 +244,19 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       assert.equal(f.inputs, 0);
     });
     await experiment('missing dialogue never takes ownership of the reading toggle', { unavailableAnswers: true }, async f => {
-      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 2000 });
-      assert.equal(await f.page.getByText('暂无可显示的回答', { exact: true }).count(), 0);
+      await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
+      assert.equal(await f.page.locator('.mobile-output').count(), 0, 'Answer mode cannot masquerade as full output');
       const toggle = f.page.locator('.reading-control[aria-pressed]');
       for (const full of [true, false, true, false]) {
         await toggle.tap();
         assert.equal(await toggle.getAttribute('aria-pressed'), String(full));
         assert.equal(await toggle.textContent(), full ? '全文' : '回答');
         assert.equal(await f.page.evaluate(() => JSON.parse(localStorage.getItem('web-ttyd-hub.mobile-reading.v1')).showExecution), full);
+        if (full) await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
+        else {
+          await f.page.locator('.answer-placeholder').waitFor({ timeout: 1000 });
+          assert.equal(await f.page.locator('.mobile-output').count(), 0);
+        }
       }
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
@@ -254,22 +266,45 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
       f.answersAvailable(false); f.nextContent();
-      await f.page.getByText('完整终端 reader 版本 1', { exact: true }).waitFor({ timeout: 2000 });
+      await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
+      assert.equal(await f.page.getByText('精简回答 reader 版本 0', { exact: true }).count(), 1, 'A source gap preserves a final reply already fetched');
+      assert.equal(await f.page.locator('.mobile-output').count(), 0);
       assert.equal(await toggle.textContent(), '回答');
+      await toggle.tap();
+      await f.page.getByText('完整终端 reader 版本 1', { exact: true }).waitFor({ timeout: 1000 });
+      await toggle.tap();
+      await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 1', { exact: true }).waitFor();
       assert.equal(await toggle.textContent(), '回答');
       assert.equal(await f.page.evaluate(() => JSON.parse(localStorage.getItem('web-ttyd-hub.mobile-reading.v1')).showExecution), false);
       assert.equal(f.inputs, 0);
     });
-    for (const legacy of [false, true]) await experiment(legacy ? 'old disk terminal output does not hide the current output' : 'old disk dialogue does not hide a newer final terminal reply', {
+    await experiment('a bound empty thread has a genuine empty answer state', { emptyAnswers: true }, async f => {
+      await f.page.getByText('此会话还没有回答。', { exact: true }).waitFor({ timeout: 1500 });
+      assert.equal(await f.page.locator('.mobile-output').count(), 0);
+      await f.page.locator('.answer-placeholder').getByRole('button', { name: '查看全文', exact: true }).tap();
+      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
+      assert.equal(f.inputs, 0);
+    });
+    await experiment('ordinary shells keep readable terminal output in either view', { unavailableAnswers: true, shell: 'bash' }, async f => {
+      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 1500 });
+      assert.equal(await f.page.locator('.answer-placeholder').count(), 0);
+      await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
+      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
+      assert.equal(f.inputs, 0);
+    });
+    for (const legacy of [false, true]) await experiment(legacy ? 'old disk terminal output is never presented as an answer' : 'source gaps preserve access to current terminal output without labelling it an answer', {
       unavailableAnswers: true,
       cachedAnswer: legacy ? { text: '旧版误存的终端全文' } : { messages: [{ id: 'saved', role: 'assistant', text: '之前已读过的回答' }], completed: 'previous-turn' },
     }, async f => {
-      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 2000 });
+      await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
       await f.page.waitForTimeout(700);
-      assert.equal(await f.page.locator('.mobile-output').count(), 1);
+      assert.equal(await f.page.locator('.mobile-output').count(), 0);
       assert.equal(await f.page.getByText('旧版误存的终端全文', { exact: true }).count(), 0);
+      await f.page.locator('.answer-placeholder').getByRole('button', { name: '查看全文', exact: true }).tap();
+      await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
+      await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
     });

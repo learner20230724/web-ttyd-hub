@@ -1,5 +1,13 @@
 const normalized = text => String(text || '').replace(/\r\n?/g, '\n').normalize('NFC').trim();
 
+// Slash commands are handled by the TUI, not submitted as matching user
+// messages. Some start a model turn, but that still cannot acknowledge the
+// literal command text. Paths and multiline prompts remain ordinary messages.
+export function inputKind(text, session) {
+  if (session?.shell !== 'codex' && !session?.activity?.detected) return 'terminal';
+  return /^\/[\p{L}\p{N}_:-]*(?:[\t ][^\r\n]*)?$/u.test(String(text || '').trim()) ? 'command' : 'prompt';
+}
+
 export function receiptCandidates(data) {
   return [...(data.messages || []).filter(m => m.role === 'user'), ...(data.inputReceipts || [])];
 }
