@@ -43,6 +43,8 @@ jobs:
       - run: node tests/mobile-cold-start-browser.cjs
       - run: node tests/mobile-lifecycle-browser.cjs
       - run: node tests/session-lifecycle-browser.cjs
+      - run: node tests/session-transport-browser.cjs
+      - run: node tests/mobile-answer-presentation-browser.cjs
       - run: node tests/session-sync-browser.cjs
       - run: node tests/session-metadata-browser.cjs
       - run: node tests/mobile-local-cache-browser.cjs

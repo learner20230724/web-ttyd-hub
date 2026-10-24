@@ -9,6 +9,19 @@ let database, liveSessions = null
 const databaseName = 'ttyd-hub-content-v1' + (basePath ? ':' + basePath : '')
 export const contentKey = (session, view) => JSON.stringify([...(basePath ? [basePath] : []), session.name, session.createdAt || '', view])
 const allowed = entry => !liveSessions || liveSessions.get(entry.sessionId) === entry.generation
+const structured = data => Array.isArray(data?.messages)
+function retainAnswer(entry, previous) {
+  // Keep the newest HTTP payload and ETag intact. A verified older dialogue is
+  // a separate reading fallback, never evidence that the newer turn was read.
+  if (structured(entry.data)) delete entry.retainedAnswer
+  else if (!structured(entry.retainedAnswer)) {
+    const prior = structured(previous?.data) ? previous.data : previous?.retainedAnswer
+    if (structured(prior)) entry.retainedAnswer = prior
+    else delete entry.retainedAnswer
+  }
+  entry.bytes = (JSON.stringify(entry.data).length + (entry.retainedAnswer ? JSON.stringify(entry.retainedAnswer).length : 0)) * 2
+  return entry
+}
 function openDB() {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null)
   if (!database) database = new Promise(resolve => {
@@ -65,6 +78,7 @@ export function saveContent(session, view, data, etag = null) {
   const entry = { key: contentKey(session, view), sessionId: session.name, generation: session.createdAt || '',
     data, etag, used: Date.now(), bytes: JSON.stringify(data).length * 2 }
   if (!allowed(entry)) return null
+  if (view === 'answer') retainAnswer(entry, peekContent(session, view))
   remember(entry); void persist(entry); return entry
 }
 export async function loadContent(session, view) {
@@ -82,8 +96,19 @@ export async function loadContent(session, view) {
       })
       if (!entry || entry.key !== key || entry.sessionId !== session.name || entry.generation !== (session.createdAt || '') ||
           !allowed(entry) || !entry.data || typeof entry.bytes !== 'number' || entry.bytes > DISK_LIMIT) return null
-      // A network response may have arrived while the database was opening.
-      return peekContent(session, view) || remember(entry)
+      // A network fallback may win the disk race. Merge only its missing
+      // dialogue backup; the newer payload, completion and ETag still win.
+      const latest = peekContent(session, view)
+      if (latest) {
+        if (view === 'answer') {
+          const previous = latest.retainedAnswer
+          retainAnswer(latest, entry)
+          if (latest.retainedAnswer !== previous) { remember(latest); void persist(latest) }
+        }
+        return latest
+      }
+      if (view === 'answer') retainAnswer(entry)
+      return remember(entry)
     } catch { return null }
     finally { loads.delete(key) }
   })()

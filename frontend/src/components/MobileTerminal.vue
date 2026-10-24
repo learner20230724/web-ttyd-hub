@@ -1,7 +1,7 @@
 <script setup>
 import { hubUrl } from '../utils/base.mjs'
 
-import { ref, shallowRef, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, shallowRef, shallowReactive, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { contentKey, peekContent, loadContent, fetchContent } from '../utils/session-content.mjs'
 import { inputKind, receiptCandidates, reconcileInputs } from '../utils/input-receipts.mjs'
 import { marked } from 'marked'
@@ -37,12 +37,18 @@ const elapsed = computed(() => {
   return seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`
 })
 const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
-const answerStartedAt = ref(Date.now()), structuredAnswers = new Map()
+const answerStartedAt = ref(Date.now()), structuredAnswers = shallowReactive(new Map())
 const codexAnswer = computed(() => !props.showExecution && (session.value?.shell === 'codex' || session.value?.activity?.detected))
-const answerUnavailable = computed(() => codexAnswer.value && !Array.isArray(content.value.messages))
+// Availability follows the dialogue actually rendered, including a retained
+// verified reply during a temporary source gap, rather than the latest payload.
+const answerData = computed(() => Array.isArray(content.value.messages) ? content.value :
+  codexAnswer.value && session.value ? structuredAnswers.get(contentKey(session.value, 'answer')) : null)
+const answerUnavailable = computed(() => codexAnswer.value && !Array.isArray(answerData.value?.messages))
 const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话还没有回答。' : store.cachedSnapshot
   ? '此视图暂无本地缓存，联网后自动加载。' :
-  error.value || now.value - answerStartedAt.value >= 10000 ? '暂时无法读取回答，正在自动重试。' : '正在读取回答…')
+  error.value ? '暂时无法读取回答，正在自动重试。' : Object.keys(content.value).length
+    ? '对话记录尚未就绪，可先查看全文。' : now.value - answerStartedAt.value >= 10000
+      ? '仍在读取对话，可先查看全文。' : '正在读取回答…')
 const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
 const drafts = new Map()
@@ -76,11 +82,10 @@ function reconcilePending(name, data) {
 }
 function dismissPending(id) { pendingBySession.value[store.current] = pendingMessages.value.filter(item => item.id !== id) }
 const renderedMessages = new Map(), renderedOutput = new WeakMap()
-const messages = computed(() => (content.value.messages || (codexAnswer.value && session.value
-  ? structuredAnswers.get(contentKey(session.value, 'answer'))?.messages : null) || []).map(m => {
+const messages = computed(() => (answerData.value?.messages || []).map(m => {
   const key = `${m.role}:${m.id}`
   const old = renderedMessages.get(key)
-  if (old?.text === m.text) return old
+  if (old?.text === m.text && old?.phase === m.phase) return old
   const rendered = markRaw({ ...m, html: DOMPurify.sanitize(marked.parse(tableMarkdown(m.text)), { FORBID_TAGS: ['img'], FORBID_ATTR: ['style'] }) })
   renderedMessages.set(key, rendered)
   if (renderedMessages.size > 1200) renderedMessages.delete(renderedMessages.keys().next().value)
@@ -96,9 +101,9 @@ let timer, disposed = false, epoch = 0, refreshSequence = 0, visibleKey = null, 
 // Selection and a completion notification are not proof that the reply was seen.
 // The content snapshot carries the completion it actually includes.
 const releaseReadGuard = store.setReadGuard(selected => props.readingVisible && follow.value &&
-  (!codexAnswer.value || Array.isArray(content.value.messages)) &&
+  (!codexAnswer.value || Array.isArray(answerData.value?.messages)) &&
   visibleKey === contentKey(selected, props.showExecution ? 'full' : 'answer') &&
-  content.value.completed === selected.activity?.completed)
+  (codexAnswer.value ? answerData.value?.completed : content.value.completed) === selected.activity?.completed)
 watch(() => props.readingVisible, () => store.markRead(), { flush: 'post' })
 function scrolled() {
   const p = pane.value
@@ -108,12 +113,17 @@ function scrolled() {
   store.markRead()
 }
 async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight; store.markRead() }
+function retainAnswer(entry) {
+  const data = Array.isArray(entry?.data?.messages) ? entry.data : entry?.retainedAnswer
+  if (!Array.isArray(data?.messages) || structuredAnswers.get(entry.key) === data) return false
+  structuredAnswers.delete(entry.key); structuredAnswers.set(entry.key, data)
+  if (structuredAnswers.size > 32) structuredAnswers.delete(structuredAnswers.keys().next().value)
+  return true
+}
 async function display(entry, first = false) {
-  if (!entry || entry.key !== visibleKey || entry.data === content.value) return
-  if (Array.isArray(entry.data.messages)) {
-    structuredAnswers.delete(entry.key); structuredAnswers.set(entry.key, entry.data)
-    if (structuredAnswers.size > 32) structuredAnswers.delete(structuredAnswers.keys().next().value)
-  }
+  if (!entry || entry.key !== visibleKey) return
+  const answerChanged = retainAnswer(entry)
+  if (entry.data === content.value && !answerChanged) return
   content.value = markRaw(entry.data)
   const key = visibleKey
   await nextTick()
@@ -183,7 +193,9 @@ watch([() => store.current, () => props.showExecution, () => session.value?.crea
   // cannot hold up a fresh response. The unseen view only warms from local disk;
   // downloading full terminal logs waits until the user actually opens them.
   if (!cached) void loadContent(selected, view).then(stored => {
-    if (token === epoch && !Object.keys(content.value).length) return display(stored, true)
+    // loadContent merges a late verified dialogue into the latest entry without
+    // replacing its live payload. That retained answer must still reach the UI.
+    if (token === epoch) return display(stored, true)
   })
   const other = full ? 'answer' : 'full'
   if (!peekContent(selected, other)) void loadContent(selected, other).then(entry => {
@@ -291,7 +303,7 @@ onBeforeUnmount(() => {
             <pre v-else class="mobile-output"><span v-for="(run, i) in segment.runs" :key="i" :style="run.style">{{ run.text }}</span></pre>
           </template>
         </div>
-        <div v-if="codexAnswer && (answerUnavailable || !messages.length)" class="reading-placeholder answer-placeholder" role="status">
+        <div v-if="codexAnswer && !messages.length" class="reading-placeholder answer-placeholder" role="status">
           <p>{{ answerPlaceholder }}</p>
           <button type="button" @click="emit('show-execution', true)">查看全文</button>
         </div>

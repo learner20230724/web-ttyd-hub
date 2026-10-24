@@ -59,9 +59,10 @@ export const useSessionStore = defineStore('sessions', () => {
     clearTimeout(metadataTimer); metadataTimer = null
     if (!hasConfirmedList) return
     const confirmedRead = lastShared ? Object.fromEntries(sessions.value.filter(s => lastShared.read?.[s.name]?.createdAt === s.createdAt)
-      .map(s => [s.name, lastShared.read[s.name].completed])) : read.value
+      .map(s => [s.name, lastShared.read[s.name].completed])) : cachedSnapshot.value && cached ? cached.read : read.value
+    const confirmedLayout = lastShared ? normalizeLayout(lastShared.layout) : cachedSnapshot.value && cached ? cached.layout : layout.value
     const selected = sessions.value.find(s => s.name === current.value && !s.archivedAt)
-    saveMetadata({ sessions: sessions.value, read: confirmedRead, layout: lastShared?.layout || layout.value,
+    saveMetadata({ sessions: sessions.value, read: confirmedRead, layout: confirmedLayout,
       shells: shells.value, platform: platform.value,
       selection: selected ? { name: selected.name, createdAt: selected.createdAt } : null })
   }
@@ -83,6 +84,9 @@ export const useSessionStore = defineStore('sessions', () => {
   if (!cached) try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(layoutKey))) } catch {}
   const sync = createSessionSync({
     sessions: () => sessions.value, legacyRead: cached ? {} : { ...read.value }, legacyLayout: layout.value,
+    preview: cached ? { layout: cached.layout, read: Object.fromEntries(cached.sessions.filter(s => cached.read[s.name])
+      .map(s => [s.name, { createdAt: s.createdAt, completed: cached.read[s.name] }])) } : null,
+    confirmed: value => { lastShared = value; scheduleMetadata() },
     apply: value => {
       read.value = value.read; layout.value = value.layout
       try {
@@ -114,7 +118,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
   function togglePin(name) {
     const session = sessions.value.find(s => s.name === name)
-    if (sync.enabled && session) {
+    if ((sync.enabled || cachedSnapshot.value) && session) {
       sync.enqueue({ type: 'pin', name, createdAt: session.createdAt, pinned: !isPinned(name) })
       return
     }
@@ -122,7 +126,7 @@ export const useSessionStore = defineStore('sessions', () => {
     saveLayout({ order: [name, ...sortedSessions.value.map(s => s.name).filter(x => x !== name)], pinned })
   }
   function reorderSession(name, target, after) {
-    if (sync.enabled) {
+    if (sync.enabled || cachedSnapshot.value) {
       const session = sessions.value.find(s => s.name === name), other = sessions.value.find(s => s.name === target)
       if (session && other) sync.enqueue({ type: 'move', name, createdAt: session.createdAt,
         target, targetCreatedAt: other.createdAt, after: !!after })
@@ -150,8 +154,6 @@ export const useSessionStore = defineStore('sessions', () => {
   let listRequest = null, refreshPending = false, activitySequence = 0
   const liveActivity = new Map()
   function receiveShared(value) {
-    if (!value || !Number.isSafeInteger(value.revision) || !value.read) return false
-    if (!lastShared || value.revision >= lastShared.revision) lastShared = value
     const accepted = sync.receive(value)
     if (accepted) scheduleMetadata()
     return accepted
@@ -351,11 +353,15 @@ export const useSessionStore = defineStore('sessions', () => {
     ws.onopen = () => {
       reconnectDelay = 1000
       // Recover completions that happened while a phone's connection was asleep.
-      refreshVisible(true)
+      // Reuse the HTTP read already in progress: flapping notification sockets
+      // must not repeatedly abort a slow initial list and starve its first load.
+      refreshVisible()
     }
 
     ws.onclose = () => {
-      connectionIssue.value = true
+      // A failed notification channel does not invalidate a successful HTTP
+      // snapshot. Let that independent authoritative read decide freshness.
+      refreshVisible()
       scheduleReconnect()
     }
   }

@@ -4,7 +4,7 @@ import { scopedStorageKey } from './session-metadata.mjs'
 
 // One outbox per tab/WebView, retained through reload. Confirmed state always
 // comes from the Hub; local caches only seed the first upgrade.
-export function createSessionSync({ sessions, legacyRead, legacyLayout, apply, error, refresh }) {
+export function createSessionSync({ sessions, legacyRead, legacyLayout, preview, apply, confirmed, error, refresh }) {
   const migrationKey = scopedStorageKey('web-ttyd-hub.shared-migrated.v1')
   const pendingKey = scopedStorageKey('web-ttyd-hub.shared-pending.v1')
   let shared = null, sending = null, disposed = false, migrated = false, pending = []
@@ -15,16 +15,17 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, apply, e
   } catch {}
   const save = () => { try { sessionStorage.setItem(pendingKey, JSON.stringify(pending)) } catch {} }
   function render() {
-    if (!shared || disposed) return
+    const source = shared || preview
+    if (!source || disposed) return
     const list = sessions(), read = Object.create(null)
     for (const session of list) {
-      const marker = shared.read[session.name]
+      const marker = source.read[session.name]
       if (marker?.createdAt === session.createdAt) read[session.name] = marker.completed
     }
-    let layout = normalizeLayout(shared.layout)
+    let layout = normalizeLayout(source.layout)
     for (const op of pending) {
       if (op.type === 'initialize') {
-        if (shared.layout === null) layout = normalizeLayout(op.layout)
+        if (source.layout === null) layout = normalizeLayout(op.layout)
         continue
       }
       const session = list.find(s => s.name === op.name && s.createdAt === op.createdAt && !s.archivedAt)
@@ -45,7 +46,12 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, apply, e
   }
   function accept(value) {
     if (!value || !Number.isSafeInteger(value.revision) || !value.read) return false
-    if (!shared || value.revision >= shared.revision) shared = value
+    if (!shared || value.revision >= shared.revision) {
+      shared = value
+      // Persist acknowledged state, including successful mutation responses.
+      // The optimistic render below can still contain unconfirmed outbox ops.
+      confirmed?.(shared)
+    }
     return true
   }
   async function flush() {
@@ -79,6 +85,9 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, apply, e
       if (!disposed && sending === request) error('会话状态尚未同步，联网后会自动重试。')
     } finally { if (sending === request) sending = null }
   }
+  // Replay the durable outbox over cached state immediately. A preview never
+  // enables network writes or calls confirmed; the live snapshot must do that.
+  if (preview) render()
   return {
     get enabled() { return shared !== null },
     receive(value) {

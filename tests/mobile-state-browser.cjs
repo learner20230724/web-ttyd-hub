@@ -265,9 +265,12 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
+      const sourceGap = f.page.waitForResponse(async response => response.url().endsWith('/api/sessions/reader/mobile') &&
+        response.ok() && (await response.json()).text?.includes('完整终端 reader 版本 1'));
       f.answersAvailable(false); f.nextContent();
-      await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
+      await sourceGap;
       assert.equal(await f.page.getByText('精简回答 reader 版本 0', { exact: true }).count(), 1, 'A source gap preserves a final reply already fetched');
+      assert.equal(await f.page.locator('.answer-placeholder').count(), 0, 'A readable retained reply is not a failed or empty answer');
       assert.equal(await f.page.locator('.mobile-output').count(), 0);
       assert.equal(await toggle.textContent(), '回答');
       await toggle.tap();
@@ -298,11 +301,13 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       unavailableAnswers: true,
       cachedAnswer: legacy ? { text: '旧版误存的终端全文' } : { messages: [{ id: 'saved', role: 'assistant', text: '之前已读过的回答' }], completed: 'previous-turn' },
     }, async f => {
-      await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
+      if (legacy) await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
+      else await f.page.getByText('之前已读过的回答', { exact: true }).waitFor({ timeout: 2000 });
       await f.page.waitForTimeout(700);
+      if (!legacy) assert.equal(await f.page.locator('.answer-placeholder').count(), 0, 'A delayed verified disk answer stays readable during a source gap');
       assert.equal(await f.page.locator('.mobile-output').count(), 0);
       assert.equal(await f.page.getByText('旧版误存的终端全文', { exact: true }).count(), 0);
-      await f.page.locator('.answer-placeholder').getByRole('button', { name: '查看全文', exact: true }).tap();
+      await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       f.answersAvailable(true);

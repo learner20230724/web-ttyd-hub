@@ -51,6 +51,8 @@ These are templates. Verify DNS, TLS, authentication and clipboard behavior in y
 
 ## 跨设备会话状态
 
+通知连接和 HTTP 状态读取独立恢复：WebSocket 断开不再直接清除已由 HTTP 确认的未读／工作计数，重连打开复用在途列表请求，避免反复取消首次慢请求。真正的状态读取失败仍保留断线降级。共享同步接受 HTTP 确认结果时立即更新本机元数据；缓存启动期间的置顶／排序先进入既有 outbox，确认会话创建标识后再合并。专项控制变量、截图与验证边界见 [2026-10-24 复核](ux-audit-2026-10-24.md)。
+
 `GET /api/sessions` 同时返回 `shared`（递增版本、逐轮已读标记、置顶和排列），禁止缓存。`POST /api/sessions/sync` 接受 `read`、`pin`、`move` 或首次 `initialize` 操作，沿用站点认证；不接受设备用整个旧快照覆盖服务器。操作核对会话 ID 与 `createdAt`，已读还核对当前成功完成的轮次。保存成功后 `session:sync` 广播完整共享状态，前端按递增版本直接应用。WebSocket 建立时发送 `session:snapshot`，补齐重连期间的变化；旧客户端仍可通过原有列表接口核对。手机回前台替换旧列表请求、重建可能半断开的 WebSocket，并重试挂起的同步操作，定时核对继续作为断线补偿。
 
 共享数据随原 `data/sessions.json` 原子保存和备份，旧版状态文件可直接升级。Hub 没有独立用户账号，同一 Hub 的所有获准访问设备共享这些状态。首次连接导入相符的旧本机已读记录，仅首次初始化排列，后续设备以服务器为准；当前会话选择、输入草稿和阅读设置仍保留在设备上。无需更新 APK，运行原有 `npm run deploy:web`，网页刷新或 APP 重新加载后生效。

@@ -15,6 +15,7 @@ const { CodexActivity } = require('../server/services/codex-activity');
 
 const createdAt = '2026-10-20T00:00:00Z';
 const answer = '合成历史最终回答：冷启动无需发送消息即可阅读。';
+const dialoguePending = '对话记录尚未就绪，可先查看全文。';
 const terminal = '完整终端合成记录\n• Ran synthetic-build\n  └ TOOL_DETAIL_ONLY_IN_FULL\n' + answer;
 const screenshots = path.join(__dirname, '../output/playwright/ux-audit');
 
@@ -56,7 +57,7 @@ async function fixture(browser, { hidden = false, cachedFallback = false, withOt
   });
   app.use('/api/sessions', routes(manager));
   app.get('/cache-seed', (_req, res) => res.send('<!doctype html><title>Cache seed</title>'));
-  app.use(express.static(path.join(__dirname, '../server/public')));
+  app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
   const server = app.listen(0, '127.0.0.1'), wss = setupWebSocket(server, manager);
   await once(server, 'listening');
   const context = await browser.newContext({ viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true });
@@ -118,12 +119,14 @@ async function fixture(browser, { hidden = false, cachedFallback = false, withOt
         await f.page.waitForTimeout(250);
         assert.doesNotMatch(await f.page.locator('.mobile-reading').innerText(), /TOOL_DETAIL_ONLY_IN_FULL|STALE_FULL_FALLBACK/,
           'Answer mode must never present raw execution logs as an answer, including the first read');
-        await f.page.getByText('正在读取回答…', { exact: true }).waitFor({ timeout: 1000 });
+        await f.page.getByText(cachedFallback ? dialoguePending : '正在读取回答…', { exact: true }).waitFor({ timeout: 1000 });
+        assert.equal(await f.page.getByText('暂时无法读取回答，正在自动重试。', { exact: true }).count(), 0,
+          'An optional cached terminal snapshot is not a failed answer request');
         if (cachedFallback) await f.page.screenshot({ path: path.join(screenshots, '01-cold-start-fallback.png') });
         await f.page.locator('.answer-placeholder').getByRole('button', { name: '查看全文', exact: true }).tap();
         await f.page.getByText(/TOOL_DETAIL_ONLY_IN_FULL/).waitFor({ timeout: 1000 });
         await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
-        await f.page.getByText('正在读取回答…', { exact: true }).waitFor({ timeout: 1000 });
+        await f.page.getByText(cachedFallback ? dialoguePending : '正在读取回答…', { exact: true }).waitFor({ timeout: 1000 });
         assert.equal(f.inputs, 0);
         await f.discover();
         await f.page.locator('.message.assistant').filter({ hasText: answer }).waitFor({ timeout: 2500 });
@@ -155,14 +158,30 @@ async function fixture(browser, { hidden = false, cachedFallback = false, withOt
     } finally { await f.close(); }
     const unavailable = await fixture(browser);
     try {
-      await unavailable.page.getByText('暂时无法读取回答，正在自动重试。', { exact: true }).waitFor({ timeout: 11500 });
+      await unavailable.page.getByText(dialoguePending, { exact: true }).waitFor({ timeout: 6500 });
+      // Passing ten seconds cannot turn a successful HTTP fallback into a
+      // transport error. Advance the displayed clock without delaying the suite.
+      await unavailable.page.evaluate(() => {
+        const realNow = Date.now;
+        Date.now = () => realNow() + 11000;
+      });
+      await unavailable.page.waitForTimeout(1100);
+      assert.equal(await unavailable.page.getByText(dialoguePending, { exact: true }).count(), 1);
+      assert.equal(await unavailable.page.getByText('暂时无法读取回答，正在自动重试。', { exact: true }).count(), 0,
+        'A successful text-only response stays a neutral source wait regardless of elapsed time');
       assert.equal(await unavailable.page.locator('.mobile-output').count(), 0);
       assert.equal(await unavailable.page.locator('.status-guidance').count(), 0, 'An unavailable answer needs no additional header banner');
       await unavailable.page.screenshot({ path: path.join(screenshots, '05-answer-source-unavailable.png') });
       await unavailable.page.locator('.answer-placeholder').getByRole('button', { name: '查看全文', exact: true }).tap();
       await unavailable.page.getByText(/TOOL_DETAIL_ONLY_IN_FULL/).waitFor({ timeout: 1000 });
       assert.equal(unavailable.inputs, 0);
-      console.log('PASS unavailable source stays truthful, retries automatically and keeps Full immediately accessible');
+      await unavailable.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
+      await unavailable.discover();
+      await unavailable.page.locator('.message.assistant').filter({ hasText: answer }).waitFor({ timeout: 2500 });
+      assert.equal(await unavailable.page.locator('.answer-placeholder').count(), 0,
+        'Natural source recovery clears the waiting state without input');
+      assert.equal(unavailable.inputs, 0);
+      console.log('PASS successful terminal fallback stays neutral past ten seconds, keeps Full accessible and naturally restores the answer without input');
     } finally { await unavailable.close(); }
     const replacement = await fixture(browser, { withOther: true });
     try {
