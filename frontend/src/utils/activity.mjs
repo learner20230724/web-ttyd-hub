@@ -1,6 +1,6 @@
 // One vocabulary for the session list and the mobile reader. Completion is a
 // successful turn outcome; busy=false alone is never evidence of success.
-export function activityState(session, read = {}) {
+export function activityState(session, read = {}, readRevisions = {}) {
   if (session.status !== 'running') return 'idle'
   const a = session.activity || {}
   if (a.phase === 'waiting') return 'waiting'
@@ -8,13 +8,14 @@ export function activityState(session, read = {}) {
   if (a.phase === 'interrupted') return 'interrupted'
   if (a.busy) return 'busy'
   if (a.phase === 'unknown' || a.available === false) return session.shell === 'codex' || a.detected ? 'unknown' : 'idle'
-  if (a.completed && read[session.name] !== a.completed) return 'unread'
+  if (a.completed && (read[session.name] !== a.completed ||
+    readRevisions[session.name] && a.contentRevision && readRevisions[session.name] !== a.contentRevision)) return 'unread'
   return 'idle'
 }
-export function activityPresentation(session, read = {}, connectionIssue = false) {
+export function activityPresentation(session, read = {}, connectionIssue = false, readRevisions = {}) {
   if (connectionIssue) return { state: 'unknown', label: '连接中断', detail: '正在重新连接，任务状态暂未更新。草稿会保留。' }
   if (session.status !== 'running') return { state: 'idle', label: '已停止连接', detail: '终端入口已停止，后台任务可能仍在运行。' }
-  const state = activityState(session, read), a = session.activity || {}
+  const state = activityState(session, read, readRevisions), a = session.activity || {}
   const labels = {
     working: ['工作中', '任务仍在进行，完成后会标记为绿色。'],
     thinking: ['思考中', 'Codex 正在思考，暂时没有新回复。'],

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { hubUrl } from '../utils/base.mjs'
+import { untilAbort } from '../utils/request-deadline.mjs'
 const props = defineProps({ sessionName: { type: String, required: true } })
 const emit = defineEmits(['handled', 'pending', 'support'])
 const requests = ref([]), connected = ref(false), sending = ref(false), error = ref(''), notice = ref(''), opened = ref(null), dialog = ref(null)
@@ -27,8 +28,8 @@ async function poll(token = epoch) {
   const name = props.sessionName, id = ++pollId, requestController = new AbortController(); controller = requestController
   const timeout = setTimeout(() => requestController.abort(), 15000)
   try {
-    const response = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/questions`), { signal: controller.signal, cache: 'no-store' })
-    const data = await response.json(); if (!response.ok) throw Error('追问连接暂不可用')
+    const response = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/questions`), { signal: requestController.signal, cache: 'no-store' }), requestController.signal)
+    const data = await untilAbort(response.json(), requestController.signal); if (!response.ok) throw Error('追问连接暂不可用')
     if (token !== epoch || id !== pollId || disposed) return
     requests.value = data.requests || []; connected.value = data.supported === true
     emit('support', data.supported === true)
@@ -44,11 +45,11 @@ async function submit(action) {
   sending.value = true; error.value = ''; submitController = new AbortController()
   const timeout = setTimeout(() => submitController.abort(), 15000)
   try {
-    const response = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/questions/${encodeURIComponent(request.id)}/respond`), {
+    const response = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/questions/${encodeURIComponent(request.id)}/respond`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: submitController.signal,
       body: JSON.stringify({ action, ...(action === 'answer' ? { answers: Object.fromEntries(request.questions.map(q => [q.id, responseText(request, q)])) } : {}) }),
-    })
-    const data = await response.json(); if (!response.ok) throw Error(data.error || '未确认回答是否送达，请查看全文')
+    }), submitController.signal)
+    const data = await untilAbort(response.json(), submitController.signal); if (!response.ok) throw Error(data.error || '未确认回答是否送达，请查看全文')
     drafts.delete(request.id)
     if (token === epoch) {
       close(); requests.value = requests.value.filter(r => r.id !== request.id)

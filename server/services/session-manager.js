@@ -386,16 +386,19 @@ class SessionManager extends EventEmitter {
       if (this.activity.ready) await this.activity.ready(name);
       else await this.activity.poll?.();
     }
-    const activity = this.getSession(name).activity;
+    const hasSnapshot = typeof this.activity.contentSnapshot === 'function';
+    const snapshot = hasSnapshot ? this.activity.contentSnapshot(name) : null;
+    const activity = snapshot?.activity || this.getSession(name).activity;
     // Capture before reading history: a later completion must not acknowledge a
     // terminal snapshot taken before that turn finished.
-    const completed = activity?.completed || null;
-    const messages = this.activity.messages(name);
-    const inputReceipts = this.activity.inputReceipts(name);
-    if (!full && (messages?.length || activity?.available)) return { messages: messages || [], inputReceipts, completed, activity };
+    const completed = hasSnapshot ? snapshot?.completed || null : activity?.completed || null;
+    const contentRevision = hasSnapshot ? snapshot?.contentRevision || null : activity?.contentRevision || null;
+    const messages = hasSnapshot ? snapshot?.messages || null : this.activity.messages(name);
+    const inputReceipts = hasSnapshot ? snapshot?.inputReceipts || [] : this.activity.inputReceipts(name);
+    if (!full && (messages?.length || (activity?.available && (!hasSnapshot || snapshot)))) return { messages: messages || [], inputReceipts, completed, contentRevision, activity };
     // Keep output readable when structured dialogue is unavailable. A live
     // terminal snapshot can contain the final reply that an older cache lacks.
-    return { ...await this.history(name), inputReceipts, completed, activity };
+    return { ...await this.history(name), inputReceipts, completed, contentRevision, activity };
   }
 
   input(name, { text, key }) {

@@ -20,7 +20,7 @@ module.exports = function syntheticTerminals(server, manager) {
           if (message.digest) digest = message.digest;
         } else if (message.type !== 'checkpoint') return;
         const completed = session.activity?.completed || null;
-        const snapshot = { type: 'snapshot', generation: session.createdAt, completed,
+        const snapshot = { type: 'snapshot', generation: session.createdAt, completed, contentRevision: session.activity?.contentRevision || null,
           meta: { pane_width: cols, pane_height: rows, history_size: 100, cursor_x: 0, cursor_y: rows - 1,
             alternate_on: 0, cursor_flag: 1, wrap_flag: 1, scroll_region_upper: 0, scroll_region_lower: rows - 1, pane_tabs: '' },
           screen: Array.from({ length: 100 }, (_, index) => `SYNTHETIC_${index}`).join('\n') + `\nFINAL_${completed || 'none'}`,

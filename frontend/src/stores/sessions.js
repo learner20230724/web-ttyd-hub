@@ -6,6 +6,7 @@ import { LAYOUT_KEY, normalizeLayout, orderedSessions, moveSession } from '../ut
 import { activityState as classifyActivity, activityPresentation } from '../utils/activity.mjs'
 import { createSessionSync } from '../utils/session-sync.mjs'
 import { loadMetadata, saveMetadata, scopedStorageKey } from '../utils/session-metadata.mjs'
+import { untilAbort } from '../utils/request-deadline.mjs'
 
 export const useSessionStore = defineStore('sessions', () => {
   const cached = loadMetadata()
@@ -13,9 +14,12 @@ export const useSessionStore = defineStore('sessions', () => {
   const cachedSnapshot = ref(Boolean(cached))
   const connectionIssue = ref(Boolean(cached))
   const readKey = scopedStorageKey('web-ttyd-hub.read.v1')
+  const readRevisionKey = scopedStorageKey('web-ttyd-hub.read-revisions.v1')
   const layoutKey = scopedStorageKey(LAYOUT_KEY)
   const read = ref(cached?.read || {})
+  const readRevisions = ref(cached?.readRevisions || {})
   if (!cached) try { read.value = JSON.parse(localStorage.getItem(readKey)) || {} } catch {}
+  if (!cached) try { readRevisions.value = JSON.parse(localStorage.getItem(readRevisionKey)) || {} } catch {}
   let readGuard = null
   function setReadGuard(guard) {
     readGuard = guard
@@ -24,24 +28,36 @@ export const useSessionStore = defineStore('sessions', () => {
   function markRead() {
     if (document.hidden || !document.hasFocus() || connectionIssue.value) return
     const session = sessions.value.find(s => s.name === current.value)
-    if (session && !session.archivedAt && activityState(session) === 'unread' && readGuard?.(session)) {
+    const state = session && activityState(session)
+    // Keep old history read on upgrade. Once its current version really reaches
+    // the reader, replace the legacy wildcard so a later final can be unread.
+    const bindRenderedLegacy = state === 'idle' && session.status === 'running' && session.activity?.available !== false &&
+      !session.activity?.error && session.activity?.completed && session.activity.contentRevision &&
+      read.value[session.name] === session.activity.completed && !readRevisions.value[session.name]
+    if (session && !session.archivedAt && (state === 'unread' || bindRenderedLegacy) && readGuard?.(session)) {
       if (sync.enabled) {
-        sync.enqueue({ type: 'read', name: session.name, createdAt: session.createdAt, completed: session.activity.completed })
+        sync.enqueue({ type: 'read', name: session.name, createdAt: session.createdAt, completed: session.activity.completed,
+          ...(session.activity.contentRevision ? { contentRevision: session.activity.contentRevision } : {}) })
         return
       }
       read.value[session.name] = session.activity.completed
-      try { localStorage.setItem(readKey, JSON.stringify(read.value)) } catch {}
+      if (session.activity.contentRevision) readRevisions.value[session.name] = session.activity.contentRevision
+      else delete readRevisions.value[session.name]
+      try {
+        localStorage.setItem(readKey, JSON.stringify(read.value))
+        localStorage.setItem(readRevisionKey, JSON.stringify(readRevisions.value))
+      } catch {}
       // Promote once per newly read completion. Status and pin groups still take
       // priority, and later refreshes must not undo the user's manual ordering.
-      saveLayout({ ...layout.value, order: [session.name, ...layout.value.order.filter(name => name !== session.name)] })
+      if (!bindRenderedLegacy) saveLayout({ ...layout.value, order: [session.name, ...layout.value.order.filter(name => name !== session.name)] })
     }
   }
   function activityState(session) {
-    return connectionIssue.value ? 'unknown' : classifyActivity(session, read.value)
+    return connectionIssue.value ? 'unknown' : classifyActivity(session, read.value, readRevisions.value)
   }
   const activityStatus = session => cachedSnapshot.value
     ? { state: 'unknown', label: '本地缓存', detail: '正在连接并更新状态，当前显示上次保存的内容。' }
-    : activityPresentation(session, read.value, connectionIssue.value)
+    : activityPresentation(session, read.value, connectionIssue.value, readRevisions.value)
   document.addEventListener('visibilitychange', markRead)
   window.addEventListener('focus', markRead)
   onScopeDispose(() => { document.removeEventListener('visibilitychange', markRead); window.removeEventListener('focus', markRead) })
@@ -60,9 +76,11 @@ export const useSessionStore = defineStore('sessions', () => {
     if (!hasConfirmedList) return
     const confirmedRead = lastShared ? Object.fromEntries(sessions.value.filter(s => lastShared.read?.[s.name]?.createdAt === s.createdAt)
       .map(s => [s.name, lastShared.read[s.name].completed])) : cachedSnapshot.value && cached ? cached.read : read.value
+    const confirmedReadRevisions = lastShared ? Object.fromEntries(sessions.value.filter(s => lastShared.read?.[s.name]?.createdAt === s.createdAt && lastShared.read[s.name].contentRevision)
+      .map(s => [s.name, lastShared.read[s.name].contentRevision])) : cachedSnapshot.value && cached ? cached.readRevisions : readRevisions.value
     const confirmedLayout = lastShared ? normalizeLayout(lastShared.layout) : cachedSnapshot.value && cached ? cached.layout : layout.value
     const selected = sessions.value.find(s => s.name === current.value && !s.archivedAt)
-    saveMetadata({ sessions: sessions.value, read: confirmedRead, layout: confirmedLayout,
+    saveMetadata({ sessions: sessions.value, read: confirmedRead, readRevisions: confirmedReadRevisions, layout: confirmedLayout,
       shells: shells.value, platform: platform.value,
       selection: selected ? { name: selected.name, createdAt: selected.createdAt } : null })
   }
@@ -83,14 +101,16 @@ export const useSessionStore = defineStore('sessions', () => {
   const layoutError = ref('')
   if (!cached) try { layout.value = normalizeLayout(JSON.parse(localStorage.getItem(layoutKey))) } catch {}
   const sync = createSessionSync({
-    sessions: () => sessions.value, legacyRead: cached ? {} : { ...read.value }, legacyLayout: layout.value,
+    sessions: () => sessions.value, legacyRead: cached ? {} : { ...read.value }, legacyReadRevisions: cached ? {} : { ...readRevisions.value }, legacyLayout: layout.value,
     preview: cached ? { layout: cached.layout, read: Object.fromEntries(cached.sessions.filter(s => cached.read[s.name])
-      .map(s => [s.name, { createdAt: s.createdAt, completed: cached.read[s.name] }])) } : null,
+      .map(s => [s.name, { createdAt: s.createdAt, completed: cached.read[s.name],
+        ...(cached.readRevisions?.[s.name] ? { contentRevision: cached.readRevisions[s.name] } : {}) }])) } : null,
     confirmed: value => { lastShared = value; scheduleMetadata() },
     apply: value => {
-      read.value = value.read; layout.value = value.layout
+      read.value = value.read; readRevisions.value = value.readRevisions || {}; layout.value = value.layout
       try {
         localStorage.setItem(readKey, JSON.stringify(value.read))
+        localStorage.setItem(readRevisionKey, JSON.stringify(readRevisions.value))
         localStorage.setItem(layoutKey, JSON.stringify(value.layout))
       } catch {} // Confirmed shared state is durable even when local storage is unavailable.
       scheduleMetadata()
@@ -206,9 +226,9 @@ export const useSessionStore = defineStore('sessions', () => {
     const timeout = setTimeout(() => request.abort(), 10000)
     const activityAtStart = activitySequence
     try {
-      const res = await fetch(hubUrl('/api/sessions'), { signal: request.signal, cache: 'no-store' })
+      const res = await untilAbort(fetch(hubUrl('/api/sessions'), { signal: request.signal, cache: 'no-store' }), request.signal)
       if (!res.ok) throw new Error('无法读取会话列表')
-      const data = await res.json()
+      const data = await untilAbort(res.json(), request.signal)
       if (!Array.isArray(data.sessions)) throw new Error('会话列表格式无效')
       if (listRequest !== request || request.signal.aborted) return
       data.sessions = data.sessions.map(session => {
@@ -428,6 +448,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   return {
     sessions,
+    readRevisions,
     activityState,
     activityStatus,
     setReadGuard,

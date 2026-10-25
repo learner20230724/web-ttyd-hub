@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const metadata = import('../frontend/src/utils/session-metadata.mjs');
 const snapshot = () => ({ version: 1, sessions: [{ name: 'reader', createdAt: 'generation-one', displayName: '本地会话', shell: 'codex', status: 'running',
-  activity: { available: true, busy: false, phase: 'completed', completed: 'answer-one', startedAt: '2026-10-20T00:00:00Z' } }],
+  activity: { available: true, busy: false, phase: 'completed', completed: 'answer-one', contentRevision: 'answer-version-one', startedAt: '2026-10-20T00:00:00Z' } }],
   read: { reader: 'answer-one' }, layout: { order: ['reader'], pinned: ['reader'] }, selection: { name: 'reader', createdAt: 'generation-one' },
   shells: [{ id: 'codex', name: 'Codex' }], platform: 'linux' });
 
@@ -22,6 +22,7 @@ test('metadata round trip preserves reopen state while excluding credentials, qu
   assert.deepEqual(restored.layout, data.layout);
   assert.equal(restored.read.reader, 'answer-one');
   assert.equal(restored.sessions[0].activity.error, true);
+  assert.equal(restored.sessions[0].activity.contentRevision, 'answer-version-one');
   assert.equal(restored.platform, 'linux');
 });
 

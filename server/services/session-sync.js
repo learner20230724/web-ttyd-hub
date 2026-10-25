@@ -2,6 +2,7 @@
 // Mutate individual intentions, never replace state with a device's snapshot.
 const validName = value => typeof value === 'string' && /^[a-zA-Z0-9_-]+$/.test(value);
 const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const validRevision = value => typeof value === 'string' && value.length > 0 && value.length <= 256;
 const validNames = value => Array.isArray(value) && value.length <= 1000 && value.every(validName) && new Set(value).size === value.length;
 const validLayout = value => value && validNames(value.order) && validNames(value.pinned);
 const empty = () => ({ revision: 0, read: {}, layout: null });
@@ -13,7 +14,8 @@ class SessionSync {
         !value.read || typeof value.read !== 'object' || Array.isArray(value.read) ||
         (value.layout !== null && !validLayout(value.layout)) ||
         !Object.entries(value.read).every(([name, marker]) => validName(name) && marker && validTime(marker.createdAt) &&
-          typeof marker.completed === 'string' && marker.completed.length > 0 && marker.completed.length <= 1000)) {
+          typeof marker.completed === 'string' && marker.completed.length > 0 && marker.completed.length <= 1000 &&
+          (marker.contentRevision === undefined || validRevision(marker.contentRevision)))) {
       throw new Error('Invalid shared session state; refusing to overwrite state');
     }
     return value;
@@ -47,12 +49,23 @@ class SessionSync {
       const promote = () => { layout.order = [op.name, ...layout.order.filter(name => name !== op.name)]; next.layout = layout; };
       if (op.type === 'read') {
         if (typeof op.completed !== 'string' || !op.completed || op.completed.length > 1000) throw new Error('无效的已读记录');
+        if (op.contentRevision !== undefined && !validRevision(op.contentRevision)) throw new Error('无效的已读版本');
         const activity = session.activity || {};
         if (session.status !== 'running' || activity.completed !== op.completed || activity.busy || activity.available === false ||
-            activity.error || ['waiting', 'error', 'interrupted', 'unknown'].includes(activity.phase)) return { shared: previous, accepted: false };
-        if (next.read[op.name]?.createdAt !== op.createdAt || next.read[op.name]?.completed !== op.completed) {
-          next.read = { ...next.read, [op.name]: { createdAt: op.createdAt, completed: op.completed } };
-          promote();
+            activity.error || ['waiting', 'error', 'interrupted', 'unknown'].includes(activity.phase) ||
+            (op.contentRevision !== undefined && op.contentRevision !== activity.contentRevision)) return { shared: previous, accepted: false };
+        // Older clients still acknowledge a completed turn without a content
+        // version. New clients supply it, preventing a stale partial reply from
+        // acknowledging a final reply published under the same turn token.
+        const contentRevision = validRevision(activity.contentRevision) ? activity.contentRevision : undefined;
+        const marker = next.read[op.name];
+        const sameTurn = marker?.createdAt === op.createdAt && marker?.completed === op.completed;
+        if (!sameTurn || (contentRevision && marker?.contentRevision !== contentRevision)) {
+          next.read = { ...next.read, [op.name]: { createdAt: op.createdAt, completed: op.completed,
+            ...(contentRevision ? { contentRevision } : {}) } };
+          // Merely binding an old already-read turn to its first known version
+          // must not undo manual ordering. A newer known version is new content.
+          if (!sameTurn || marker?.contentRevision !== undefined) promote();
         }
       } else if (op.type === 'pin') {
         if (typeof op.pinned !== 'boolean') throw new Error('无效的置顶状态');

@@ -1,10 +1,11 @@
 import { hubUrl } from './base.mjs'
 import { normalizeLayout, moveSession } from './session-layout.mjs'
 import { scopedStorageKey } from './session-metadata.mjs'
+import { untilAbort } from './request-deadline.mjs'
 
 // One outbox per tab/WebView, retained through reload. Confirmed state always
 // comes from the Hub; local caches only seed the first upgrade.
-export function createSessionSync({ sessions, legacyRead, legacyLayout, preview, apply, confirmed, error, refresh }) {
+export function createSessionSync({ sessions, legacyRead, legacyReadRevisions = {}, legacyLayout, preview, apply, confirmed, error, refresh }) {
   const migrationKey = scopedStorageKey('web-ttyd-hub.shared-migrated.v1')
   const pendingKey = scopedStorageKey('web-ttyd-hub.shared-pending.v1')
   let shared = null, sending = null, disposed = false, migrated = false, pending = []
@@ -17,10 +18,13 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, preview,
   function render() {
     const source = shared || preview
     if (!source || disposed) return
-    const list = sessions(), read = Object.create(null)
+    const list = sessions(), read = Object.create(null), readRevisions = Object.create(null)
     for (const session of list) {
       const marker = source.read[session.name]
-      if (marker?.createdAt === session.createdAt) read[session.name] = marker.completed
+      if (marker?.createdAt === session.createdAt) {
+        read[session.name] = marker.completed
+        if (marker.contentRevision) readRevisions[session.name] = marker.contentRevision
+      }
     }
     let layout = normalizeLayout(source.layout)
     for (const op of pending) {
@@ -31,9 +35,14 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, preview,
       const session = list.find(s => s.name === op.name && s.createdAt === op.createdAt && !s.archivedAt)
       if (!session) continue
       if (op.type === 'read') {
-        if (session.activity?.completed !== op.completed || read[op.name] === op.completed) continue
+        const revision = session.activity?.contentRevision
+        if (session.activity?.completed !== op.completed || revision && op.contentRevision !== revision ||
+          read[op.name] === op.completed && (!op.contentRevision || readRevisions[op.name] === op.contentRevision)) continue
+        const bindLegacy = read[op.name] === op.completed && !readRevisions[op.name]
         read[op.name] = op.completed
-        layout.order = [op.name, ...layout.order.filter(name => name !== op.name)]
+        if (op.contentRevision) readRevisions[op.name] = op.contentRevision
+        else delete readRevisions[op.name]
+        if (!bindLegacy) layout.order = [op.name, ...layout.order.filter(name => name !== op.name)]
       } else if (op.type === 'pin') {
         if (layout.pinned.includes(op.name) === op.pinned) continue
         layout.pinned = op.pinned ? [...layout.pinned, op.name] : layout.pinned.filter(name => name !== op.name)
@@ -42,7 +51,7 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, preview,
         layout = moveSession(list, layout, op.name, op.target, op.after)
       }
     }
-    apply({ read, layout })
+    apply({ read, readRevisions, layout })
   }
   function accept(value) {
     if (!value || !Number.isSafeInteger(value.revision) || !value.read) return false
@@ -61,14 +70,21 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, preview,
     const current = () => !disposed && sending === request && !request.signal.aborted
     try {
       while (pending.length && current()) {
+        const op = pending[0]
+        const session = op.type === 'read' && sessions().find(value => value.name === op.name && value.createdAt === op.createdAt)
+        if (session?.activity?.contentRevision && (session.activity.completed !== op.completed || session.activity.contentRevision !== op.contentRevision)) {
+          // An old queue or legacy migration cannot turn an unseen newer
+          // answer into a read just because the turn's completed token matches.
+          pending.shift(); save(); render(); continue
+        }
         let res
         const timeout = setTimeout(() => request.abort(), 10000)
         try {
-          res = await fetch(hubUrl('/api/sessions/sync'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(pending[0]), signal: request.signal })
+          res = await untilAbort(fetch(hubUrl('/api/sessions/sync'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pending[0]), signal: request.signal }), request.signal)
           if (!current()) return
           if (res.ok) {
-            const result = await res.json()
+            const result = await untilAbort(res.json(), request.signal)
             if (!current()) return
             if (!accept(result.shared)) throw new Error('会话状态同步失败，稍后自动重试。')
             pending.shift(); save(); render()
@@ -96,9 +112,13 @@ export function createSessionSync({ sessions, legacyRead, legacyLayout, preview,
         // Only the first device seeds ordering. Later devices cannot overwrite it
         // with an old local snapshot. Matching legacy reads can safely be merged.
         if (shared.layout === null) pending.push({ type: 'initialize', layout: normalizeLayout(legacyLayout) })
-        for (const session of sessions()) if (legacyRead[session.name] && legacyRead[session.name] === session.activity?.completed &&
-          shared.read[session.name]?.completed !== legacyRead[session.name]) {
-          pending.push({ type: 'read', name: session.name, createdAt: session.createdAt, completed: legacyRead[session.name] })
+        for (const session of sessions()) if (legacyRead[session.name] && legacyRead[session.name] === session.activity?.completed) {
+          const revision = legacyReadRevisions[session.name]
+          if (session.activity?.contentRevision && revision !== session.activity.contentRevision) continue
+          const marker = shared.read[session.name]
+          if (marker?.completed === legacyRead[session.name] && (!revision || marker.contentRevision === revision)) continue
+          pending.push({ type: 'read', name: session.name, createdAt: session.createdAt, completed: legacyRead[session.name],
+            ...(revision ? { contentRevision: revision } : {}) })
         }
         migrated = true; save()
         try { localStorage.setItem(migrationKey, '1') } catch {}

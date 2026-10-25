@@ -1,5 +1,6 @@
 import { hubUrl, basePath } from './base.mjs'
 import { applyContentDelta } from './content-delta.mjs'
+import { untilAbort } from './request-deadline.mjs'
 // Raw text only on disk; derived HTML is always sanitized again by the renderer.
 const memory = new Map(), pending = new Map(), loads = new Map()
 const MEMORY_LIMIT = 64 * 1024 * 1024, DISK_LIMIT = 128 * 1024 * 1024
@@ -140,14 +141,14 @@ export async function fetchContent(session, view, { mobile = true, fresh = false
       let data, etag
       for (let attempt = 0; attempt < 2; attempt++) {
         const conditional = attempt === 0 && cached?.etag
-        const response = await fetch(url, { signal:controller.signal, cache:'no-store',
-          headers: { ...headers, ...(conditional ? { 'If-None-Match':cached.etag, 'X-TTYD-Delta':'fields-v1' } : {}) } })
+        const response = await untilAbort(fetch(url, { signal:controller.signal, cache:'no-store',
+          headers: { ...headers, ...(conditional ? { 'If-None-Match':cached.etag, 'X-TTYD-Delta':'fields-v1' } : {}) } }), controller.signal)
         active()
         if (response.status === 304) {
           if (conditional) return cached
           throw Error('读取失败：服务器未返回正文')
         }
-        data = await response.json()
+        data = await untilAbort(response.json(), controller.signal)
         active()
         if (!response.ok) throw new Error(data.error || '读取失败')
         etag = response.headers.get('ETag')

@@ -3,6 +3,7 @@ import { hubUrl } from '../utils/base.mjs'
 
 import { ref, shallowRef, shallowReactive, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { contentKey, peekContent, loadContent, fetchContent } from '../utils/session-content.mjs'
+import { untilAbort } from '../utils/request-deadline.mjs'
 import { inputKind, receiptCandidates, reconcileInputs } from '../utils/input-receipts.mjs'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -98,17 +99,47 @@ const outputSegments = computed(() => {
 })
 const positions = new Map()
 let timer, disposed = false, epoch = 0, refreshSequence = 0, visibleKey = null, switching = false, quickRefreshUntil = 0
+let measuredPane = null, measuredWidth = 0, measuredHeight = 0
+function rememberReadingSize(element) {
+  measuredPane = element; measuredWidth = element.clientWidth; measuredHeight = element.clientHeight
+}
+function atLatest() {
+  const element = pane.value
+  return element && element.scrollHeight - element.scrollTop - element.clientHeight < 70
+}
+function alignReading() {
+  const element = pane.value
+  if (!element || disposed) return
+  rememberReadingSize(element)
+  if (follow.value) element.scrollTop = element.scrollHeight
+  store.markRead()
+}
+const readingResize = typeof ResizeObserver === 'function' ? new ResizeObserver(alignReading) : null
+watch(pane, (element, previous) => {
+  if (previous) readingResize?.unobserve(previous)
+  if (element) { rememberReadingSize(element); readingResize?.observe(element) }
+}, { flush: 'post' })
+function contentBehind(displayed, activity = {}) {
+  return Boolean(activity.completed && displayed?.completed !== activity.completed ||
+    activity.contentRevision && displayed?.contentRevision !== activity.contentRevision)
+}
 // Selection and a completion notification are not proof that the reply was seen.
 // The content snapshot carries the completion it actually includes.
-const releaseReadGuard = store.setReadGuard(selected => props.readingVisible && follow.value &&
+const releaseReadGuard = store.setReadGuard(selected => props.readingVisible && follow.value && atLatest() &&
   (!codexAnswer.value || Array.isArray(answerData.value?.messages)) &&
   visibleKey === contentKey(selected, props.showExecution ? 'full' : 'answer') &&
-  (codexAnswer.value ? answerData.value?.completed : content.value.completed) === selected.activity?.completed)
+  (codexAnswer.value ? answerData.value?.completed : content.value.completed) === selected.activity?.completed &&
+  !contentBehind(codexAnswer.value ? answerData.value : content.value, selected.activity))
 watch(() => props.readingVisible, () => store.markRead(), { flush: 'post' })
 function scrolled() {
   const p = pane.value
   if (!p || switching) return
-  follow.value = p.scrollHeight - p.scrollTop - p.clientHeight < 70
+  const resized = measuredPane !== p || measuredWidth !== p.clientWidth || measuredHeight !== p.clientHeight
+  rememberReadingSize(p)
+  // A viewport/keyboard resize is not an instruction to stop following the
+  // latest reply. Keep deliberate history reading separate from layout shifts.
+  if (resized && follow.value) { alignReading(); return }
+  follow.value = Boolean(atLatest())
   if (visibleKey) positions.set(visibleKey, { top:p.scrollTop, follow:follow.value })
   store.markRead()
 }
@@ -135,8 +166,11 @@ async function display(entry, first = false) {
 }
 function refreshDelay() {
   const activity = session.value?.activity || {}
+  // Readable cache can still be an earlier turn or a partial reply. A completed
+  // lamp is not proof that the answer displayed has reached that snapshot.
+  const displayed = codexAnswer.value ? answerData.value : content.value
   return activity.busy || activity.available === false || activity.phase === 'unknown' || answerUnavailable.value ||
-    pendingMessages.value.length || sending.value || questionPending.value || Date.now() < quickRefreshUntil ? 1200 : 15000
+    contentBehind(displayed, activity) || error.value || pendingMessages.value.length || sending.value || questionPending.value || Date.now() < quickRefreshUntil ? 1200 : 15000
 }
 async function refresh(token = epoch, fresh = false) {
   if (disposed || token !== epoch) return
@@ -162,7 +196,7 @@ async function refresh(token = epoch, fresh = false) {
 }
 function resumeReading() {
   lastHidden = document.hidden
-  if (!lastHidden) void refresh(epoch, true)
+  if (!lastHidden) { alignReading(); void refresh(epoch, true) }
   else clearTimeout(timer)
 }
 function restoredPage(event) { if (event.persisted) resumeReading() }
@@ -171,7 +205,7 @@ window.addEventListener('online', resumeReading)
 window.addEventListener('focus', resumeReading)
 window.addEventListener('pageshow', restoredPage)
 watch(() => [store.current, session.value?.activity?.phase, session.value?.activity?.busy,
-  session.value?.activity?.completed, session.value?.activity?.available], (value, previous) => {
+  session.value?.activity?.completed, session.value?.activity?.available, session.value?.activity?.contentRevision], (value, previous) => {
   if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, true)
 })
 watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot], async ([name, full], previous) => {
@@ -229,8 +263,8 @@ async function send(key = 'Enter', withText = true) {
   let timedOut = false
   const confirmationTimeout = setTimeout(() => { timedOut = true; request.abort() }, 10000)
   try {
-    const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, key }), signal: request.signal })
-    const data = await res.json(); if (!res.ok) throw new Error(data.error)
+    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, key }), signal: request.signal }), request.signal)
+    const data = await untilAbort(res.json(), request.signal); if (!res.ok) throw new Error(data.error)
     if (disposed || !sameSession()) return
     if (pending) {
       const item = pendingBySession.value[name]?.find(item => item.id === pending.id)
@@ -263,6 +297,7 @@ async function send(key = 'Enter', withText = true) {
 }
 onBeforeUnmount(() => {
   disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
+  readingResize?.disconnect()
   inputRequest?.abort()
   document.removeEventListener('visibilitychange', resumeReading); window.removeEventListener('online', resumeReading)
   window.removeEventListener('focus', resumeReading); window.removeEventListener('pageshow', restoredPage)
@@ -288,9 +323,11 @@ onBeforeUnmount(() => {
           <button v-if="!showExecution" type="button" @click="emit('show-execution', status.state === 'waiting')">查看全文 <span aria-hidden="true">↗</span></button>
         </div>
       </div>
-      <div ref="pane" class="mobile-reading" @scroll.passive="scrolled">
+      <div ref="pane" class="mobile-reading" @scroll.passive="scrolled"
+        :data-content-revision="(codexAnswer ? answerData : content)?.contentRevision || null"
+        :data-content-completed="(codexAnswer ? answerData : content)?.completed || null">
         <template v-if="!showExecution && messages.length">
-          <article v-for="message in messages" :key="message.id" :class="['message', message.role]">
+          <article v-for="message in messages" :key="message.id" :class="['message', message.role]" :data-message-id="message.id">
             <div class="speaker">{{ message.role === 'user' ? '你' : message.phase === 'commentary' ? 'Codex · 工作进展' : 'Codex · 回复' }}</div>
             <div class="markdown" v-html="message.html"></div>
           </article>

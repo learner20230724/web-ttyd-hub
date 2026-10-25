@@ -35,7 +35,7 @@ app.post('/api/sessions/:name/input', async (req, res) => {
   await new Promise(r => setTimeout(r, 100));
   res.json({ ok: true });
 });
-app.use(express.static(path.join(__dirname, '../server/public')));
+app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
 (async () => {
   const server = app.listen(0, '127.0.0.1'); const wss = setupWebSocket(server, new EventEmitter()); await once(server, 'listening');
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
@@ -48,6 +48,12 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       await context.addInitScript(({ session, full }) => {
         localStorage.setItem('web-ttyd-hub.last-session.v1', JSON.stringify({ name: session.name, createdAt: session.createdAt }));
         localStorage.setItem('web-ttyd-hub.mobile-reading.v1', JSON.stringify({ showExecution: full }));
+        const originalFetch = window.fetch.bind(window);
+        window.fetch = (input, options) => {
+          const url = typeof input === 'string' ? input : input.url;
+          if (window.__ignoreConfirmationAbort && /\/input$/.test(url)) return originalFetch(input, { ...options, signal: undefined });
+          return originalFetch(input, options);
+        };
       }, { session, full });
       const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
       await page.goto(`http://127.0.0.1:${server.address().port}`);
@@ -132,6 +138,9 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       // both a response held before headers and a response stalled mid-body.
       const previousWrites = writes.length;
       holdInput = full ? 'body' : 'headers';
+      // A suspended WebView may ignore cancellation. The application deadline
+      // must unlock the composer even when fetch/body reading never settles.
+      await page.evaluate(() => { window.__ignoreConfirmationAbort = true; });
       const timeoutText = '未收到发送确认的演示消息';
       await input.fill(timeoutText); await page.locator('.send').tap();
       await page.locator('.pending-message.sending').waitFor();

@@ -2,6 +2,7 @@
 // Never guess completion from silence; no hooks/config changes or transcript copies.
 const fs = require('node:fs/promises');
 const { createReadStream } = require('node:fs');
+const { createHash } = require('node:crypto');
 const { LinuxCodexObserver, resolveRollout, terminalStatus } = require('./codex-observer');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
@@ -126,11 +127,21 @@ async function consumeRollout(state, size) {
     }
     pending = pending.subarray(start);
   }
-  // No offset advance for partial records. Byte counting supports CRLF and UTF-8.
+  // A writer can flush the final complete JSON object before its delimiter.
+  // Do not make the reply/completion wait for a later user input to append a
+  // newline. Only valid complete JSON advances; partial JSON/UTF-8 stays pending.
+  if (pending.length) {
+    let event;
+    try { event = JSON.parse(pending.toString('utf8')); }
+    catch { return; }
+    state.offset += pending.length;
+    try { applyEvent(state, event); } catch { /* Match malformed-record handling above. */ }
+  }
 }
 class CodexActivity {
   constructor(manager, { observer = new LinuxCodexObserver(), interval = 1500 } = {}) {
     this.manager = manager; this.states = new Map(); this.polling = null; this.updates = new Map();
+    this.snapshots = new Map();
     this.readiness = new Map();
     this.questions = new (require('./codex-questions').CodexQuestions)(this);
     this.usage = new (require('./codex-usage').CodexUsage)();
@@ -138,6 +149,20 @@ class CodexActivity {
     this.timer = setInterval(() => this.poll(), interval); this.timer.unref();
   }
   publish(session, activity) {
+    const state = this.states.get(session.name), generation = session.createdAt || '';
+    if (activity.available && state && (state.generation === undefined || state.generation === generation)) {
+      // Parsing a stream mutates state before its last chunk has arrived. Keep
+      // an immutable published array and version together, so HTTP cannot join
+      // in-flight messages to the previous completion/version. Message objects
+      // and receipt objects are append-only; copying the arrays is sufficient.
+      const messages = (state.messages || []).slice(), inputReceipts = (state.inputReceipts || []).slice();
+      const completed = activity.completed || null;
+      const contentRevision = createHash('sha256').update(JSON.stringify([
+        generation, state.identity || '', state.path || '', messages, inputReceipts, completed,
+      ])).digest('hex');
+      activity = { ...activity, contentRevision };
+      this.snapshots.set(session.name, { generation, messages, inputReceipts, completed, contentRevision, activity });
+    } else this.snapshots.delete(session.name);
     const changed = JSON.stringify(session.activity) !== JSON.stringify(activity);
     session.activity = activity;
     this.readiness.get(session.name)?.check();
@@ -179,8 +204,8 @@ class CodexActivity {
       let state = this.states.get(session.name);
       const stat = await fs.stat(filename);
       const identity = `${stat.dev}:${stat.ino}`;
-      if (!state || state.path !== filename || state.identity !== identity || stat.size < state.offset) {
-        state = { path: filename, identity, offset: 0, busy: false, phase: 'idle', completed: null, messages: [], sequence: 0 };
+      if (!state || state.generation !== (session.createdAt || '') || state.path !== filename || state.identity !== identity || stat.size < state.offset) {
+        state = { generation: session.createdAt || '', path: filename, identity, offset: 0, busy: false, phase: 'idle', completed: null, messages: [], sequence: 0 };
         this.states.set(session.name, state);
       }
       await consumeRollout(state, stat.size);
@@ -205,7 +230,7 @@ class CodexActivity {
   ready(name, timeout = 4000) {
     const available = () => {
       const session = this.manager.sessions.get(name);
-      return !session || session.status !== 'running' || session.activity?.available || this.messages(name)?.length;
+      return !session || session.status !== 'running' || session.activity?.available || this.contentSnapshot(name)?.messages.length;
     };
     if (available()) return Promise.resolve();
     if (this.readiness.has(name)) return this.readiness.get(name).promise;
@@ -242,13 +267,31 @@ class CodexActivity {
         await this.observer.begin();
       }
       await Promise.all([...this.manager.sessions.values()].map(session => this.update(session, panes.get(session.name), windowsPaths)));
-      for (const name of this.states.keys()) if (!this.manager.sessions.has(name)) this.states.delete(name);
+      for (const name of this.states.keys()) if (!this.manager.sessions.has(name)) {
+        this.states.delete(name); this.snapshots.delete(name);
+      }
     } catch {
       for (const session of this.manager.sessions.values()) this.publish(session, { available: false, busy: false, phase: 'unknown', completed: null, source: null });
     }
   }
-  messages(name) { return this.states.get(name)?.messages || null; }
-  inputReceipts(name) { return this.states.get(name)?.inputReceipts || []; }
+  contentSnapshot(name) {
+    const value = this.snapshots.get(name), session = this.manager.sessions.get(name);
+    return session && value?.generation === (session.createdAt || '') ? value : null;
+  }
+  messages(name) {
+    const published = this.contentSnapshot(name);
+    if (published) return published.messages;
+    // Keep compatibility with injected legacy observers/tests, but never reuse
+    // an old same-name session's parser state for its replacement.
+    const state = this.states.get(name), session = this.manager.sessions.get(name);
+    return state && (state.generation === undefined || state.generation === (session?.createdAt || '')) ? state.messages || null : null;
+  }
+  inputReceipts(name) {
+    const published = this.contentSnapshot(name);
+    if (published) return published.inputReceipts;
+    const state = this.states.get(name), session = this.manager.sessions.get(name);
+    return state && (state.generation === undefined || state.generation === (session?.createdAt || '')) ? state.inputReceipts || [] : [];
+  }
   binding(name) {
     const session = this.manager.sessions.get(name), binding = this.states.get(name)?.binding;
     return session?.status === 'running' && !session.archivedAt && binding && Date.now() - binding.checkedAt < 5000 ? binding : null;

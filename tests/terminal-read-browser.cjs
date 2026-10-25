@@ -13,10 +13,10 @@ const { until, pause } = require('./terminal-fixture.cjs');
 (async () => {
   const createdAt = '2026-10-20T00:00:00Z';
   const session = { name: 'reader', displayName: '合成已读验证', createdAt, shell: 'codex', status: 'running',
-    activity: { available: true, detected: true, phase: 'completed', busy: false, completed: 't1' } };
+    activity: { available: true, detected: true, phase: 'completed', busy: false, completed: 't1', contentRevision: 'r1' } };
   const manager = new EventEmitter(); manager.sessions = new Map([[session.name, session]]); manager.list = () => [session];
   manager.sync = new SessionSync(manager);
-  manager.sync.restore({ revision: 1, read: { reader: { createdAt, completed: 't1' } }, layout: { order: ['reader'], pinned: [] } });
+  manager.sync.restore({ revision: 1, read: { reader: { createdAt, completed: 't1', contentRevision: 'r1' } }, layout: { order: ['reader'], pinned: [] } });
   let readWrites = 0;
   const app = express(); app.use(express.json());
   app.get('/api/sessions', (_req, res) => res.json({ sessions: manager.list(), shared: manager.sync.snapshot() }));
@@ -93,6 +93,17 @@ const { until, pause } = require('./terminal-fixture.cjs');
     await pause(150); assert.equal(manager.sync.snapshot().read.reader.completed, 't3');
     await page.evaluate(() => document.querySelector('.terminal-host').terminal.scrollToBottom());
     await until(() => manager.sync.snapshot().read.reader.completed === 't4');
+    // A late final reply can change only its body version, after the task's
+    // completion was already acknowledged. The actual terminal snapshot must
+    // validate that version too before the new read receipt can be submitted.
+    terminals.hold(true);
+    const beforeRevision = readWrites;
+    session.activity = { ...session.activity, contentRevision: 'r2' }; manager.emit('session:activity', session);
+    await until(() => terminals.pending.length > 0); await pause(150);
+    assert.equal(readWrites, beforeRevision, 'Metadata alone cannot acknowledge a newly published reply version');
+    terminals.hold(false);
+    await until(() => manager.sync.snapshot().read.reader.contentRevision === 'r2');
+    assert.equal(readWrites, beforeRevision + 1);
     assert.deepEqual(errors, []);
     console.log('PASS: lazy renderer and cached t1 cannot read fresh t2; authoritative render/checkpoint and scrolling to latest acknowledge exactly the displayed completion');
   } finally {

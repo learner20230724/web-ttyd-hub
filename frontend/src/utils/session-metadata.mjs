@@ -25,7 +25,7 @@ export function normalizeMetadata(value) {
     if (record(raw.activity)) {
       const activity = {}
       for (const key of ['available', 'detected', 'busy']) if (typeof raw.activity[key] === 'boolean') activity[key] = raw.activity[key]
-      for (const key of ['phase', 'completed', 'source', 'startedAt', 'updatedAt']) {
+      for (const key of ['phase', 'completed', 'contentRevision', 'source', 'startedAt', 'updatedAt']) {
         if (raw.activity[key] === null || text(raw.activity[key])) activity[key] = raw.activity[key]
       }
       if (raw.activity.error) activity.error = true
@@ -33,10 +33,14 @@ export function normalizeMetadata(value) {
     }
     sessions.push(session)
   }
-  const read = Object.create(null)
+  const read = Object.create(null), readRevisions = Object.create(null)
   for (const session of sessions) {
     const marker = value.read?.[session.name]
-    if (text(marker)) read[session.name] = marker
+    if (text(marker)) {
+      read[session.name] = marker
+      const revision = value.readRevisions?.[session.name]
+      if (text(revision, 256)) readRevisions[session.name] = revision
+    }
   }
   const selected = sessions.find(s => s.name === value.selection?.name && s.createdAt === value.selection?.createdAt && !s.archivedAt)
   const layout = normalizeLayout(value.layout)
@@ -44,7 +48,7 @@ export function normalizeMetadata(value) {
   layout.pinned = layout.pinned.filter(name => names.has(name))
   const shells = Array.isArray(value.shells) ? value.shells.slice(0, 100).filter(s => record(s) && text(s.id, 128) && text(s.name, 256))
     .map(s => ({ id: s.id, name: s.name })) : []
-  return { version: 1, savedAt: Number.isFinite(value.savedAt) ? value.savedAt : 0, sessions, read, layout, shells,
+  return { version: 1, savedAt: Number.isFinite(value.savedAt) ? value.savedAt : 0, sessions, read, readRevisions, layout, shells,
     platform: text(value.platform, 128) || '', selection: selected ? { name: selected.name, createdAt: selected.createdAt } : null }
 }
 

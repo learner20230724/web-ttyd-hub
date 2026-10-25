@@ -26,7 +26,7 @@ export function applyTerminalDelta(baseline, message) {
   if (message?.type !== 'snapshot-delta' || !validSnapshot(baseline) || message.base !== baseline.digest ||
       !message.changes || typeof message.changes !== 'object') throw new Error('Invalid terminal cache baseline');
   const snapshot = { ...baseline, meta: message.meta, digest: message.digest };
-  for (const field of ['generation', 'completed']) if (Object.hasOwn(message, field)) snapshot[field] = message[field];
+  for (const field of ['generation', 'completed', 'contentRevision']) if (Object.hasOwn(message, field)) snapshot[field] = message[field];
   for (const [field, splice] of Object.entries(message.changes)) {
     if (!textFields.includes(field) || !Array.isArray(splice) || splice.length !== 3) throw new Error('Invalid terminal cache patch');
     const [start, remove, insert] = splice, text = baseline[field];

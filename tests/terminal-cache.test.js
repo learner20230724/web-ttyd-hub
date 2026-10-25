@@ -59,7 +59,7 @@ test('terminal checkpoint deltas carry the new completion even when its visible 
 });
 
 test('terminal snapshots keep the completion captured before tmux starts reading', async () => {
-  const session = { name: 'synthetic', createdAt: 'generation', activity: { completed: 't1' } };
+  const session = { name: 'synthetic', createdAt: 'generation', activity: { completed: 't1', contentRevision: 'r1' } };
   const messages = [], ws = new EventEmitter();
   Object.assign(ws, { readyState: 1, bufferedAmount: 0, send: text => messages.push(JSON.parse(text)), close() { this.readyState = 3; } });
   const stream = new TerminalStream(ws, session.name, { getSession: () => session }, new SnapshotCache());
@@ -71,10 +71,25 @@ test('terminal snapshots keep the completion captured before tmux starts reading
   try {
     const capturing = stream.snapshot();
     session.activity.completed = 't2';
+    session.activity.contentRevision = 'r2';
     const meta = ['%1', 80, 24, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 23, ''];
     finish([Buffer.from(meta.join('|') + '\n'), Buffer.from('older captured content\n'), ...Array.from({ length: 4 }, () => Buffer.from('\n'))]);
     await capturing;
     assert.equal(messages[0].completed, 't1');
+    assert.equal(messages[0].contentRevision, 'r1');
     assert.equal(messages[0].generation, 'generation');
   } finally { stream.close(); }
+});
+
+test('terminal checkpoint deltas carry a later reply version within the same completion', async () => {
+  const { applyTerminalDelta } = await import('../frontend/src/utils/terminal-cache.mjs');
+  const cache = new SnapshotCache();
+  const first = cache.response('same:generation', { ...snapshot('same terminal output\n'.repeat(500)),
+    generation: 'generation', completed: 't1', contentRevision: 'r1' });
+  const next = cache.response('same:generation', { ...snapshot(first.screen),
+    generation: 'generation', completed: 't1', contentRevision: 'r2' }, first.digest);
+  assert.equal(next.type, 'snapshot-delta');
+  assert.deepEqual(next.changes, {});
+  assert.equal(applyTerminalDelta(first, next).completed, 't1');
+  assert.equal(applyTerminalDelta(first, next).contentRevision, 'r2');
 });

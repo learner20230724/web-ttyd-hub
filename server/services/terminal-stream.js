@@ -27,7 +27,7 @@ class SnapshotCache {
     }
     if (!baseline) return snapshot;
     const delta = { type: 'snapshot-delta', base: digest, digest: snapshot.digest, meta: snapshot.meta, changes: {} };
-    for (const field of ['generation', 'completed']) if (Object.hasOwn(snapshot, field)) delta[field] = snapshot[field];
+    for (const field of ['generation', 'completed', 'contentRevision']) if (Object.hasOwn(snapshot, field)) delta[field] = snapshot[field];
     for (const field of snapshotFields) {
       const old = baseline[field], next = snapshot[field];
       if (old === next) continue;
@@ -181,7 +181,8 @@ class TerminalStream {
     // Bind the read receipt to the completion known before capture. A task
     // finishing while tmux is capturing must never stamp its newer token onto
     // output that may predate the final reply.
-    const completed = this.manager.getSession(this.name).activity?.completed || null;
+    const activity = this.manager.getSession(this.name).activity;
+    const completed = activity?.completed || null, contentRevision = activity?.contentRevision || null;
     // The commands run together in tmux's event loop. Output before the last
     // reply is covered by this snapshot; subsequent output belongs to the live
     // stream. Deliver/reset at the final reply, not a later event-loop tick.
@@ -206,7 +207,7 @@ class TerminalStream {
       }
       this.pane = meta.pane_id;
       const decode = b => unescape(b.subarray(0, Math.max(0, b.length - 1))).toString('utf8');
-      const snapshot = { type: 'snapshot', generation: this.generation, completed, meta, screen: decode(replies[1]),
+      const snapshot = { type: 'snapshot', generation: this.generation, completed, contentRevision, meta, screen: decode(replies[1]),
         normal: meta.alternate_on ? decode(replies[2]) : '',
         history: meta.alternate_on && meta.history_size ? decode(replies[3]) : '',
         alternate: meta.alternate_on ? decode(replies[4]) : '',

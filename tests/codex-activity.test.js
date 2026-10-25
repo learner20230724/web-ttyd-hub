@@ -115,3 +115,53 @@ test('UTF-8, CRLF, partial JSON and malformed lines do not lose later completion
   await consumeRollout(s, (await fs.stat(file)).size);
   assert.equal(s.phase, 'completed'); assert.equal(s.offset, (await fs.stat(file)).size);
 });
+
+test('complete final reply and completion records at EOF are consumed without waiting for another input newline', async t => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const { consumeRollout } = require('../server/services/codex-activity');
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-final-eof-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, 'rollout.jsonl'), s = { ...state(), path: filename, offset: 0 };
+  const final = JSON.stringify({ type: 'response_item', timestamp: 'now', payload: {
+    type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: '完整最终回答🙂' }],
+  } });
+  await fs.writeFile(filename, JSON.stringify(event('task_started')) + '\n' + final);
+  await consumeRollout(s, (await fs.stat(filename)).size);
+  assert.equal(s.messages.at(-1)?.text, '完整最终回答🙂');
+  assert.equal(s.offset, (await fs.stat(filename)).size);
+  assert.equal(s.busy, true, 'A final reply alone does not manufacture task completion');
+  await fs.appendFile(filename, '\n' + JSON.stringify(event('task_complete')));
+  await consumeRollout(s, (await fs.stat(filename)).size);
+  assert.equal(s.phase, 'completed');
+  assert.equal(s.offset, (await fs.stat(filename)).size);
+  const token = s.completed;
+  await fs.appendFile(filename, '\n');
+  await consumeRollout(s, (await fs.stat(filename)).size);
+  assert.equal(s.messages.length, 1, 'A later delimiter cannot duplicate the already consumed reply');
+  assert.equal(s.completed, token);
+});
+
+test('an incomplete UTF-8/JSON EOF record remains pending until its exact remaining bytes arrive', async t => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const { consumeRollout } = require('../server/services/codex-activity');
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-partial-eof-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, 'rollout.jsonl'), s = { ...state(), path: filename, offset: 0 };
+  const initial = Buffer.from(JSON.stringify(event('task_started')) + '\n');
+  const final = Buffer.from(JSON.stringify({ type: 'response_item', timestamp: 'now', payload: {
+    type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: '中文🙂完成' }],
+  } }));
+  const split = final.indexOf(Buffer.from('🙂')) + 2;
+  await fs.writeFile(filename, Buffer.concat([initial, final.subarray(0, split)]));
+  await consumeRollout(s, (await fs.stat(filename)).size);
+  assert.equal(s.offset, initial.length);
+  assert.deepEqual(s.messages, []);
+  await fs.appendFile(filename, final.subarray(split));
+  await consumeRollout(s, (await fs.stat(filename)).size);
+  assert.equal(s.messages[0]?.text, '中文🙂完成');
+  assert.equal(s.offset, initial.length + final.length);
+  await fs.appendFile(filename, '\r\n');
+  await consumeRollout(s, (await fs.stat(filename)).size);
+  assert.equal(s.messages.length, 1);
+  assert.equal(s.offset, initial.length + final.length + 2);
+});

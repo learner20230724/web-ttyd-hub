@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { hubUrl } from '../utils/base.mjs'
+import { untilAbort } from '../utils/request-deadline.mjs'
 const emit = defineEmits(['close'])
 const dialog = ref(null), data = ref(null), loading = ref(false), error = ref('')
 let controller, timer
@@ -11,8 +12,8 @@ async function refresh(force = false) {
   loading.value = true; error.value = ''; controller = new AbortController()
   timer = setTimeout(() => controller.abort(), 45000)
   try {
-    const response = await fetch(hubUrl(`/api/sessions/codex-usage${force ? '?refresh=1' : ''}`), { signal: controller.signal, cache: 'no-store' })
-    const result = await response.json(); if (!response.ok) throw Error(result.error || '暂时无法读取额度')
+    const response = await untilAbort(fetch(hubUrl(`/api/sessions/codex-usage${force ? '?refresh=1' : ''}`), { signal: controller.signal, cache: 'no-store' }), controller.signal)
+    const result = await untilAbort(response.json(), controller.signal); if (!response.ok) throw Error(result.error || '暂时无法读取额度')
     data.value = result
   } catch (e) { error.value = e.name === 'AbortError' ? '读取超时，请稍后刷新' : e.message }
   finally { clearTimeout(timer); loading.value = false }

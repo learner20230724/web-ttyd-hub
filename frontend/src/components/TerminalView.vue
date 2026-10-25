@@ -55,12 +55,14 @@ watch(nativeKey, async key => {
   let ws, timer, cacheTimer, initialTimer, stopped = false, ready = false, initializedSocket = false, attempt = 0, lastSize = '';
   let rendering = false, queuedBytes = 0;
   let cacheState = null, tailBytes = 0, liveSnapshot = false, checkpointPending = false;
-  let renderedCompleted = null, renderedSnapshot = false;
+  let renderedCompleted = null, renderedContentRevision = null, renderedSnapshot = false;
   const renderQueue = [];
   const confirmedSession = () => !store.cachedSnapshot && nativeKey.value === key;
   nativeReadGuard = selected => !stopped && ready && renderedSnapshot && confirmedSession() &&
     selected.name === name && (selected.createdAt || '') === createdAt &&
-    selected.activity?.completed === renderedCompleted && !rendering && !renderQueue.length &&
+    selected.activity?.completed === renderedCompleted &&
+    (!selected.activity?.contentRevision || selected.activity.contentRevision === renderedContentRevision) &&
+    !rendering && !renderQueue.length &&
     term.buffer.active.viewportY === term.buffer.active.baseY;
   const persistCache = () => {
     clearTimeout(cacheTimer); cacheTimer = null;
@@ -87,15 +89,17 @@ watch(nativeKey, async key => {
   };
   const refreshRead = () => {
     const completed = currentSession.value?.activity?.completed;
+    const contentRevision = currentSession.value?.activity?.contentRevision;
     // A later completion on the metadata socket does not prove its terminal
     // output was rendered. Obtain a cheap authoritative snapshot/checkpoint.
-    if (ready && confirmedSession() && completed && completed !== renderedCompleted &&
-        cacheState?.snapshot.completed !== completed && !checkpointPending) {
+    if (ready && confirmedSession() && completed &&
+        (completed !== renderedCompleted || contentRevision && contentRevision !== renderedContentRevision) &&
+        (cacheState?.snapshot.completed !== completed || contentRevision && cacheState?.snapshot.contentRevision !== contentRevision) && !checkpointPending) {
       checkpointPending = send({ type: 'checkpoint' });
     }
     store.markRead();
   };
-  const stopCompletionWatch = watch(() => currentSession.value?.activity?.completed, refreshRead, { flush: 'post' });
+  const stopCompletionWatch = watch(() => [currentSession.value?.activity?.completed, currentSession.value?.activity?.contentRevision], refreshRead, { flush: 'post' });
   term.onScroll(() => store.markRead());
   const input = (type, data) => {
     if (send({ type, data })) term.scrollToBottom();
@@ -159,7 +163,7 @@ watch(nativeKey, async key => {
             }
             ready = true; attempt = 0; connection.value = '';
             term.options.disableStdin = false;
-            renderedSnapshot = true; renderedCompleted = message.completed;
+            renderedSnapshot = true; renderedCompleted = message.completed; renderedContentRevision = message.contentRevision;
           }
           done();
         };
