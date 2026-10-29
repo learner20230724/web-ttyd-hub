@@ -111,7 +111,17 @@ test('notification reconnect failures cannot erase freshly verified task counter
   assert.equal(f.store.unreadCount, 1, 'Another failed notification attempt cannot hide a confirmed unread reply');
 });
 
-test('HTTP failure still marks state unavailable and HTTP recovery restores counters without terminal input', async t => {
+test('HTTP failure preserves confirmed task states while notifications remain connected', async t => {
+  const f = await fixture(t);
+  f.store.init(); await settle();
+  f.sockets[0].readyState = 1;
+  f.offline();
+  await assert.rejects(f.store.fetchSessions());
+  assert.equal(f.store.connectionIssue, false);
+  assert.equal(f.store.workingCount, 1, 'No new activity event is needed to keep the existing server state visible');
+});
+
+test('failure of both transports marks state unavailable and HTTP recovery restores counters without terminal input', async t => {
   const f = await fixture(t);
   f.store.init(); await settle();
   f.offline();

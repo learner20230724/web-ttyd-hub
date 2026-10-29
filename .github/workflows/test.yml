@@ -44,6 +44,7 @@ jobs:
       - run: node tests/mobile-lifecycle-browser.cjs
       - run: node tests/session-lifecycle-browser.cjs
       - run: node tests/session-transport-browser.cjs
+      - run: node tests/state-refresh-ablation-browser.cjs
       - run: node tests/mobile-answer-presentation-browser.cjs
       - run: node tests/mobile-answer-convergence-browser.cjs
       - run: node tests/session-sync-browser.cjs

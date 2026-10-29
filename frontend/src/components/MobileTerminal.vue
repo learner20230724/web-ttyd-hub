@@ -206,7 +206,9 @@ window.addEventListener('focus', resumeReading)
 window.addEventListener('pageshow', restoredPage)
 watch(() => [store.current, session.value?.activity?.phase, session.value?.activity?.busy,
   session.value?.activity?.completed, session.value?.activity?.available, session.value?.activity?.contentRevision], (value, previous) => {
-  if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, true)
+  // Progress notifications share the active read so a slow response can render.
+  // A newly completed turn still replaces an older in-flight progress request.
+  if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, Boolean(value[3] && value[3] !== previous[3]))
 })
 watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot], async ([name, full], previous) => {
   const previousName = previous?.[0]

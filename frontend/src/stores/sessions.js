@@ -243,7 +243,9 @@ export const useSessionStore = defineStore('sessions', () => {
       // Reconnect/snapshot intentionally replaces this read; callers of a
       // successful rename/create must not receive a spurious cancellation error.
       if (listRequest !== request) return
-      if (activitySequence === activityAtStart) connectionIssue.value = true
+      // A failed HTTP read cannot invalidate states from an open notification
+      // connection. Mark disconnected only when both transports are unavailable.
+      if (activitySequence === activityAtStart && ws?.readyState !== 1) connectionIssue.value = true
       throw error
     } finally {
       clearTimeout(timeout)
