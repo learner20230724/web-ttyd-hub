@@ -127,8 +127,14 @@ function transition(name, phase, completed = null) {
     await desktop.context.unroute('**/api/sessions', holdList);
     await Promise.all(heldLists.map(release => release()));
     await desktop.page.waitForFunction(() => document.querySelector('[data-session-id="done"] .session-name')?.textContent === '各端已读状态一致');
-    manager.archive('second'); await card(desktop.page, 'second').waitFor({ state: 'detached' }); await card(phone.page, 'second').waitFor({ state: 'detached' });
-    manager.restoreArchived('second'); await card(desktop.page, 'second').waitFor(); await card(phone.page, 'second').waitFor({ state: 'attached' });
+    for (const client of [desktop, phone]) {
+      await client.page.bringToFront(); await sidebar(client.page);
+      await card(client.page, 'second').getByLabel('会话操作菜单').click();
+      await client.page.getByRole('button', { name: '移入归档（保留 30 分钟）', exact: true }).click();
+      assert.equal(await client.page.locator('.confirm-bar').count(), 0, 'Archive executes without a second confirmation');
+      await card(desktop.page, 'second').waitFor({ state: 'detached' }); await card(phone.page, 'second').waitFor({ state: 'detached' });
+      manager.restoreArchived('second'); await card(desktop.page, 'second').waitFor(); await card(phone.page, 'second').waitFor({ state: 'attached' });
+    }
     await sidebar(phone.page);
     await phone.page.locator('.sidebar').evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished)));
     const output = path.join(__dirname, '../output/playwright'); fs.mkdirSync(output, { recursive: true });

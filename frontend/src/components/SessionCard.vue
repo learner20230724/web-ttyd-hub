@@ -68,6 +68,7 @@ function onClose(e, name) {
   closeMenu();
   e.stopPropagation();
   error.value = '';
+  if (!props.session.archivedAt) return confirmRemove(e, name);
   confirming.value = true;
 }
 
