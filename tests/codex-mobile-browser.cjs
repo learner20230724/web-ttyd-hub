@@ -21,7 +21,7 @@ app.post('/api/sessions/:name/questions/:id/respond', async (req, res) => {
   if (delayPost) await new Promise(resolve => setTimeout(resolve, 350));
   requests = requests.filter(q => q.id !== req.params.id); res.json({ ok: true });
 });
-app.use(express.static(path.join(__dirname, '../server/public')));
+app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
 (async () => {
   const server = app.listen(0, '127.0.0.1'); const wss = setupWebSocket(server, manager); await once(server, 'listening');
   const browser = await chromium.launch({ args: ['--no-sandbox'] });

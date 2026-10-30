@@ -67,12 +67,12 @@ const final = '合成晚到 r2：这条最终回答必须重新显示为未读�
     for (let i = 0; i < 40 && !reads.length; i++) await page.waitForTimeout(25);
     assert.equal(reads.length, 1); assert.equal(reads[0].contentRevision, 'r2');
     assert.equal(manager.sync.snapshot().read[target.name].contentRevision, 'r2');
-    await page.locator('.mobile-session-header').getByText('已完成 · 已读', { exact: true }).waitFor({ timeout: 1500 });
+    await page.locator('.mobile-session-header[data-activity-state="idle"]').waitFor({ timeout: 1500 });
     await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('web-ttyd-hub.session-metadata.v1')).readRevisions['late-final']), 'r2');
     await page.close(); page = await context.newPage(); page.on('pageerror', error => errors.push(error.message)); await page.goto(url);
     await page.getByText(final, { exact: true }).waitFor({ timeout: 2000 });
-    await page.locator('.mobile-session-header').getByText('已完成 · 已读', { exact: true }).waitFor({ timeout: 1500 });
+    await page.locator('.mobile-session-header[data-activity-state="idle"]').waitFor({ timeout: 1500 });
     assert.equal(reads.length, 1, 'Reopen restores the confirmed revision without another acknowledgement');
     assert.equal(inputs, 0); assert.deepEqual(errors, []);
     console.log('PASS read revision: background late final becomes unread, old partial stays unread, rendered r2 acknowledges once and persists through reopen; terminal inputs=0');

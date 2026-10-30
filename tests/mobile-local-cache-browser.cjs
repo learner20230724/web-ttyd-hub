@@ -36,7 +36,7 @@ const SessionSync = require('../server/services/session-sync');
   app.get('/api/sessions/:name/questions', (_req, res) => res.json({ supported: false, requests: [] }));
   app.post('/api/sessions/:name/input', (_req, res) => { inputs++; res.json({ ok: true }); });
   app.post('/api/sessions/sync', (req, res) => res.json(manager.sync.apply(req.body)));
-  app.use(express.static(path.join(__dirname, '../server/public')));
+  app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
   const server = app.listen(0, '127.0.0.1'), wss = setupWebSocket(server, manager); await once(server, 'listening');
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   try {

@@ -325,7 +325,7 @@ onBeforeUnmount(() => {
         :disabled="sending || store.cachedSnapshot || session?.status !== 'running'" @click="send(key, false)">{{ {Up:'↑', Down:'↓', Left:'←', Right:'→', Enter:'↵ 回车', 'S-Left':'Shift+←', Escape:'ESC'}[key] }}</button>
     </div>
     <template v-if="session">
-      <div class="mobile-session-header">
+      <div class="mobile-session-header" :data-activity-state="status.state">
         <div class="mobile-title-row">
           <div class="mobile-session-title" :title="session.displayName || session.name">{{ session.displayName || session.name }}</div>
           <ActivityBadge v-if="!['idle', 'unread'].includes(status.state)" class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
@@ -394,7 +394,7 @@ onBeforeUnmount(() => {
   .mobile-navigation { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); }
   .mobile-navigation button:nth-child(6) { grid-column:span 2; }
 }
-.mobile-session-header { padding:10px 12px; border-bottom:1px solid #263143; background:#111a28; flex-shrink:0; }
+.mobile-session-header { padding:5px 12px; border-bottom:1px solid #263143; background:#111a28; flex-shrink:0; }
 .mobile-title-row { display:flex; align-items:center; gap:8px; min-width:0; }
 .mobile-session-title { min-width:0; font-size:15px; font-weight:600; line-height:1.5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .mobile-title-row > :deep(.image-attachments) { margin:0 0 0 auto; flex-shrink:0; }
@@ -444,7 +444,7 @@ button { min-height:44px; border:0; border-radius:10px; padding:8px 12px; backgr
 .input-notice { margin:0 0 6px; color:#98a9c0; font-size:12px; }
 .mobile-empty { margin:auto; padding:20px; color:#94a3b8 }
 @media (max-height: 550px) {
-  .mobile-session-header { padding:6px 12px; }.status-guidance { padding:4px 8px; margin-top:4px; }
+  .mobile-session-header { padding:4px 12px; }.status-guidance { padding:4px 8px; margin-top:4px; }
   .mobile-reading { padding:12px; }.composer { padding-top:6px; }
 }
 </style>

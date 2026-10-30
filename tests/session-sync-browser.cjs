@@ -19,9 +19,9 @@ for (const [name, displayName, phase] of [['worker', '正在处理的项目', 'e
 const app = express(); app.use(express.json());
 app.get('/api/sessions/:name/mobile', (req, res) => res.json({ messages: [{ id: 'example', role: 'assistant', text: '这是一条合成测试回复。手机查看后，电脑上的绿色未读提醒也会消除。', phase: 'final_answer' }], version: 1, completed: manager.sessions.get(req.params.name)?.activity.completed || null }));
 app.get('/api/sessions/:name/questions', (_req, res) => res.json({ available: false, questions: [] }));
-app.use('/api/sessions', routes(manager)); app.use(express.static(path.join(__dirname, '../server/public')));
+app.use('/api/sessions', routes(manager)); app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
 const card = (page, name) => page.locator(`.session-list [data-session-id="${name}"]`);
-const state = (page, name, value) => card(page, name).locator('.activity-badge.' + value).first().waitFor({ state: 'attached', timeout: 12000 });
+const state = (page, name, value) => page.locator(`[data-session-id="${name}"][data-activity-state="${value}"]`).waitFor({state:'attached',timeout:12000});
 async function sidebar(page) {
   const toggle = page.getByRole('button', { name: '会话列表', exact: true });
   if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
@@ -62,10 +62,11 @@ function transition(name, phase, completed = null) {
     for (let i = 0; !heldLists.length && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 20));
     assert(heldLists.length, 'The old list must be held before reading on the phone');
     await select(phone.page, 'done');
-    await card(desktop.page, 'done').locator('.activity-badge.idle').first().waitFor({ state: 'attached', timeout: 1500 });
+    await desktop.page.locator('[data-session-id="done"][data-activity-state="idle"]').waitFor({ state: 'attached', timeout: 1500 });
     await desktop.context.unroute('**/api/sessions', holdList);
     await Promise.all(heldLists.map(release => release()));
-    assert.match(await card(desktop.page, 'done').textContent(), /已完成 · 已读/);
+    assert.equal(await card(desktop.page, 'done').getAttribute('data-activity-state'), 'idle');
+    assert(!/已完成 · 已读/.test(await card(desktop.page, 'done').textContent()));
     assert.equal(await desktop.page.locator('.session-card.active').count(), 0, 'Remote reads never switch selection');
     await select(desktop.page, 'second'); await state(phone.page, 'second', 'idle');
     assert.equal(await phone.page.locator('.unread-badge').count(), 0);

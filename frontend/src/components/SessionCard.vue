@@ -94,6 +94,7 @@ function cancelRemove(e) {
     class="session-card"
     :class="{ active, collapsed, pinned: store.isPinned(session.name) }"
     :data-session-id="session.name"
+    :data-activity-state="store.activityStatus(session).state"
     :title="session.displayName || session.name"
   >
     <button v-if="!collapsed && !editing && !confirming && !session.archivedAt" class="drag-handle" type="button"

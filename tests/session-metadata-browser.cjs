@@ -33,7 +33,7 @@ const createdAt = '2026-10-20T00:00:00Z';
   app.get('/api/sessions/:name/mobile', (req, res) => res.json({ messages: [{ id: 'answer', role: 'assistant', phase: 'final_answer', text: '合成本地历史回答' }], completed: manager.sessions.get(req.params.name)?.activity.completed || null }));
   app.get('/api/sessions/:name/questions', (_req, res) => res.json({ supported: false, requests: [] }));
   app.post('/api/sessions/:name/input', (_req, res) => { inputs++; res.json({ ok: true }); });
-  app.use(express.static(path.join(__dirname, '../server/public')));
+  app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
   const server = app.listen(0, '127.0.0.1'), wss = setupWebSocket(server, manager); await once(server, 'listening');
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   try {

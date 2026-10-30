@@ -91,7 +91,7 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
   manager.mobile = SessionManager.prototype.mobile;
   app.use('/api/sessions', sessionRoutes(manager));
   app.get('/cache-seed', (_req, res) => res.send('<!doctype html><title>Cache fixture</title>'));
-  app.use(express.static(path.join(__dirname, '../server/public')));
+  app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
   const server = app.listen(0, '127.0.0.1'), wss = setupWebSocket(server, manager); await once(server, 'listening');
   const context = await browser.newContext({ viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true });
   await context.addInitScript(({ createdAt, blockedStorage }) => {
@@ -231,7 +231,7 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       assert(!/send_user_message_question_reply|transport-id/.test(await f.page.locator('.mobile-reading').innerText()));
       await f.finishSource();
       await f.page.locator('.message.assistant').filter({ hasText: '最终回复：检查完成。' }).waitFor({ timeout: 1500 });
-      assert.match(await f.page.locator('.mobile-session-header').innerText(), /已完成/);
+      assert(['idle', 'unread'].includes(await f.page.locator('.mobile-session-header').getAttribute('data-activity-state')));
       const reading = f.page.locator('.mobile-reading');
       assert(!/TOOL_OUTPUT_FIXTURE|npm run build/.test(await reading.innerText()));
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
@@ -342,14 +342,14 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
       await f.context.route('**/api/sessions/reader/mobile**', () => {});
       f.complete('reader');
-      await f.page.locator('.mobile-session-header .activity-badge.unread').waitFor({ timeout: 1000 });
+      await f.page.locator('.mobile-session-header[data-activity-state="unread"]').waitFor({ timeout: 1000 });
       await f.page.waitForTimeout(1600);
-      assert.equal(await f.page.locator('.mobile-session-header .activity-badge.unread').count(), 1, 'Old content cannot acknowledge a new completion');
+      assert.equal(await f.page.locator('.mobile-session-header[data-activity-state="unread"]').count(), 1, 'Old content cannot acknowledge a new completion');
       await f.context.unrouteAll({ behavior: 'ignoreErrors' });
       // A new request after remount must carry and render the matching completion.
       await f.page.reload();
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
-      await f.page.locator('.mobile-session-header').getByText('已完成 · 已读', { exact: true }).waitFor();
+      await f.page.locator('.mobile-session-header[data-activity-state="idle"]').waitFor();
       assert.equal(f.inputs, 0);
     });
     await experiment('reading older output does not acknowledge a newly completed reply', {}, async f => {
@@ -359,9 +359,9 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       await f.page.getByRole('button', { name: '↓ 回到最新', exact: true }).waitFor();
       f.nextContent(); f.complete('reader');
       await f.page.getByText(/精简回答 reader 版本 2/).waitFor();
-      assert.equal(await f.page.locator('.mobile-session-header .activity-badge.unread').count(), 1);
+      assert.equal(await f.page.locator('.mobile-session-header[data-activity-state="unread"]').count(), 1);
       await f.page.getByRole('button', { name: '↓ 回到最新', exact: true }).tap();
-      await f.page.locator('.mobile-session-header').getByText('已完成 · 已读', { exact: true }).waitFor();
+      await f.page.locator('.mobile-session-header[data-activity-state="idle"]').waitFor();
       assert.equal(f.inputs, 0);
     });
     await experiment('cached views switch immediately with network responses held', {}, async f => {

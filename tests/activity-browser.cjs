@@ -22,7 +22,7 @@ app.get('/api/sessions/shells', (_req, res) => res.json({ platform: 'linux', she
 app.get('/api/sessions/:name/mobile', (req, res) => contentResponse(req, res, { ...(req.query.view === 'full'
   ? { text: 'Would you like to run the following command?\n\n  $ npm run build\n\n› 1. Yes, proceed\n  2. No, and tell Codex what to do differently\n\n  Press enter to confirm · esc to cancel', version }
   : { messages: transcript, version }), completed: sessions.find(s => s.name === req.params.name)?.activity.completed || null }));
-app.use(express.static(path.join(__dirname, '../server/public')));
+app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
 (async () => {
   const server = app.listen(0, '127.0.0.1'); const wss = setupWebSocket(server, manager); await once(server, 'listening');
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
@@ -69,8 +69,8 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       assert.equal(await page.locator('.mobile-session-header .unread').count(), 0);
       await transition('interrupted'); await page.locator('.status-guidance.interrupted').waitFor();
       await transition('completed');
-      await page.waitForFunction(() => document.querySelector('.mobile-session-header .activity-badge')?.textContent.includes('已完成'));
-      await compactTitle();
+      await page.locator('.mobile-session-header[data-activity-state="idle"], .mobile-session-header[data-activity-state="unread"]').waitFor();
+      assert.equal(await page.locator('.mobile-session-header .activity-badge').count(), 0);
       await page.screenshot({ path: path.join(output, `status-completed-${width}.png`) });
       const readingBeforeUnknown = await page.locator('.mobile-reading').boundingBox();
       // Status and content can update independently. Neither a missing phase nor
@@ -116,7 +116,7 @@ app.use(express.static(path.join(__dirname, '../server/public')));
       assert(overflow.root <= width && overflow.toolbar <= width, JSON.stringify(overflow));
       await page.getByRole('button', { name: '会话列表', exact: true }).tap();
       await page.locator('[data-session-id="wait"] .activity-badge.waiting').waitFor();
-      await page.locator('[data-session-id="done"] .activity-badge.unread').waitFor();
+      await page.locator('[data-session-id="done"][data-activity-state="unread"]').waitFor();
       await page.locator('.sidebar').evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished)));
       await page.screenshot({ path: path.join(output, `status-list-${width}.png`) });
       await page.getByRole('button', { name: '打开会话：移动端适配与交互优化', exact: true }).tap();

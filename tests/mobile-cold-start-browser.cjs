@@ -131,7 +131,7 @@ async function fixture(browser, { hidden = false, cachedFallback = false, withOt
         await f.discover();
         await f.page.locator('.message.assistant').filter({ hasText: answer }).waitFor({ timeout: 2500 });
         assert(!/TOOL_DETAIL_ONLY_IN_FULL|STALE_FULL_FALLBACK/.test(await f.page.locator('.mobile-reading').innerText()));
-        await f.page.locator('.mobile-session-header').getByText('已完成 · 已读', { exact: true }).waitFor({ timeout: 1000 });
+        await f.page.locator('.mobile-session-header[data-activity-state="idle"]').waitFor({ timeout: 1000 });
         assert(f.discoveryReads >= 2, 'Discovery retries while idle; a message cannot be its trigger');
         if (cachedFallback) await f.page.screenshot({ path: path.join(screenshots, '02-cold-start-idle-answer.png') });
         await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
@@ -151,7 +151,7 @@ async function fixture(browser, { hidden = false, cachedFallback = false, withOt
         document.dispatchEvent(new Event('visibilitychange'));
       });
       await f.page.locator('.message.assistant').filter({ hasText: answer }).waitFor({ timeout: 2500 });
-      await f.page.locator('.mobile-session-header').getByText('已完成 · 已读', { exact: true }).waitFor({ timeout: 1000 });
+      await f.page.locator('.mobile-session-header[data-activity-state="idle"]').waitFor({ timeout: 1000 });
       await f.page.screenshot({ path: path.join(screenshots, '04-hidden-resumed-answer.png') });
       assert.equal(f.inputs, 0);
       console.log('PASS initially hidden WebView resumes discovery and reading without input');
