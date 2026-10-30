@@ -23,7 +23,7 @@ const windowsSrc = computed(() => store.platform === 'win32' && runningName.valu
 const host = ref(null);
 const imagePicker = ref(null), attachments = ref([]), imageUploading = ref(false), attaching = ref(false), imageError = ref('');
 const canAttach = computed(() => currentSession.value?.shell === 'codex' || currentSession.value?.activity?.detected);
-watch(() => [store.current, currentSession.value?.createdAt], () => { attachments.value = []; imageError.value = ''; imageUploading.value = false; });
+watch([() => store.current, () => currentSession.value?.createdAt], () => { attachments.value = []; imageError.value = ''; imageUploading.value = false; });
 async function attachImages() {
   const selected = currentSession.value, images = attachments.value.slice();
   if (!selected || !images.length || attaching.value) return;

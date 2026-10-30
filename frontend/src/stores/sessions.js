@@ -1,3 +1,4 @@
+import { pageHidden, receiveVisibility } from '../utils/page-visibility.mjs'
 import { hubUrl } from '../utils/base.mjs'
 import { pruneContent } from '../utils/session-content.mjs'
 import { defineStore } from 'pinia'
@@ -26,7 +27,7 @@ export const useSessionStore = defineStore('sessions', () => {
     return () => { if (readGuard === guard) readGuard = null }
   }
   function markRead() {
-    if (document.hidden || !document.hasFocus() || connectionIssue.value) return
+    if (pageHidden() || !document.hasFocus() || connectionIssue.value) return
     const session = sessions.value.find(s => s.name === current.value)
     const state = session && activityState(session)
     // Keep old history read on upgrade. Once its current version really reaches
@@ -406,19 +407,21 @@ export const useSessionStore = defineStore('sessions', () => {
     document.addEventListener('visibilitychange', resume)
     window.addEventListener('online', resume)
     window.addEventListener('focus', resume)
+    window.addEventListener('hub:visibility', resume)
     window.addEventListener('pageshow', resumePage)
   }
 
   // Phones can suspend a WebSocket without delivering close. Refresh on return
   // and periodically reconcile, even when no activity notification arrives.
   const refreshVisible = (fresh = false) => {
-    if (document.hidden) return
+    if (pageHidden()) return
     if (listRequest && !fresh) { refreshPending = true; return }
     refreshPending = false
     fetchSessions().catch(() => {})
   }
-  const resume = () => {
-    if (document.hidden) { persistMetadata(); return }
+  const resume = event => {
+    receiveVisibility(event)
+    if (pageHidden()) { persistMetadata(); return }
     refreshVisible(true)
     sync.retry()
     // WebViews can keep an OPEN socket whose network connection died in the
@@ -428,7 +431,7 @@ export const useSessionStore = defineStore('sessions', () => {
     connectWs()
   }
   // A restored browser page or Android WebView can return to the foreground
-  // without changing document.hidden. Neither path should need a terminal input.
+  // without changing pageHidden(). Neither path should need a terminal input.
   const resumePage = event => { if (event.persisted) resume() }
   let refreshTimer
   onScopeDispose(() => {
@@ -438,7 +441,7 @@ export const useSessionStore = defineStore('sessions', () => {
     if (ws) { ws.onclose = null; ws.close() }
     document.removeEventListener('visibilitychange', resume)
     window.removeEventListener('online', resume)
-    window.removeEventListener('focus', resume)
+    window.removeEventListener('focus', resume); window.removeEventListener('hub:visibility', resume)
     window.removeEventListener('pageshow', resumePage)
   })
   window.addEventListener('pagehide', persistMetadata)

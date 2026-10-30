@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onBeforeUnmount } from 'vue'
 import { hubUrl } from '../utils/base.mjs'
-const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean })
+const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, previewTarget: String })
 const emit = defineEmits(['update:modelValue', 'busy', 'error'])
 const picker = ref(null), uploading = ref(false)
 let disposed = false
@@ -38,11 +38,13 @@ defineExpose({ addFiles, paste })
 <template>
   <div class="image-attachments">
     <input ref="picker" class="image-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple @change="addFiles($event.target.files)">
-    <button type="button" class="image-pick" :disabled="disabled || uploading" @click="picker.click()">{{ uploading ? '上传中…' : '添加图片' }}</button>
+    <button type="button" class="image-pick" :class="{ compact }" aria-label="添加图片" :title="uploading ? '上传中…' : '添加图片'" :disabled="disabled || uploading" @click="picker.click()"><span v-if="compact && uploading" aria-hidden="true">…</span><svg v-else-if="compact" aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg><span v-else>{{ uploading ? '上传中…' : '添加图片' }}</span></button>
+    <Teleport :to="previewTarget || 'body'" :disabled="!previewTarget" defer>
     <div v-for="(item, index) in modelValue" :key="`${item.id}:${index}`" class="attachment">
       <img :src="hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images/${item.id}`)" :alt="item.name">
       <button type="button" :disabled="disabled || uploading" :aria-label="`移除图片 ${item.name}`" @click="emit('update:modelValue', modelValue.filter((_, i) => i !== index))">×</button>
     </div>
+    </Teleport>
   </div>
 </template>
 <style scoped>
@@ -50,7 +52,8 @@ defineExpose({ addFiles, paste })
 .image-file-input { display:none; }
 button { min-height:36px; border:1px solid #40516b; border-radius:8px; background:#25364b; color:#e2e8f0; padding:6px 10px; cursor:pointer; }
 button:disabled { opacity:.55; cursor:default; }
-.attachment { position:relative; width:64px; height:56px; }
+.image-pick.compact { min-height:36px; min-width:36px; font-size:23px; padding:0 6px; background:transparent; border:0; }
+.attachment { display:inline-block; margin:0 8px 8px 0; position:relative; width:64px; height:56px; }
 .attachment img { width:100%; height:100%; object-fit:cover; border-radius:6px; }
 .attachment button { position:absolute; top:-5px; right:-5px; min-height:24px; width:24px; padding:0; border-radius:50%; background:#131c2a; }
 </style>

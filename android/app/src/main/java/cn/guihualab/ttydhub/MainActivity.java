@@ -42,6 +42,7 @@ public class MainActivity extends Activity {
     private String server = "";
     private AlertDialog loginDialog;
     private boolean pageFailed;
+    private boolean activityVisible;
     private static final int PICK_IMAGES = 42;
     private ValueCallback<Uri[]> imageCallback;
     private LoginVault loginVault;
@@ -230,6 +231,7 @@ public class MainActivity extends Activity {
                     status.setVisibility(View.GONE);
                     rememberConnected(address);
                 }
+                notifyPageVisibility();
                 CookieManager.getInstance().flush();
             }
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest request) {
@@ -348,7 +350,10 @@ public class MainActivity extends Activity {
         }
         finishImagePicker(canControl() ? images : null);
     }
-    @Override protected void onPause() { if (web != null) web.onPause(); super.onPause(); }
-    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }
+    private void notifyPageVisibility() {
+        if (canControl()) web.evaluateJavascript("window.dispatchEvent(new CustomEvent('hub:visibility',{detail:{visible:" + activityVisible + "}}))", null);
+    }
+    @Override protected void onPause() { activityVisible = false; notifyPageVisibility(); if (web != null) web.onPause(); super.onPause(); }
+    @Override protected void onResume() { super.onResume(); activityVisible = true; if (web != null) web.onResume(); notifyPageVisibility(); }
     @Override protected void onDestroy() { destroyWeb(); super.onDestroy(); }
 }

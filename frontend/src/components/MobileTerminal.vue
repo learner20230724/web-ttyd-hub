@@ -1,4 +1,5 @@
 <script setup>
+import { pageHidden, receiveVisibility } from '../utils/page-visibility.mjs'
 import { hubUrl } from '../utils/base.mjs'
 
 import { ref, shallowRef, shallowReactive, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
@@ -20,15 +21,15 @@ const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const status = computed(() => session.value ? store.activityStatus(session.value) : null)
 const now = ref(Date.now())
-let lastHidden = document.hidden
+let lastHidden = pageHidden()
 const elapsedTimer = setInterval(() => {
   now.value = Date.now()
   // Some WebViews change visibility after the initial read was skipped without
   // delivering visibilitychange. Reuse the clock to recover that missed read.
-  if (document.hidden !== lastHidden) {
+  if (pageHidden() !== lastHidden) {
     // Replace a list request suspended during startup too; otherwise cached
     // metadata can keep the reader gated until that old request times out.
-    if (!document.hidden) void store.fetchSessions().catch(() => {})
+    if (!pageHidden()) void store.fetchSessions().catch(() => {})
     resumeReading()
   }
 }, 1000)
@@ -185,7 +186,7 @@ async function refresh(token = epoch, fresh = false) {
   const selected = session.value, view = props.showExecution ? 'full' : 'answer'
   // A cached name may now belong to a replacement session on the server. Keep
   // disk readable, but wait for the authoritative list before requesting data.
-  if (!selected || document.hidden || store.cachedSnapshot) return
+  if (!selected || pageHidden() || store.cachedSnapshot) return
   const sequence = ++refreshSequence
   const current = () => !disposed && token === epoch && sequence === refreshSequence
   try {
@@ -199,10 +200,11 @@ async function refresh(token = epoch, fresh = false) {
     }
   } catch (e) {
     if (current()) error.value = Object.keys(content.value).length ? '正在显示缓存，暂时无法更新。' : e.message
-  } finally { if (current() && !document.hidden && !store.cachedSnapshot) { clearTimeout(timer); timer = setTimeout(() => refresh(token), refreshDelay()) } }
+  } finally { if (current() && !pageHidden() && !store.cachedSnapshot) { clearTimeout(timer); timer = setTimeout(() => refresh(token), refreshDelay()) } }
 }
-function resumeReading() {
-  lastHidden = document.hidden
+function resumeReading(event) {
+  receiveVisibility(event)
+  lastHidden = pageHidden()
   if (!lastHidden) { alignReading(); void refresh(epoch, true) }
   else clearTimeout(timer)
 }
@@ -210,6 +212,7 @@ function restoredPage(event) { if (event.persisted) resumeReading() }
 document.addEventListener('visibilitychange', resumeReading)
 window.addEventListener('online', resumeReading)
 window.addEventListener('focus', resumeReading)
+window.addEventListener('hub:visibility', resumeReading)
 window.addEventListener('pageshow', restoredPage)
 watch(() => [store.current, session.value?.activity?.phase, session.value?.activity?.busy,
   session.value?.activity?.completed, session.value?.activity?.available, session.value?.activity?.contentRevision], (value, previous) => {
@@ -311,7 +314,7 @@ onBeforeUnmount(() => {
   readingResize?.disconnect()
   inputRequest?.abort()
   document.removeEventListener('visibilitychange', resumeReading); window.removeEventListener('online', resumeReading)
-  window.removeEventListener('focus', resumeReading); window.removeEventListener('pageshow', restoredPage)
+  window.removeEventListener('focus', resumeReading); window.removeEventListener('hub:visibility', resumeReading); window.removeEventListener('pageshow', restoredPage)
 })
 </script>
 <template>
@@ -325,8 +328,9 @@ onBeforeUnmount(() => {
       <div class="mobile-session-header">
         <div class="mobile-title-row">
           <div class="mobile-session-title" :title="session.displayName || session.name">{{ session.displayName || session.name }}</div>
-          <ActivityBadge class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
+          <ActivityBadge v-if="!['idle', 'unread'].includes(status.state)" class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
           <span v-if="elapsed" class="elapsed">已运行 {{ elapsed }}</span>
+          <ImageAttachments v-if="canAttach && session.status === 'running'" compact preview-target=".mobile-image-drafts" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
         </div>
         <!-- Unavailable status stays in the title row; it needs no separate action or reading space. -->
         <div v-if="['waiting', 'error', 'interrupted'].includes(status.state) && !(status.state === 'waiting' && questionPending)" class="status-guidance" :class="status.state">
@@ -370,7 +374,7 @@ onBeforeUnmount(() => {
       <p v-if="inputError || (error && !answerUnavailable)" class="mobile-error" role="alert">{{ inputError || error }}</p>
       <CodexQuestions v-if="!store.cachedSnapshot && session.status === 'running' && session.activity?.detected" :session-name="session.name" @handled="refresh()" @pending="questionPending = $event" @support="questionSupport = $event" />
       <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()" @paste.capture="canAttach && imagePicker?.paste($event)">
-        <ImageAttachments v-if="canAttach" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
+        <div class="mobile-image-drafts"></div>
         <p v-if="inputNotice" class="input-notice" role="status">{{ inputNotice }}</p>
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
@@ -393,6 +397,8 @@ onBeforeUnmount(() => {
 .mobile-session-header { padding:10px 12px; border-bottom:1px solid #263143; background:#111a28; flex-shrink:0; }
 .mobile-title-row { display:flex; align-items:center; gap:8px; min-width:0; }
 .mobile-session-title { min-width:0; font-size:15px; font-weight:600; line-height:1.5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mobile-title-row > :deep(.image-attachments) { margin:0 0 0 auto; flex-shrink:0; }
+.mobile-image-drafts:empty { display:none; }
 .inline-status { flex-shrink:0; white-space:nowrap; }
 .inline-status.busy :deep(.activity-dot) { display:none; }
 .elapsed { display:none; color:#98a9c0; font-size:11px; font-variant-numeric:tabular-nums; flex-shrink:0; white-space:nowrap; }

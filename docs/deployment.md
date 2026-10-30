@@ -102,3 +102,5 @@ Linux 的 Codex 0.162.1 可将任务交给共享 app-server daemon。服务需�
 检查：`node --test --test-concurrency=1 tests/*.test.js`；构建后运行 `node tests/codex-mobile-browser.cjs`、`node tests/activity-browser.cjs` 和 `node tests/mobile-input-browser.cjs`。Linux 本机有 Codex 时可运行 `node tests/codex-questions-integration.cjs`：临时 CODEX_HOME + 本地合成 Responses 服务 + 真实 app-server，验证重放、中文回答、空答案跳过和终端同步，不调用真实模型、不读取生产会话或凭据。接口依据同上 OpenAI App Server 文档，升级 Codex 后回归验证。
 
 图片功能使用受认证的 `/api/sessions/:name/images` 上传/读取接口，私有目录默认为会话状态目录旁的 `images/`，可用 `HUB_IMAGE_DIR` 指定。不要将其配置为公开静态目录。网页更新沿用 `npm run deploy:web`；Android 系统选图需要覆盖安装 1.6.0。协议支持、使用方式和测试边界见 [图片说明](images.md)。
+
+Android 1.6.1 通过同源页面的 `hub:visibility` 生命周期通知启动既有的前台核对，网页同时使用该可见性决定列表/正文是否可读；原有 5 秒列表核对保持不变。浏览器沿用 Page Visibility。系统选图及前台通知均需要 1.6.1 外壳，常规页面仍在线更新。

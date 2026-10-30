@@ -68,12 +68,30 @@ async function fixture(browser, hidden, { heldInitialList = false } = {}) {
     get inputs() { return inputs; },
     get mobileRequests() { return mobileRequests; },
     get listRequests() { return listRequests; },
+    complete(value) { answer=value; session.activity = { ...session.activity, completed:'native-final', contentRevision:'native-r2', phase:'completed', busy:false }; },
     changeAnswer(value) { answer = value; },
     async close() {
       await context.close(); wss.clients.forEach(client => client.terminate()); wss.close();
       server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
     },
   };
+}
+
+async function nativeResume(browser) {
+  const f = await fixture(browser, false);
+  try {
+    await f.page.locator('.message.assistant').filter({hasText:initialAnswer}).waitFor();
+    await f.page.evaluate(() => { window.__lifecycleHidden=true; window.dispatchEvent(new CustomEvent('hub:visibility',{detail:{visible:false}})); });
+    f.complete('NATIVE_FOREGROUND_FINAL');
+    await f.page.evaluate(() => window.dispatchEvent(new CustomEvent('hub:visibility',{detail:{visible:true}})));
+    await f.page.locator('.message.assistant').filter({hasText:'NATIVE_FOREGROUND_FINAL'}).waitFor({timeout:3000});
+    assert.equal(await f.page.evaluate(()=>document.hidden),true,'Reproduces stale WebView hidden flag');
+    const before=f.listRequests;
+    await f.page.waitForTimeout(5500);
+    assert(f.listRequests>before,'Existing periodic reconciliation continues while native Activity is visible');
+    assert.equal(f.inputs,0);assert.deepEqual(f.errors,[]);
+    console.log('PASS native foreground overrides stale hidden flag and retains periodic reconciliation');
+  } finally { await f.close(); }
 }
 
 async function hiddenStartup(browser) {
@@ -140,6 +158,7 @@ async function cachedHeldList(browser) {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   const failures = [];
   const cases = [
+    ['native-foreground', () => nativeResume(browser)],
     ['hidden-without-event', () => hiddenStartup(browser)],
     ['focus', () => explicitResume(browser, 'focus')],
     ['pageshow', () => explicitResume(browser, 'pageshow')],
