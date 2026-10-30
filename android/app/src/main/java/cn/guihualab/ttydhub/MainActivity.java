@@ -25,6 +25,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.ValueCallback;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -41,6 +42,8 @@ public class MainActivity extends Activity {
     private String server = "";
     private AlertDialog loginDialog;
     private boolean pageFailed;
+    private static final int PICK_IMAGES = 42;
+    private ValueCallback<Uri[]> imageCallback;
     private LoginVault loginVault;
     private SavedServers savedServers;
     private HttpAuthSession httpAuth;
@@ -95,6 +98,7 @@ public class MainActivity extends Activity {
         return v;
     }
     private void destroyWeb() {
+        finishImagePicker(null);
         if (loginDialog != null) { loginDialog.dismiss(); loginDialog = null; }
         httpAuth.cancel();
         if (web != null) {
@@ -196,6 +200,20 @@ public class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);
         web.setDownloadListener((url, userAgent, disposition, mimeType, length) -> openInBrowser(url));
         web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (view != web || !canControl()) return false;
+                finishImagePicker(null);
+                imageCallback = callback;
+                Intent intent = params.createIntent();
+                intent.setType("image/*");
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/png", "image/jpeg", "image/webp", "image/gif"});
+                try { startActivityForResult(intent, PICK_IMAGES); }
+                catch (android.content.ActivityNotFoundException error) {
+                    finishImagePicker(null);
+                    Toast.makeText(MainActivity.this, "没有可用的系统选图器", Toast.LENGTH_SHORT).show();
+                }
+                return true;
+            }
             @Override public void onProgressChanged(WebView view,int value) {
                 if (view != web) return;
                 progress.setProgress(value); progress.setVisibility(value == 100 ? View.GONE : View.VISIBLE);
@@ -314,6 +332,21 @@ public class MainActivity extends Activity {
         web.evaluateJavascript("(()=>{const b=document.querySelector('[data-action=close-history]');if(b){b.click();return true;}return false;})()",value->{
             if (!"true".equals(value)) connectionMenu();
         });
+    }
+    private void finishImagePicker(Uri[] images) {
+        ValueCallback<Uri[]> callback = imageCallback;
+        imageCallback = null;
+        if (callback != null) callback.onReceiveValue(images);
+    }
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_IMAGES) return;
+        Uri[] images = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+        // Only the user-selected content-provider grants are passed to WebView.
+        if (images != null) for (Uri uri : images) {
+            if (!"content".equals(uri.getScheme())) { images = null; break; }
+        }
+        finishImagePicker(canControl() ? images : null);
     }
     @Override protected void onPause() { if (web != null) web.onPause(); super.onPause(); }
     @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }

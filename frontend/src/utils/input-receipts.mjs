@@ -15,7 +15,7 @@ export function receiptCandidates(data) {
 export function reconcileInputs(pending, data) {
   const candidates = receiptCandidates(data), matched = new Set();
   return pending.filter(item => {
-    const receipt = candidates.find(r => !matched.has(r.id) && !item.before.includes(r.id) && normalized(r.text) === normalized(item.text));
+    const receipt = candidates.find(r => !matched.has(r.id) && !item.before.includes(r.id) && normalized(r.text) === normalized(item.text) && (!item.images?.length || (r.images?.length === item.images.length)));
     if (receipt) { matched.add(receipt.id); return false; }
     item.before = [...new Set([...item.before, ...candidates.map(r => r.id)])];
     return true;

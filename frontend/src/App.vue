@@ -17,6 +17,7 @@ const readingKey = 'web-ttyd-hub.mobile-reading.v1';
 let savedReading = {};
 try { savedReading = JSON.parse(localStorage.getItem(readingKey)) || {}; } catch {}
 const navigationOpen = ref(false);
+const desktopReading = ref(false);
 const showExecution = ref(savedReading.showExecution === true);
 const readingSize = ref(Number.isFinite(savedReading.fontSize) ? Math.max(4, Math.min(24, savedReading.fontSize)) : 16);
 watch([showExecution, readingSize], () => {
@@ -92,7 +93,8 @@ function handleMobileOverlayClick() {
         </div>
       </div>
 
-      <div v-if="isMobile" class="reading-controls" aria-label="手机阅读设置">
+      <button v-if="!isMobile" type="button" class="reading-control" :aria-pressed="desktopReading" @click="desktopReading = !desktopReading">{{ desktopReading ? '返回终端' : '聊天记录' }}</button>
+      <div v-if="isMobile || desktopReading" class="reading-controls" aria-label="手机阅读设置">
         <button type="button" class="reading-control navigation-toggle" :class="{ selected: navigationOpen }"
           aria-label="方向键与回车" :aria-expanded="navigationOpen" aria-controls="mobile-navigation"
           @click="navigationOpen = !navigationOpen">✥</button>
@@ -120,7 +122,7 @@ function handleMobileOverlayClick() {
         @select="isMobile && (sidebarCollapsed = true)"
       />
 
-      <MobileTerminal v-if="isMobile" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen" :reading-visible="sidebarCollapsed"
+      <MobileTerminal v-if="isMobile || desktopReading" :show-execution="showExecution" :font-size="readingSize" :navigation-open="navigationOpen" :reading-visible="!isMobile || sidebarCollapsed"
         @show-execution="showExecution = true; navigationOpen ||= $event" />
       <TerminalView v-else @create="showCreateDialog = true" />
     </div>

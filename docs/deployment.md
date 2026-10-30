@@ -100,3 +100,5 @@ Linux 的 Codex 0.162.1 可将任务交给共享 app-server daemon。服务需�
 `GET /api/sessions/:name/questions` 只关联实时验证的 tmux → Codex 客户端 → 共享 daemon socket → 主线程，使用本机 Unix WebSocket 初始化并 `thread/resume` 订阅既有线程（不发起新 turn）。挂起的 `item/tool/requestUserInput` 会重放；`POST /api/sessions/:name/questions/:id/respond` 提交时再次核对当前终端身份，只回应服务端提供的随机请求标识。答案或空答案（跳过）通过原请求 ID 回送，并等待 `serverRequest/resolved` 确认；不会调用 `turn/interrupt`。仅此明确的提问请求可响应，不提供任意 RPC 转发、命令或审批自动确认。读写均沿用原有访问控制和 `no-store`，追问与草稿不持久化。
 
 检查：`node --test --test-concurrency=1 tests/*.test.js`；构建后运行 `node tests/codex-mobile-browser.cjs`、`node tests/activity-browser.cjs` 和 `node tests/mobile-input-browser.cjs`。Linux 本机有 Codex 时可运行 `node tests/codex-questions-integration.cjs`：临时 CODEX_HOME + 本地合成 Responses 服务 + 真实 app-server，验证重放、中文回答、空答案跳过和终端同步，不调用真实模型、不读取生产会话或凭据。接口依据同上 OpenAI App Server 文档，升级 Codex 后回归验证。
+
+图片功能使用受认证的 `/api/sessions/:name/images` 上传/读取接口，私有目录默认为会话状态目录旁的 `images/`，可用 `HUB_IMAGE_DIR` 指定。不要将其配置为公开静态目录。网页更新沿用 `npm run deploy:web`；Android 系统选图需要覆盖安装 1.6.0。协议支持、使用方式和测试边界见 [图片说明](images.md)。

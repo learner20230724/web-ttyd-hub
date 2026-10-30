@@ -30,12 +30,16 @@ jobs:
       - run: npm test
       - run: npm run build
       - if: runner.os == 'Linux'
-        run: npm install --global @openai/codex@0.163.0
+        run: npm install --global @openai/codex@0.166.0
       - if: runner.os == 'Linux'
         run: node tests/codex-cold-start-integration.cjs
       - if: runner.os == 'Linux'
         run: node tests/mobile-command-integration.cjs
       - run: npx playwright install --with-deps chromium
+      - if: runner.os == 'Linux'
+        run: node tests/images-codex-integration.cjs
+      - if: runner.os == 'Linux'
+        run: node tests/images-terminal-browser.cjs
       - run: node tests/codex-picker-browser.cjs
       - run: node tests/mobile-input-browser.cjs
       - run: node tests/activity-browser.cjs

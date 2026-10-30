@@ -113,7 +113,7 @@ class WindowsSessionManager extends Base {
     if (this.getSession(name).status !== 'running') throw new Error('会话已停止');
   }
   async history(name) { return this.call(this.getSession(name), '/history'); }
-  input(name, { text, key }) {
+  input(name, { text, key, images = [] }) {
     // Keep the fix in the Hub: already running ConPTY workers can keep their
     // terminals alive across this update, including workers from older versions.
     const session = this.getSession(name);
@@ -126,6 +126,11 @@ class WindowsSessionManager extends Base {
       checkSession();
       await this.ensurePane(name);
       checkSession();
+      for (const image of images) {
+        checkSession();
+        await this.call(session, '/input', { text: image });
+        await waitAfterPaste('Enter');
+      }
       if (text && key) {
         await this.call(session, '/input', { text });
         await waitAfterPaste(key);

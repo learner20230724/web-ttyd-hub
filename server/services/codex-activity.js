@@ -107,9 +107,22 @@ function applyEvent(state, event) {
     if (state.busy && p.type === 'message' && p.role === 'assistant' && !['analysis', 'summary'].includes(p.channel)) setPhase(state, 'responding', at);
   }
   if (event.type === 'response_item' && p.type === 'message' && ['user', 'assistant'].includes(p.role) && !['analysis', 'summary'].includes(p.channel)) {
-    const text = (p.content || []).filter(x => ['input_text', 'output_text'].includes(x.type)).map(x => dialogueText(x.text, p.role)).filter(Boolean).join('\n');
-    if (text && !text.startsWith('<environment_context>')) {
-      message(state, { role: p.role, text, timestamp: at, ...(p.phase ? { phase: p.phase } : {}) });
+    let text = (p.content || []).filter(x => ['input_text', 'output_text'].includes(x.type)).map(x => dialogueText(x.text, p.role)).filter(Boolean).join('\n');
+    if (p.role === 'user' && p.hubImages?.length) {
+      // Codex wraps local attachments in path/number markers. The thumbnails
+      // replace those transport labels; receipt text stays what the user typed.
+      text = text.replace(/<image name=\[Image #\d+\] path="[^"\r\n]*">\s*<\/image>\s*/g, '').replace(/^(?:\[Image #\d+\]\s*)+/, '');
+    }
+    if ((text || p.hubImages?.length) && !text.startsWith('<environment_context>')) {
+      message(state, { role: p.role, text, timestamp: at, ...(p.hubImages?.length ? { images: p.hubImages } : {}), ...(p.phase ? { phase: p.phase } : {}) });
+    }
+  }
+  if (p.hubImages?.length && p.type !== 'message') {
+    state.imageCalls ||= new Set();
+    const key = `${p.call_id || p.id || at}:${p.hubImages.map(x => x.id).join(',')}`;
+    if (!state.imageCalls.has(key)) {
+      state.imageCalls.add(key);
+      message(state, { role: 'assistant', text: '', phase: 'image', timestamp: at, images: p.hubImages });
     }
   }
 }
@@ -123,7 +136,7 @@ async function consumeRollout(state, size) {
     while ((newline = pending.indexOf(10, start)) !== -1) {
       const line = pending.subarray(start, newline).toString('utf8');
       state.offset += newline - start + 1; start = newline + 1;
-      try { applyEvent(state, JSON.parse(line)); } catch { /* Ignore malformed records, not following valid lines. */ }
+      try { const event = JSON.parse(line); if (state.projectImages) await state.projectImages(event); applyEvent(state, event); } catch { /* Ignore malformed records, not following valid lines. */ }
     }
     pending = pending.subarray(start);
   }
@@ -135,7 +148,7 @@ async function consumeRollout(state, size) {
     try { event = JSON.parse(pending.toString('utf8')); }
     catch { return; }
     state.offset += pending.length;
-    try { applyEvent(state, event); } catch { /* Match malformed-record handling above. */ }
+    try { if (state.projectImages) await state.projectImages(event); applyEvent(state, event); } catch { /* Match malformed-record handling above. */ }
   }
 }
 class CodexActivity {
@@ -143,6 +156,7 @@ class CodexActivity {
     this.manager = manager; this.states = new Map(); this.polling = null; this.updates = new Map();
     this.snapshots = new Map();
     this.readiness = new Map();
+    this.images = new (require('./session-images').SessionImages)();
     this.questions = new (require('./codex-questions').CodexQuestions)(this);
     this.usage = new (require('./codex-usage').CodexUsage)();
     this.observer = observer;
@@ -208,6 +222,7 @@ class CodexActivity {
         state = { generation: session.createdAt || '', path: filename, identity, offset: 0, busy: false, phase: 'idle', completed: null, messages: [], sequence: 0 };
         this.states.set(session.name, state);
       }
+      state.projectImages = event => this.images.project(session, event);
       await consumeRollout(state, stat.size);
       state.binding = threadId && observed.socket ? { threadId, socket: observed.socket, checkedAt: Date.now() } : null;
       if (state.busy) await readScreen();

@@ -401,7 +401,7 @@ class SessionManager extends EventEmitter {
     return { ...await this.history(name), inputReceipts, completed, contentRevision, activity };
   }
 
-  input(name, { text, key }) {
+  input(name, { text, key, images = [] }) {
     const session = this.getSession(name);
     const checkSession = () => {
       if (this.sessions.get(name) !== session) throw new Error('会话已更换，请确认后重新发送');
@@ -413,18 +413,18 @@ class SessionManager extends EventEmitter {
       checkSession();
       await this.ensurePane(name);
       checkSession();
-      if (text) {
+      for (const pasted of [...images, text].filter(Boolean)) {
         const buffer = `hub-${randomUUID()}`;
         // stdin + named tmux buffer avoids shell interpolation and preserves multiline paste.
         await new Promise((resolve, reject) => {
           const child = spawn('tmux', ['load-buffer', '-b', buffer, '-'], { stdio: ['pipe', 'ignore', 'pipe'] });
           child.on('error', reject); child.stdin.on('error', reject);
           child.on('close', code => code === 0 ? resolve() : reject(new Error('无法写入终端')));
-          child.stdin.end(text);
+          child.stdin.end(pasted);
         });
         try { checkSession(); await runFile('tmux', ['paste-buffer', '-d', '-p', '-b', buffer, '-t', `=${name}:`]); }
         finally { await runFile('tmux', ['delete-buffer', '-b', buffer]).catch(() => {}); }
-        await waitAfterPaste(key);
+        await waitAfterPaste(key || (images.length ? 'Enter' : null));
       }
       if (key) { checkSession(); await runFile('tmux', ['send-keys', '-t', `=${name}:`, key]); }
       return { ok: true };

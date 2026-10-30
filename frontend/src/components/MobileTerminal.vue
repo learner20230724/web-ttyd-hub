@@ -12,6 +12,8 @@ import { ansiToRuns } from '../utils/ansi.mjs'
 import { useSessionStore } from '../stores/sessions'
 import ActivityBadge from './ActivityBadge.vue'
 import CodexQuestions from './CodexQuestions.vue'
+import ImageAttachments from './ImageAttachments.vue'
+import MessageImages from './MessageImages.vue'
 const emit = defineEmits(['show-execution'])
 const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, readingVisible: { type: Boolean, default: true }, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
@@ -52,6 +54,11 @@ const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话�
       ? '仍在读取对话，可先查看全文。' : '正在读取回答…')
 const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
+const imagePicker = ref(null), imageUploading = ref(false), imageDrafts = ref({})
+const attachmentKey = computed(() => JSON.stringify([session.value?.name, session.value?.createdAt || '']))
+const attachments = computed({ get: () => imageDrafts.value[attachmentKey.value] || [], set: value => { imageDrafts.value[attachmentKey.value] = value } })
+watch(attachmentKey, () => { imageUploading.value = false })
+const canAttach = computed(() => session.value?.shell === 'codex' || session.value?.activity?.detected)
 const drafts = new Map()
 const pendingBySession = ref({})
 const inputNotices = ref({})
@@ -86,7 +93,7 @@ const renderedMessages = new Map(), renderedOutput = new WeakMap()
 const messages = computed(() => (answerData.value?.messages || []).map(m => {
   const key = `${m.role}:${m.id}`
   const old = renderedMessages.get(key)
-  if (old?.text === m.text && old?.phase === m.phase) return old
+  if (old?.text === m.text && old?.phase === m.phase && JSON.stringify(old?.images) === JSON.stringify(m.images)) return old
   const rendered = markRaw({ ...m, html: DOMPurify.sanitize(marked.parse(tableMarkdown(m.text)), { FORBID_TAGS: ['img'], FORBID_ATTR: ['style'] }) })
   renderedMessages.set(key, rendered)
   if (renderedMessages.size > 1200) renderedMessages.delete(renderedMessages.keys().next().value)
@@ -242,10 +249,11 @@ watch([() => store.current, () => props.showExecution, () => session.value?.crea
 }, { immediate: true })
 watch(() => props.fontSize, async () => { if (follow.value) await bottom() })
 async function send(key = 'Enter', withText = true) {
-  if (sending.value || !session.value || store.cachedSnapshot) return
+  if (sending.value || imageUploading.value || !session.value || store.cachedSnapshot) return
   // Vue postpones v-model updates during IME composition; send the visible text.
   const name = session.value.name, text = withText ? (composerInput.value?.value ?? draft.value) : ''
   const generation = session.value.createdAt || ''
+  const sentImages = withText ? attachments.value.slice() : [], imageKey = attachmentKey.value
   const sameSession = () => inputGenerations.get(name) === generation
   const kind = inputKind(text, session.value)
   if (withText) draft.value = text
@@ -253,7 +261,7 @@ async function send(key = 'Enter', withText = true) {
   quickRefreshUntil = Date.now() + 10000
   delete inputNotices.value[name]
   delete inputErrors.value[name]
-  const pending = text && key === 'Enter' && kind === 'prompt' ? { id: `${Date.now()}-${Math.random()}`, text, codex: true, status: 'sending', before: transcriptIds.get(name) || [] } : null
+  const pending = (text || sentImages.length) && key === 'Enter' && kind === 'prompt' ? { id: `${Date.now()}-${Math.random()}`, text, images: sentImages, codex: true, status: 'sending', before: transcriptIds.get(name) || [] } : null
   if (pending) {
     pendingBySession.value[name] = [...(pendingBySession.value[name] || []), pending]
     await bottom()
@@ -265,7 +273,7 @@ async function send(key = 'Enter', withText = true) {
   let timedOut = false
   const confirmationTimeout = setTimeout(() => { timedOut = true; request.abort() }, 10000)
   try {
-    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, key }), signal: request.signal }), request.signal)
+    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TTYD-Generation': generation }, body: JSON.stringify({ text, key, ...(sentImages.length ? { images: sentImages.map(image => image.id) } : {}) }), signal: request.signal }), request.signal)
     const data = await untilAbort(res.json(), request.signal); if (!res.ok) throw new Error(data.error)
     if (disposed || !sameSession()) return
     if (pending) {
@@ -273,6 +281,7 @@ async function send(key = 'Enter', withText = true) {
       if (item) item.status = 'delivered'
     } else if (text) inputNotices.value[name] = { text: key ? '已发送到终端' : '已输入终端，尚未按回车', expiresAt: Date.now() + 4000 }
     if (withText) {
+      delete imageDrafts.value[imageKey]
       drafts.delete(name)
       if (store.current === name && draft.value === text) {
         draft.value = ''
@@ -330,8 +339,9 @@ onBeforeUnmount(() => {
         :data-content-completed="(codexAnswer ? answerData : content)?.completed || null">
         <template v-if="!showExecution && messages.length">
           <article v-for="message in messages" :key="message.id" :class="['message', message.role]" :data-message-id="message.id">
-            <div class="speaker">{{ message.role === 'user' ? '你' : message.phase === 'commentary' ? 'Codex · 工作进展' : 'Codex · 回复' }}</div>
+            <div class="speaker">{{ message.role === 'user' ? '你' : message.phase === 'image' ? 'Codex · 图片' : message.phase === 'commentary' ? 'Codex · 工作进展' : 'Codex · 回复' }}</div>
             <div class="markdown" v-html="message.html"></div>
+            <MessageImages v-if="message.images?.length" :images="message.images" :session-name="session.name" @loaded="alignReading" />
           </article>
         </template>
         <div v-else-if="showExecution || !codexAnswer" class="terminal-segments">
@@ -348,6 +358,7 @@ onBeforeUnmount(() => {
         </div>
         <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" :role="item.status === 'uncertain' ? 'alert' : 'status'">
           <div class="pending-text">{{ item.text }}</div>
+          <MessageImages v-if="item.images?.length" :images="item.images" :session-name="session.name" @loaded="alignReading" />
           <div class="pending-status">
             <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? (item.codex ? '已送达终端 · 等待 Codex 确认接收' : '已发送到终端') : item.error || '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
             <button v-if="item.status !== 'sending'" type="button" aria-label="关闭发送提示" @click="dismissPending(item.id)">×</button>
@@ -358,12 +369,13 @@ onBeforeUnmount(() => {
       <button v-if="!follow" class="latest" @click="bottom">↓ 回到最新</button>
       <p v-if="inputError || (error && !answerUnavailable)" class="mobile-error" role="alert">{{ inputError || error }}</p>
       <CodexQuestions v-if="!store.cachedSnapshot && session.status === 'running' && session.activity?.detected" :session-name="session.name" @handled="refresh()" @pending="questionPending = $event" @support="questionSupport = $event" />
-      <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
+      <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()" @paste.capture="canAttach && imagePicker?.paste($event)">
+        <ImageAttachments v-if="canAttach" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
         <p v-if="inputNotice" class="input-notice" role="status">{{ inputNotice }}</p>
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
           <textarea ref="composerInput" v-model="draft" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
-          <button class="send" :disabled="sending || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft ? '发送' : '回车' }}</button></div>
+          <button class="send" :disabled="sending || imageUploading || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft || attachments.length ? '发送' : '回车' }}</button></div>
       </form>
     </template>
     <div v-else class="mobile-empty">从左上角选择会话，继续你的工作。</div>

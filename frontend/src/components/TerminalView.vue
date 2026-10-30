@@ -2,6 +2,8 @@
 import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { ImageAddon } from '@xterm/addon-image';
+import ImageAttachments from './ImageAttachments.vue';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../stores/sessions';
 import { snapshotSequence, pendingWrapSequence, suppressQueryReplies } from '../utils/terminal-snapshot.mjs';
@@ -19,6 +21,20 @@ const nativeKey = computed(() => nativeName.value ? JSON.stringify([nativeName.v
 const windowsSrc = computed(() => store.platform === 'win32' && runningName.value && !store.cachedSnapshot
   ? hubUrl(`/terminal/${encodeURIComponent(runningName.value)}`) : null);
 const host = ref(null);
+const imagePicker = ref(null), attachments = ref([]), imageUploading = ref(false), attaching = ref(false), imageError = ref('');
+const canAttach = computed(() => currentSession.value?.shell === 'codex' || currentSession.value?.activity?.detected);
+watch(() => [store.current, currentSession.value?.createdAt], () => { attachments.value = []; imageError.value = ''; imageUploading.value = false; });
+async function attachImages() {
+  const selected = currentSession.value, images = attachments.value.slice();
+  if (!selected || !images.length || attaching.value) return;
+  attaching.value = true; imageError.value = '';
+  try {
+    const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(selected.name)}/input`), { method:'POST', headers: { 'Content-Type':'application/json', 'X-TTYD-Generation': selected.createdAt || '' }, body: JSON.stringify({ images: images.map(x => x.id), key:null }) });
+    const data = await res.json(); if (!res.ok) throw new Error(data.error);
+    if (currentSession.value?.name === selected.name && currentSession.value?.createdAt === selected.createdAt) { attachments.value = []; host.value?.terminal?.focus(); }
+  } catch (error) { imageError.value = `未确认加入终端，请先查看输入区：${error.message}`; }
+  finally { attaching.value = false; }
+}
 const connection = ref('');
 const windowsReady = ref(false);
 let nativeReadGuard = () => false;
@@ -49,6 +65,9 @@ watch(nativeKey, async key => {
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(element);
+  const images = new ImageAddon({ enableSizeReports:false, iipSupport:false, storageLimit:64 });
+  term.loadAddon(images);
+  element.imageAddon = images;
   suppressQueryReplies(term);
   // Keep the terminal API available for local diagnostics and accessibility.
   element.terminal = term;
@@ -116,6 +135,9 @@ watch(nativeKey, async key => {
     return true;
   });
   term.attachCustomKeyEventHandler(event => {
+    // Let the browser deliver clipboard bytes through paste. Forwarding Ctrl+V
+    // would make the remote CLI read its unrelated X11 clipboard instead.
+    if (event.type === 'keydown' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') return false;
     if (event.type === 'keydown' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c' && term.hasSelection()) {
       document.execCommand('copy');
       event.preventDefault(); return false;
@@ -123,6 +145,7 @@ watch(nativeKey, async key => {
     return true;
   });
   const paste = event => {
+    if (canAttach.value && imagePicker.value?.paste(event)) return;
     const text = event.clipboardData?.getData('text/plain');
     if (text === undefined) return;
     event.preventDefault(); event.stopImmediatePropagation();
@@ -269,7 +292,7 @@ watch(nativeKey, async key => {
     stopCompletionWatch();
     stopped = true; clearTimeout(timer); clearTimeout(initialTimer); observer.disconnect();
     element.removeEventListener('paste', paste, true);
-    ws?.close(); term.dispose(); delete element.terminal;
+    ws?.close(); term.dispose(); delete element.terminal; delete element.imageAddon;
   };
 }, { immediate: true });
 onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
@@ -277,6 +300,11 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 
 <template>
   <div class="terminal-area">
+    <div v-if="runningName && canAttach" class="terminal-images">
+      <ImageAttachments ref="imagePicker" :key="JSON.stringify([store.current, currentSession?.createdAt])" v-model="attachments" :session="currentSession" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
+      <button v-if="attachments.length" type="button" :disabled="imageUploading || attaching" @click="attachImages">{{ attaching ? '加入中…' : '加入终端输入区' }}</button>
+      <p v-if="imageError" role="alert">{{ imageError }}</p>
+    </div>
     <iframe v-if="windowsSrc" :src="windowsSrc" class="windows-terminal" title="交互终端 / Interactive terminal" @load="windowsLoaded"></iframe>
     <div v-else-if="nativeName" ref="host" class="terminal-host" aria-label="交互终端 / Interactive terminal"></div>
     <div v-if="nativeName && connection" class="connection-status" role="status">{{ connection }}</div>
@@ -297,10 +325,14 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 </template>
 
 <style scoped>
-.terminal-area { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; background: #000; position: relative; }
-.terminal-host { width: 100%; height: 100%; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow: hidden; }
+.terminal-images { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; flex-shrink:0; background:#131c2a; padding:6px 12px; }
+.terminal-images :deep(.image-attachments) { margin-bottom:0; }
+.terminal-images > button { color:white; background:#2563eb; padding:8px; border:0; border-radius:6px; margin-top:8px; }
+.terminal-images p { color:#fda4af; font-size:13px; margin-top:6px; }
+.terminal-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction:column; overflow: hidden; background: #000; position: relative; }
+.terminal-host { width: 100%; flex:1; height:0; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow: hidden; }
 .terminal-host :deep(.xterm) { height: 100%; }
-.windows-terminal { width: 100%; height: 100%; border: 0; }
+.windows-terminal { width: 100%; flex:1; min-height:0; border: 0; }
 .connection-status { position: absolute; right: 12px; top: 8px; z-index: 1; background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; padding: 6px 10px; font-size: 12px; pointer-events: none; }
 
 .welcome__container {

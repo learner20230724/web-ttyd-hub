@@ -62,6 +62,10 @@ API：`POST /api/sessions` 的 `name` 是显示名称；响应 `name` 是稳定�
 
 验证：`npm test`（需要 ttyd 和 tmux）以及 `npm run build`。
 
+## 图片输入与预览
+
+Codex 会话支持选图上传；电脑终端可粘贴截图，再点「加入终端输入区」。手机在输入框上方添加图片后随消息发送。手机「回答」和电脑「聊天记录」显示上传、查看和生成的图片，支持放大。Android 选图需覆盖安装 1.6.0。桌面 Sixel 已实测；Codex 在 tmux 下仍禁用其原生预览，使用 Hub 阅读界面查看。详见 [图片功能与验证边界](docs/images.md)。
+
 ## 复制粘贴：把容易踩的坑讲明白
 
 - **复制**：拖选终端文字，使用浏览器复制菜单或系统快捷键。Windows/Linux 常用 `Ctrl+Shift+C`，macOS 常用 `⌘C`，取决于浏览器。

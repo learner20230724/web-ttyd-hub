@@ -13,6 +13,22 @@ module.exports = function (sessionManager) {
     if (requested !== undefined && requested !== generation) throw replacedSession();
     return JSON.stringify([name, generation, view]);
   };
+  const images = sessionManager.activity?.images || new (require('../services/session-images').SessionImages)();
+  router.post('/:name/images', express.raw({ type: 'image/*', limit: '20mb' }), async (req, res) => {
+    try {
+      contentScope(req, 'images');
+      const session = sessionManager.getSession(req.params.name);
+      if (session.status !== 'running' || (session.shell !== 'codex' && !session.activity?.detected)) throw new Error('请在运行中的 Codex 会话中添加图片');
+      res.json(await images.save(session, req.body));
+    } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
+  });
+  router.get('/:name/images/:id', async (req, res) => {
+    try {
+      const filename = images.filename(sessionManager.getSession(req.params.name), req.params.id);
+      res.set({ 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+      res.sendFile(filename, error => { if (error && !res.headersSent) res.status(404).end(); });
+    } catch { res.status(404).end(); }
+  });
   const resumeLocks = new Map();
   router.get('/codex-usage', async (req, res) => {
     res.set('Cache-Control', 'no-store');
@@ -129,7 +145,13 @@ module.exports = function (sessionManager) {
     catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
   router.post('/:name/input', async (req, res) => {
-    try { res.json(await sessionManager.input(req.params.name, req.body)); }
+    try {
+      contentScope(req, 'input');
+      const session = sessionManager.getSession(req.params.name);
+      const paths = await images.resolveUploads(session, req.body.images);
+      if (session !== sessionManager.getSession(req.params.name)) throw replacedSession();
+      res.json(await sessionManager.input(req.params.name, { text: req.body.text, key: req.body.key, images: paths }));
+    }
     catch (err) { res.status(400).json({ error: err.message }); }
   });
 
