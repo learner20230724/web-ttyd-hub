@@ -23,7 +23,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
     if(req.url!='/v1/responses'){res.writeHead(200,{'Content-Type':'application/json'});res.end('{}');return;}
     const body=JSON.parse(Buffer.concat(chunks).toString()); requests++;
     sawImage ||= (body.input || []).some(item=>item.role==='user' && item.content?.some(c=>c.type==='input_image' && c.image_url?.startsWith('data:image/')));
-    const item=requests===2 ? {type:'function_call',name:'view_image',call_id:'actual-view',id:'view-item',arguments:JSON.stringify({path:viewed})} : {type:'message',role:'assistant',id:`reply-${requests}`,content:[{type:'output_text',text:sawImage?'图片已作为视觉输入收到。红色方块在左，蓝色方块在右。':'图片测试准备完成。',annotations:[]}]};
+    const item=requests===2 ? {type:'function_call',name:'view_image',call_id:'actual-view',id:'view-item',arguments:JSON.stringify({path:viewed})} : {type:'message',role:'assistant',id:`reply-${requests}`,content:[{type:'output_text',text:sawImage?'图片已作为视觉输入收到。红色方块在左，蓝色方块在右。':'图片测试准备完成。\n'+Array.from({length:160},(_,i)=>`SCROLL_CONTEXT_${String(i).padStart(3, '0')} 合成上下文`).join('\n'),annotations:[]}]};
     res.writeHead(200,{'Content-Type':'text/event-stream'});
     for(const event of [{type:'response.created',response:{id:`r-${requests}`,status:'in_progress',output:[]}}, {type:'response.output_item.added',output_index:0,item}, {type:'response.output_item.done',output_index:0,item}, {type:'response.completed',response:{id:`r-${requests}`,status:'completed',output:[item],usage:{input_tokens:1,output_tokens:1,total_tokens:2}}}])res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     res.end();
@@ -78,6 +78,19 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   if(process.env.HUB_IMAGES_SCREENSHOT)await desktop.screenshot({path:process.env.HUB_IMAGES_SCREENSHOT});
   await desktop.getByRole('button',{name:'返回终端',exact:true}).click();
   await desktop.waitForFunction(()=>document.querySelector('.terminal-host')?.terminal?.options.disableStdin===false);
+  const screenText = () => desktop.evaluate(() => { const t=document.querySelector('.terminal-host').terminal,b=t.buffer.active;return Array.from({length:b.length},(_,i)=>b.getLine(i).translateToString(true)).join('\n'); });
+  await desktop.locator('.xterm-helper-textarea').focus();await desktop.keyboard.type('UNSENT_WHEEL_DRAFT');
+  const beforeWheel=await screenText();
+  await desktop.locator('.xterm-screen').hover();await desktop.mouse.wheel(0,-720);await pause(600);
+  const afterWheel=await screenText();
+  assert.notEqual(afterWheel,beforeWheel,'Fullscreen Codex must scroll its actual transcript when tmux mouse is off');
+  assert(afterWheel.includes('SCROLL_CONTEXT_'),'Wheel exposes earlier conversation');
+  assert(afterWheel.includes('UNSENT_WHEEL_DRAFT'),'Wheel preserves the unsent prompt');
+  // Small fractional deltas, typical of a Mac trackpad, accumulate into wheel reports.
+  await desktop.locator('.xterm-screen').evaluate(el=>{const r=el.getBoundingClientRect();for(let i=0;i<80;i++)el.dispatchEvent(new WheelEvent('wheel',{deltaY:-2.5,clientX:r.left+r.width/2,clientY:r.top+r.height/2,bubbles:true,cancelable:true}));});
+  await pause(500);assert.notEqual(await screenText(),afterWheel,'Trackpad-sized deltas scroll too');
+  await desktop.mouse.wheel(0,20000);await pause(700);
+  await desktop.keyboard.press('Control+u');
   await desktop.context().grantPermissions(['clipboard-read','clipboard-write']);
   await desktop.evaluate(async bytes=>navigator.clipboard.write([new ClipboardItem({'image/png':new Blob([new Uint8Array(bytes)],{type:'image/png'})})]),[...png]);
   await desktop.locator('.xterm-helper-textarea').focus();await desktop.keyboard.press('Control+v');
@@ -89,6 +102,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   assert(!tm('capture-pane','-p','-t','=image-test:').includes('Failed to paste image'),'Ctrl+V must not invoke the server clipboard');
   assert(tm('capture-pane','-p','-t','=image-test:').includes('[Image #1]'),'Desktop paste attaches an image to the actual Codex composer without Enter');
   assert.deepEqual(errors,[]);assert.equal(requests,3,'One image prompt and one tool-result continuation; no extra model calls');
+  console.log('PASS fullscreen wheel + fractional trackpad deltas preserve drafts without model input');
   console.log('PASS actual Codex: PNG upload -> image attachment -> model input_image; real view_image and generated-event previews; reload and desktop/mobile image rendering.');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{
   await browser?.close();streams?.close();wss?.clients.forEach(c=>c.terminate());wss?.close();manager?.cleanup();

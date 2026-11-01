@@ -125,13 +125,30 @@ watch(nativeKey, async key => {
   };
   term.onData(data => input('input', data));
   term.onBinary(data => input('binary', data));
+  let wheelRemainder = 0;
   term.attachCustomWheelEventHandler(event => {
     if (event.ctrlKey) return false;
     // Full-screen programs with mouse support own their scrolling. Never turn a
     // wheel gesture into Up/Down keys in programs without mouse support.
     if (term.buffer.active.type === 'alternate' && term.modes.mouseTrackingMode === 'none') {
-      event.preventDefault(); return false;
+      event.preventDefault();
+      // Codex's fullscreen transcript owns history even when tmux mouse=off
+      // suppresses its capture request. Send wheel reports, never arrow keys.
+      if (currentSession.value?.activity?.detected && confirmedSession()) {
+        const screen = element.querySelector('.xterm-screen').getBoundingClientRect();
+        const cellHeight = screen.height / term.rows, cellWidth = screen.width / term.cols;
+        wheelRemainder += event.deltaY * (event.deltaMode === 1 ? cellHeight : event.deltaMode === 2 ? screen.height : 1);
+        const steps = Math.trunc(wheelRemainder / (cellHeight * 3));
+        wheelRemainder -= steps * cellHeight * 3;
+        if (steps) {
+          const x = Math.max(1, Math.min(term.cols, Math.floor((event.clientX - screen.left) / cellWidth) + 1));
+          const y = Math.max(1, Math.min(term.rows, Math.floor((event.clientY - screen.top) / cellHeight) + 1));
+          send({ type:'input', data:`\x1b[<${steps < 0 ? 64 : 65};${x};${y}M`.repeat(Math.min(30, Math.abs(steps))) });
+        }
+      }
+      return false;
     }
+    wheelRemainder = 0;
     return true;
   });
   term.attachCustomKeyEventHandler(event => {
