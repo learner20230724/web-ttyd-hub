@@ -168,6 +168,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
   window.addEventListener('storage', syncLayout)
   onScopeDispose(() => window.removeEventListener('storage', syncLayout))
+  let lastNotification = Date.now(), probeAt = 0
   let ws = null
   let reconnectTimer = null
   let reconnectDelay = 1000
@@ -182,16 +183,24 @@ export const useSessionStore = defineStore('sessions', () => {
   function receiveActivity(value) {
     const session = sessions.value.find(s => s.name === value?.name && s.createdAt === value.createdAt)
     if (!session || !value.activity || typeof value.activity !== 'object') return false
+    if (value.stateEpoch && session.stateEpoch && (value.stateEpoch !== session.stateEpoch || value.activityRevision < session.activityRevision)) return false
     liveActivity.set(value.name, { sequence: ++activitySequence, createdAt: value.createdAt, activity: value.activity })
     // The notification already contains the authoritative state. A second HTTP
     // round trip adds latency and can stall behind an unrelated list request.
-    sessions.value = sessions.value.map(s => s === session ? { ...s, activity: value.activity } : s)
+    sessions.value = sessions.value.map(s => s === session ? { ...s, activity: value.activity, stateEpoch: value.stateEpoch || s.stateEpoch, activityRevision: value.activityRevision ?? s.activityRevision, verifiedAt: value.verifiedAt || Date.now() } : s)
     // One fresh event cannot validate every other session restored from disk.
     if (!cachedSnapshot.value) connectionIssue.value = false
     scheduleMetadata()
     return true
   }
+  const receiveBodyState = event => receiveActivity(event.detail)
+  window.addEventListener('hub:state', receiveBodyState)
+  onScopeDispose(() => window.removeEventListener('hub:state', receiveBodyState))
   function receiveList(data) {
+    data.sessions = data.sessions.map(s => {
+      const current = sessions.value.find(x => x.name === s.name && x.createdAt === s.createdAt)
+      return current?.stateEpoch && current.stateEpoch === s.stateEpoch && current.activityRevision > s.activityRevision ? { ...s, activity: current.activity, activityRevision: current.activityRevision } : s
+    })
     const selected = sessions.value.find(s => s.name === current.value)
     cachedSnapshot.value = false
     connectionIssue.value = false
@@ -364,8 +373,10 @@ export const useSessionStore = defineStore('sessions', () => {
     }
 
     ws.onmessage = event => {
+      lastNotification = Date.now(); probeAt = 0
       try {
         const message = JSON.parse(event.data)
+        if (message.event === 'pong') return
         if (message.event === 'session:snapshot' && receiveSnapshot(message.data)) return
         if (message.event === 'session:activity' && receiveActivity(message.data)) return
         if (message.event === 'session:sync' && receiveShared(message.data)) return
@@ -375,6 +386,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
     ws.onopen = () => {
       reconnectDelay = 1000
+      lastNotification = Date.now(); probeAt = 0
       // Recover completions that happened while a phone's connection was asleep.
       // Reuse the HTTP read already in progress: flapping notification sockets
       // must not repeatedly abort a slow initial list and starve its first load.
@@ -415,6 +427,10 @@ export const useSessionStore = defineStore('sessions', () => {
   // and periodically reconcile, even when no activity notification arrives.
   const refreshVisible = (fresh = false) => {
     if (pageHidden()) return
+    if (ws?.readyState === 1) {
+      if (probeAt && Date.now() - probeAt >= 5000) { ws.close(); probeAt = 0 }
+      else if (!probeAt && Date.now() - lastNotification >= 15000) { probeAt = Date.now(); ws.send(JSON.stringify({ event: 'ping', data: probeAt })) }
+    }
     if (listRequest && !fresh) { refreshPending = true; return }
     refreshPending = false
     fetchSessions().catch(() => {})

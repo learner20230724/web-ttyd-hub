@@ -1,0 +1,2 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');
+test('browser foreground supersedes a missed native resume',async()=>{global.document={hidden:false};const m=await import('../frontend/src/utils/page-visibility.mjs');m.receiveVisibility({type:'hub:visibility',detail:{visible:false}});assert.equal(m.pageHidden(),true);m.receiveVisibility({type:'focus'});assert.equal(m.pageHidden(),false);document.hidden=true;m.receiveVisibility({type:'hub:visibility',detail:{visible:true}});assert.equal(m.pageHidden(),false);});

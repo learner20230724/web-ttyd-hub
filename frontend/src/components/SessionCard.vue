@@ -149,7 +149,7 @@ function cancelRemove(e) {
       <p v-if="error && !editing && !confirming" role="alert">{{ error }}</p>
       <div v-if="!editing && !confirming" class="session-info">
         <span v-if="session.archivedAt">{{ minutesLeft }} 分钟后清理</span>
-        <ActivityBadge v-if="!['idle', 'unread'].includes(store.activityStatus(session).state)" :status="store.activityStatus(session)" />
+        <ActivityBadge  :status="store.activityStatus(session)" />
         <span v-if="!session.archivedAt && store.isPinned(session.name)" class="pinned-label">置顶</span>
       </div>
     </div>

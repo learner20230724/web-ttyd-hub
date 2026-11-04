@@ -74,6 +74,7 @@ watch(nativeKey, async key => {
   let ws, timer, cacheTimer, initialTimer, stopped = false, ready = false, initializedSocket = false, attempt = 0, lastSize = '';
   let rendering = false, queuedBytes = 0;
   let cacheState = null, tailBytes = 0, liveSnapshot = false, checkpointPending = false;
+  let checkpointTimer, snapshotDeadline;
   let renderedCompleted = null, renderedContentRevision = null, renderedSnapshot = false;
   const renderQueue = [];
   const confirmedSession = () => !store.cachedSnapshot && nativeKey.value === key;
@@ -96,6 +97,7 @@ watch(nativeKey, async key => {
     if (ws?.readyState !== WebSocket.OPEN || (!ready && message.type !== 'resize')) return false;
     if (message.type === 'resize' && !initializedSocket) return false;
     ws.send(JSON.stringify(message));
+    if (message.type === 'checkpoint') { clearTimeout(checkpointTimer); checkpointTimer = setTimeout(() => { checkpointPending = false; ws?.close(); }, 5000); }
     return true;
   };
   const measure = () => {
@@ -238,6 +240,8 @@ watch(nativeKey, async key => {
     const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${hubUrl(`/ws/terminal/${encodeURIComponent(name)}`)}`);
     socket.binaryType = 'arraybuffer';
     ws = socket;
+    clearTimeout(snapshotDeadline);
+    snapshotDeadline = setTimeout(() => { if (!stopped && socket === ws && !ready) socket.close(); }, 10000);
     socket.onopen = () => {
       const begin = () => {
         if (stopped || socket !== ws || socket.readyState !== WebSocket.OPEN || initializedSocket) return;
@@ -279,6 +283,7 @@ watch(nativeKey, async key => {
           // never append a partial snapshot or enable input against cached data.
           cacheState = null; queuedBytes -= bytes; socket.close(); return;
         }
+        clearTimeout(snapshotDeadline); clearTimeout(checkpointTimer);
         liveSnapshot = true;
         cacheState = { version: 1, snapshot: data, updates: [] };
         tailBytes = 0; checkpointPending = false; scheduleCache();
@@ -301,10 +306,16 @@ watch(nativeKey, async key => {
   const stopNetworkWatch = watch([() => store.cachedSnapshot, nativeKey], () => {
     if (!ws && confirmedSession()) connect();
   }, { immediate: true, flush: 'post' });
+  const resumeTerminal = () => { if (!document.hidden && ws && (!ready || checkpointPending)) ws.close(); else refreshRead(); };
+  window.addEventListener('focus', resumeTerminal); window.addEventListener('online', resumeTerminal);
+  document.addEventListener('visibilitychange', resumeTerminal);
   term.focus();
   window.addEventListener('pagehide', persistCache);
   dispose = () => {
     persistCache(); window.removeEventListener('pagehide', persistCache);
+    clearTimeout(checkpointTimer); clearTimeout(snapshotDeadline);
+    window.removeEventListener('focus', resumeTerminal); window.removeEventListener('online', resumeTerminal);
+    document.removeEventListener('visibilitychange', resumeTerminal);
     stopNetworkWatch();
     stopCompletionWatch();
     stopped = true; clearTimeout(timer); clearTimeout(initialTimer); observer.disconnect();

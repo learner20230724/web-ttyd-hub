@@ -127,6 +127,8 @@ module.exports = function (sessionManager) {
       // A deleted/recreated session must not reuse the previous generation's
       // body even if the request was already capturing its terminal output.
       if (scope !== contentScope(req, 'history')) throw replacedSession();
+      const current = sessionManager.getSession(req.params.name);
+      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity })).toString('base64url'));
       sendContent(req, res, data, scope);
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
@@ -140,6 +142,8 @@ module.exports = function (sessionManager) {
       const scope = contentScope(req, full ? 'full' : 'answer');
       const data = await sessionManager.mobile(req.params.name, full);
       if (scope !== contentScope(req, full ? 'full' : 'answer')) throw replacedSession();
+      const current = sessionManager.getSession(req.params.name);
+      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity })).toString('base64url'));
       sendContent(req, res, data, scope);
     }
     catch (err) { res.status(err.status || 400).json({ error: err.message }); }

@@ -70,7 +70,7 @@ app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../se
       await transition('interrupted'); await page.locator('.status-guidance.interrupted').waitFor();
       await transition('completed');
       await page.locator('.mobile-session-header[data-activity-state="idle"], .mobile-session-header[data-activity-state="unread"]').waitFor();
-      assert.equal(await page.locator('.mobile-session-header .activity-badge').count(), 0);
+      assert.equal(await page.locator('.mobile-session-header .activity-badge').count(), 1, 'Completion remains visible after reading');
       await page.screenshot({ path: path.join(output, `status-completed-${width}.png`) });
       const readingBeforeUnknown = await page.locator('.mobile-reading').boundingBox();
       // Status and content can update independently. Neither a missing phase nor

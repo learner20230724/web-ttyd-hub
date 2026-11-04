@@ -328,7 +328,7 @@ onBeforeUnmount(() => {
       <div class="mobile-session-header" :data-activity-state="status.state">
         <div class="mobile-title-row">
           <div class="mobile-session-title" :title="session.displayName || session.name">{{ session.displayName || session.name }}</div>
-          <ActivityBadge v-if="!['idle', 'unread'].includes(status.state)" class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
+          <ActivityBadge  class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
           <span v-if="elapsed" class="elapsed">已运行 {{ elapsed }}</span>
           <ImageAttachments v-if="canAttach && session.status === 'running'" compact preview-target=".mobile-image-drafts" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
         </div>

@@ -17,6 +17,10 @@ function setupWebSocket(server, sessionManager) {
   server.on('close', () => clearInterval(heartbeat));
 
   wss.on('connection', ws => {
+    ws.on('message', raw => {
+      if (raw.length > 256) return;
+      try { const value = JSON.parse(raw); if (value.event === 'ping') ws.send(JSON.stringify({ event: 'pong', data: value.data })); } catch {}
+    });
     if (sessionManager.list) ws.send(JSON.stringify({ event: 'session:snapshot', data: {
       sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot(),
     } }));

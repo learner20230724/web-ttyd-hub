@@ -153,6 +153,7 @@ async function consumeRollout(state, size) {
 }
 class CodexActivity {
   constructor(manager, { observer = new LinuxCodexObserver(), interval = 1500 } = {}) {
+    this.epoch = require('node:crypto').randomUUID(); this.versions = new Map();
     this.manager = manager; this.states = new Map(); this.polling = null; this.updates = new Map();
     this.snapshots = new Map();
     this.readiness = new Map();
@@ -179,6 +180,10 @@ class CodexActivity {
     } else this.snapshots.delete(session.name);
     const changed = JSON.stringify(session.activity) !== JSON.stringify(activity);
     session.activity = activity;
+    const revision = (this.versions.get(session.name) || 0) + (changed ? 1 : 0);
+    this.versions.set(session.name, revision);
+    session.stateEpoch = this.epoch; session.activityRevision = revision;
+    session.verifiedAt = Date.now();
     this.readiness.get(session.name)?.check();
     if (changed) this.manager.emit('session:activity', this.manager.serialize(session));
   }

@@ -144,6 +144,11 @@ export async function fetchContent(session, view, { mobile = true, fresh = false
         const response = await untilAbort(fetch(url, { signal:controller.signal, cache:'no-store',
           headers: { ...headers, ...(conditional ? { 'If-None-Match':cached.etag, 'X-TTYD-Delta':'fields-v1' } : {}) } }), controller.signal)
         active()
+        const stateHeader = response.headers.get('X-TTYD-State')
+        if (stateHeader && stateHeader.length < 16384) try {
+          const bytes = Uint8Array.from(atob(stateHeader.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))
+          window.dispatchEvent(new CustomEvent('hub:state', { detail: JSON.parse(new TextDecoder().decode(bytes)) }))
+        } catch {}
         if (response.status === 304) {
           if (conditional) return cached
           throw Error('读取失败：服务器未返回正文')
