@@ -79,7 +79,7 @@ function handleMobileOverlayClick() {
           </svg>
         </div>
         <h1 class="toolbar-title"><template v-if="isMobile">TTYD<span class="brand-suffix"> Hub</span></template><template v-else>Web TTYd Hub</template></h1>
-        <div v-if="isMobile && (store.unreadCount || store.workingCount)" :class="['activity-counters', { stale: store.connectionIssue || store.cachedSnapshot }]">
+        <div v-if="isMobile && (store.unreadCount || store.workingCount)" :class="['activity-counters', { stale: store.countsStale }]">
           <button v-if="store.unreadCount > 0" type="button" class="unread-shortcut"
             :aria-label="`查看下一个未读会话，共 ${store.unreadCount} 个`"
             title="打开列表中最上方的未读会话" @click="store.selectNextUnread()">

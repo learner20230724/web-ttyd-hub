@@ -136,6 +136,7 @@ export const useSessionStore = defineStore('sessions', () => {
   const sortedSessions = computed(() => orderedSessions(sessions.value.filter(s => !s.archivedAt), layout.value, activityState))
   const archivedSessions = computed(() => sessions.value.filter(s => s.archivedAt).sort((a,b) => Date.parse(b.archivedAt) - Date.parse(a.archivedAt)))
   const otherSessions = computed(() => sortedSessions.value.filter(s => s.name !== current.value))
+  const countsStale = computed(() => connectionIssue.value || otherSessions.value.some(stale))
   const unreadSessions = computed(() => otherSessions.value.filter(s => activityState(s) === 'unread'))
   const unreadCount = computed(() => unreadSessions.value.length)
   const workingCount = computed(() => otherSessions.value.filter(s => activityState(s) === 'busy').length)
@@ -503,6 +504,7 @@ export const useSessionStore = defineStore('sessions', () => {
     sortedSessions,
     archivedSessions,
     unreadCount,
+    countsStale,
     workingCount,
     selectNextUnread,
     selectNextWorking,
