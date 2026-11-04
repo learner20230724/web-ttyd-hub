@@ -93,11 +93,17 @@ watch(nativeKey, async key => {
   const scheduleCache = () => {
     if (!cacheTimer) cacheTimer = setTimeout(persistCache, 1200);
   };
+  const forceReconnect = (socket = ws) => {
+    if (!socket || stopped || socket !== ws) return;
+    // A blackholed connection may never finish the WebSocket close handshake.
+    const closed = socket.onclose; socket.onclose = null;
+    try { socket.close(); } finally { closed?.(); }
+  };
   const send = message => {
     if (ws?.readyState !== WebSocket.OPEN || (!ready && message.type !== 'resize')) return false;
     if (message.type === 'resize' && !initializedSocket) return false;
     ws.send(JSON.stringify(message));
-    if (message.type === 'checkpoint') { const target = ws; clearTimeout(checkpointTimer); checkpointTimer = setTimeout(() => { if (ws === target) { checkpointPending = false; target.close(); } }, 5000); }
+    if (message.type === 'checkpoint') { const target = ws; clearTimeout(checkpointTimer); checkpointTimer = setTimeout(() => { if (ws === target) { checkpointPending = false; forceReconnect(target); } }, 5000); }
     return true;
   };
   const measure = () => {
@@ -242,7 +248,7 @@ watch(nativeKey, async key => {
     socket.binaryType = 'arraybuffer';
     ws = socket;
     clearTimeout(snapshotDeadline);
-    snapshotDeadline = setTimeout(() => { if (!stopped && socket === ws && !ready) socket.close(); }, 10000);
+    snapshotDeadline = setTimeout(() => { if (!stopped && socket === ws && !ready) forceReconnect(socket); }, 10000);
     socket.onopen = () => {
       const begin = () => {
         if (stopped || socket !== ws || socket.readyState !== WebSocket.OPEN || initializedSocket) return;
@@ -307,7 +313,7 @@ watch(nativeKey, async key => {
   const stopNetworkWatch = watch([() => store.cachedSnapshot, nativeKey], () => {
     if (!ws && confirmedSession()) connect();
   }, { immediate: true, flush: 'post' });
-  const resumeTerminal = () => { if (!document.hidden && ws && (!ready || checkpointPending)) ws.close(); else refreshRead(); };
+  const resumeTerminal = () => { if (!document.hidden && ws && (!ready || checkpointPending)) forceReconnect(); else refreshRead(); };
   window.addEventListener('focus', resumeTerminal); window.addEventListener('online', resumeTerminal);
   document.addEventListener('visibilitychange', resumeTerminal);
   term.focus();

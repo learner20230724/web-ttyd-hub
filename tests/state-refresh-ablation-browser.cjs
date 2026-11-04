@@ -124,7 +124,7 @@ async function content(browser) {
     f.publish();
     await f.page.locator('.message[data-message-id="final"]').waitFor({ timeout: 1000 });
     assert.equal(await f.page.locator('.mobile-reading').getAttribute('data-content-revision'), 'reader:final');
-    assert.equal(await f.page.locator('.inline-status').count(), 0, 'Completed/read labels are omitted from the conversation header');
+    assert.equal(await f.page.locator('.inline-status').count(), 1, 'Completed/read labels remain visible in the conversation header');
     assert.equal(await f.page.locator('.mobile-reading').getAttribute('data-content-completed'), f.sessions[0].activity.completed);
     assert.equal(f.writes, 0); assert.deepEqual(f.errors, []);
     console.log(`PASS content: continuous phase/version changes allow slow progress to render; completion immediately reads final; requests=${f.answers}; no cached content or input`);
