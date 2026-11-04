@@ -64,7 +64,7 @@ test('cached pin and ordering intentions survive reload and merge after identity
   assert.equal(reopened.isPinned('b'), true, 'Reload restores the durable pending pin over its cached preview');
   assert.deepEqual(reopened.sortedSessions.map(s => s.name), ['b', 'c', 'a']);
   await f.connect();
-  assert.deepEqual(f.manager.sync.snapshot().layout, { order: ['b', 'c', 'a'], pinned: ['b'] });
+  assert.deepEqual(f.manager.sync.snapshot().layout, { order: ['b', 'c', 'a'], pinned: ['b'], manual: true });
   assert.deepEqual(f.pending(), []);
   assert.deepEqual(f.snapshot().layout, f.manager.sync.snapshot().layout);
   assert.deepEqual(f.mutations.map(op => op.type), ['pin', 'move']);

@@ -106,3 +106,11 @@ test('Real API broadcasts reads to two clients and returns uncached shared snaps
   const list = await fetch(base + '/api/sessions'); assert.equal(list.headers.get('cache-control'), 'no-store');
   assert.equal((await list.json()).shared.read.a.completed, 'a:turn-1');
 });
+test('Manual order survives later reads, pruning and persistence restore', () => {
+ const m=fixture();m.sync.apply({type:'move',name:'a',createdAt,target:'c',targetCreatedAt:createdAt,after:true});
+ const expected=['b','c','a'];assert.equal(m.sync.snapshot().layout.manual,true);
+ m.sync.apply(read('a'));m.sync.apply(read('b'));assert.deepEqual(m.sync.snapshot().layout.order,expected);
+ m.sync.prune();assert.equal(m.sync.snapshot().layout.manual,true);
+ const other=fixture();other.sync.restore(JSON.parse(JSON.stringify(m.sync.snapshot())));other.sync.apply(read('c'));
+ assert.deepEqual(other.sync.snapshot().layout.order,expected);assert.equal(other.sync.snapshot().layout.manual,true);
+});

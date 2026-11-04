@@ -1,3 +1,4 @@
+import { activityState } from './activity.mjs'
 import { hubUrl } from './base.mjs'
 import { normalizeLayout, moveSession } from './session-layout.mjs'
 import { scopedStorageKey } from './session-metadata.mjs'
@@ -42,13 +43,13 @@ export function createSessionSync({ sessions, legacyRead, legacyReadRevisions = 
         read[op.name] = op.completed
         if (op.contentRevision) readRevisions[op.name] = op.contentRevision
         else delete readRevisions[op.name]
-        if (!bindLegacy) layout.order = [op.name, ...layout.order.filter(name => name !== op.name)]
+        if (!bindLegacy && !layout.manual) layout.order = [op.name, ...layout.order.filter(name => name !== op.name)]
       } else if (op.type === 'pin') {
         if (layout.pinned.includes(op.name) === op.pinned) continue
         layout.pinned = op.pinned ? [...layout.pinned, op.name] : layout.pinned.filter(name => name !== op.name)
         layout.order = [op.name, ...layout.order.filter(name => name !== op.name)]
       } else if (list.some(s => s.name === op.target && s.createdAt === op.targetCreatedAt && !s.archivedAt)) {
-        layout = moveSession(list, layout, op.name, op.target, op.after)
+        layout = moveSession(list, layout, op.name, op.target, op.after, s => activityState(s, read, readRevisions))
       }
     }
     apply({ read, readRevisions, layout })

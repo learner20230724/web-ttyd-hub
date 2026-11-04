@@ -61,7 +61,7 @@ export const useSessionStore = defineStore('sessions', () => {
       } catch {}
       // Promote once per newly read completion. Status and pin groups still take
       // priority, and later refreshes must not undo the user's manual ordering.
-      if (!bindRenderedLegacy) saveLayout({ ...layout.value, order: [session.name, ...layout.value.order.filter(name => name !== session.name)] })
+      if (!bindRenderedLegacy && !layout.value.manual) saveLayout({ ...layout.value, order: [session.name, ...layout.value.order.filter(name => name !== session.name)] })
     }
   }
   function activityState(session) {
@@ -158,7 +158,7 @@ export const useSessionStore = defineStore('sessions', () => {
       return
     }
     const pinned = isPinned(name) ? layout.value.pinned.filter(x => x !== name) : [...layout.value.pinned, name]
-    saveLayout({ order: [name, ...sortedSessions.value.map(s => s.name).filter(x => x !== name)], pinned })
+    saveLayout({ ...layout.value, order: [name, ...sortedSessions.value.map(s => s.name).filter(x => x !== name)], pinned })
   }
   function reorderSession(name, target, after) {
     if (sync.enabled || cachedSnapshot.value) {
@@ -167,7 +167,7 @@ export const useSessionStore = defineStore('sessions', () => {
         target, targetCreatedAt: other.createdAt, after: !!after })
       return
     }
-    saveLayout(moveSession(sessions.value, layout.value, name, target, after))
+    saveLayout(moveSession(sessions.value, layout.value, name, target, after, activityState))
   }
   function moveByKeyboard(name, direction) {
     const group = sortedSessions.value.filter(s => isPinned(s.name) === isPinned(name))

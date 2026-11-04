@@ -4,7 +4,7 @@ const validName = value => typeof value === 'string' && /^[a-zA-Z0-9_-]+$/.test(
 const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
 const validRevision = value => typeof value === 'string' && value.length > 0 && value.length <= 256;
 const validNames = value => Array.isArray(value) && value.length <= 1000 && value.every(validName) && new Set(value).size === value.length;
-const validLayout = value => value && validNames(value.order) && validNames(value.pinned);
+const validLayout = value => value && validNames(value.order) && validNames(value.pinned) && (value.manual === undefined || typeof value.manual === 'boolean');
 const empty = () => ({ revision: 0, read: {}, layout: null });
 
 class SessionSync {
@@ -27,7 +27,7 @@ class SessionSync {
     const previous = this.value;
     this.value = { ...this.value,
       read: Object.fromEntries(Object.entries(this.value.read).filter(([name, marker]) => names.get(name)?.createdAt === marker.createdAt)),
-      layout: this.value.layout && { order: this.value.layout.order.filter(name => names.has(name)), pinned: this.value.layout.pinned.filter(name => names.has(name)) } };
+      layout: this.value.layout && { ...this.value.layout, order: this.value.layout.order.filter(name => names.has(name)), pinned: this.value.layout.pinned.filter(name => names.has(name)) } };
     if (JSON.stringify(previous) !== JSON.stringify(this.value)) this.value.revision++;
   }
   apply(op) {
@@ -39,7 +39,7 @@ class SessionSync {
       if (!validLayout(op.layout)) throw new Error('无效的会话排列');
       if (next.layout === null) {
         const exists = name => this.manager.sessions.has(name);
-        next.layout = { order: op.layout.order.filter(exists), pinned: op.layout.pinned.filter(exists) };
+        next.layout = { order: op.layout.order.filter(exists), pinned: op.layout.pinned.filter(exists), ...(op.layout.manual === true ? { manual: true } : {}) };
       }
     } else {
       if (!validName(op.name) || !validTime(op.createdAt)) throw new Error('无效的会话身份');
@@ -65,7 +65,7 @@ class SessionSync {
             ...(contentRevision ? { contentRevision } : {}) } };
           // Merely binding an old already-read turn to its first known version
           // must not undo manual ordering. A newer known version is new content.
-          if (!sameTurn || marker?.contentRevision !== undefined) promote();
+          if (!layout.manual && (!sameTurn || marker?.contentRevision !== undefined)) promote();
         }
       } else if (op.type === 'pin') {
         if (typeof op.pinned !== 'boolean') throw new Error('无效的置顶状态');
@@ -78,9 +78,22 @@ class SessionSync {
         const target = this.manager.sessions.get(op.target);
         if (!target || target.createdAt !== op.targetCreatedAt || target.archivedAt || op.name === op.target ||
             layout.pinned.includes(op.name) !== layout.pinned.includes(op.target)) return { shared: previous, accepted: false };
-        const order = [...new Set([...layout.order, ...this.manager.list().map(s => s.name)])].filter(name => name !== op.name);
+        const positions = new Map(layout.order.map((name, index) => [name, index]));
+        const priority = s => {
+          const a = s.activity || {}, marker = next.read[s.name];
+          if (s.status !== 'running') return 2;
+          if (a.phase === 'waiting' || a.phase === 'error' || (a.error && !a.busy)) return -1;
+          if (a.phase === 'interrupted') return 2;
+          if (a.busy) return 1;
+          if (a.available === false || a.phase === 'unknown') return 2;
+          return a.completed && (marker?.createdAt !== s.createdAt || marker?.completed !== a.completed ||
+            marker?.contentRevision && a.contentRevision && marker.contentRevision !== a.contentRevision) ? 0 : 2;
+        };
+        const visible = this.manager.list().sort((a,b) => Number(layout.pinned.includes(b.name)) - Number(layout.pinned.includes(a.name)) ||
+          (layout.manual ? 0 : priority(a) - priority(b)) || (positions.get(a.name) ?? Infinity) - (positions.get(b.name) ?? Infinity));
+        const order = visible.map(s => s.name).filter(name => name !== op.name);
         order.splice(order.indexOf(op.target) + Number(op.after), 0, op.name);
-        next.layout = { ...layout, order };
+        next.layout = { ...layout, order, manual: true };
       }
     }
     if (JSON.stringify(next) !== JSON.stringify(previous)) {

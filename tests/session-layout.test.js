@@ -33,3 +33,11 @@ test('Unread green, busy, idle order updates while preserving pinned priority an
   states.b = 'idle'; assert.deepEqual(order(), ['a','c','d','b']);
   states.d = 'unread'; assert.deepEqual(order(), ['a','d','c','b']);
 });
+test('Explicit dragging wins over task groups and survives status changes and normalization', async () => {
+  const { moveSession, orderedSessions, normalizeLayout } = await modulePromise;
+  const states = { a:'idle', b:'busy', c:'unread', d:'waiting' };
+  const moved = normalizeLayout(moveSession(sessions, {order:['a','b','c','d'],pinned:[]}, 'a', 'd', true));
+  assert.deepEqual(orderedSessions(sessions,moved,s=>states[s.name]).map(s=>s.name), ['b','c','d','a']);
+  states.a='unread'; states.b='idle';
+  assert.deepEqual(orderedSessions(sessions,moved,s=>states[s.name]).map(s=>s.name), ['b','c','d','a']);
+});
