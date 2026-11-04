@@ -63,7 +63,7 @@ const SessionSync = require('../server/services/session-sync');
     const beforeOffline = { answer: answerRequests, full: fullRequests };
     page = await context.newPage(); await page.goto(url);
     await page.locator('.message.assistant').filter({ hasText: '合成回答缓存' }).waitFor({ timeout: 1500 });
-    await page.locator('.mobile-session-header').getByText('本地缓存', { exact: true }).waitFor({ timeout: 1500 });
+    await page.locator('.mobile-session-header').getByText(/待同步/).waitFor({ timeout: 1500 });
     assert.equal(await page.locator('.composer .send').isDisabled(), true, 'Cached names cannot accept inputs before the server confirms their generation');
     assert.deepEqual({ answer: answerRequests, full: fullRequests }, beforeOffline, 'Cold cache rendering does not request histories before generation validation');
     await page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
@@ -72,7 +72,7 @@ const SessionSync = require('../server/services/session-sync');
     assert.equal(inputs, 0);
     console.log('PASS cold new page renders both disk views with status transports held, no history request and no input');
     holdLists = false; lists.splice(0).forEach(send => send());
-    await page.locator('.mobile-session-header').getByText('本地缓存', { exact: true }).waitFor({ state: 'detached', timeout: 1500 });
+    await page.locator('.mobile-session-header').getByText(/待同步/).waitFor({ state: 'detached', timeout: 1500 });
     await page.waitForFunction(() => !document.querySelector('.composer .send')?.disabled);
     // Opening the socket resumes immediate work updates; completed sessions
     // still refresh immediately when their task phase changes.

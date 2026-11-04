@@ -127,7 +127,8 @@ test('failure of both transports marks state unavailable and HTTP recovery resto
   f.offline();
   f.sockets[0].onclose(); await settle();
   assert.equal(f.store.connectionIssue, true);
-  assert.equal(f.store.workingCount, 0);
+  assert.equal(f.store.workingCount, 1, 'Retain last confirmed count during disconnection');
+  assert.equal(f.store.activityStatus(f.store.sessions[0]).stale, true);
   f.complete(); f.offline(false); await f.store.fetchSessions();
   assert.equal(f.store.connectionIssue, false);
   assert.equal(f.store.unreadCount, 1);

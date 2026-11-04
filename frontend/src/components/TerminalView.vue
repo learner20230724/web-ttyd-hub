@@ -97,7 +97,7 @@ watch(nativeKey, async key => {
     if (ws?.readyState !== WebSocket.OPEN || (!ready && message.type !== 'resize')) return false;
     if (message.type === 'resize' && !initializedSocket) return false;
     ws.send(JSON.stringify(message));
-    if (message.type === 'checkpoint') { clearTimeout(checkpointTimer); checkpointTimer = setTimeout(() => { checkpointPending = false; ws?.close(); }, 5000); }
+    if (message.type === 'checkpoint') { const target = ws; clearTimeout(checkpointTimer); checkpointTimer = setTimeout(() => { if (ws === target) { checkpointPending = false; target.close(); } }, 5000); }
     return true;
   };
   const measure = () => {
@@ -235,6 +235,7 @@ watch(nativeKey, async key => {
   const cachedLoad = loadContent(session, 'terminal').then(restoreCache);
   const connect = () => {
     if (stopped || !confirmedSession()) return;
+    clearTimeout(checkpointTimer); clearTimeout(snapshotDeadline); checkpointPending = false;
     ready = false; initializedSocket = false; term.options.disableStdin = true;
     connection.value = attempt ? '连接已断开，正在重连…' : '正在连接终端…';
     const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${hubUrl(`/ws/terminal/${encodeURIComponent(name)}`)}`);

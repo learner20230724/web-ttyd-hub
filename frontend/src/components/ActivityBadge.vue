@@ -2,7 +2,7 @@
 defineProps({ status: { type: Object, required: true }, compact: Boolean })
 </script>
 <template>
-  <span class="activity-badge" :class="status.state" :title="status.detail" role="status" :aria-label="status.label">
+  <span class="activity-badge" :class="[status.state, { stale: status.stale }]" :title="status.detail" role="status" :aria-label="status.label">
     <span class="activity-dot" aria-hidden="true">{{ status.state === 'waiting' ? '?' : status.state === 'error' ? '!' : status.state === 'unread' ? '✓' : '' }}</span>
     <span v-if="!compact">{{ status.label }}</span>
   </span>
@@ -16,6 +16,7 @@ defineProps({ status: { type: Object, required: true }, compact: Boolean })
 .waiting { color:#fcd34d; }.waiting .activity-dot { background:#fcd34d; color:#432c00; }
 .error { color:#fda4af; }.error .activity-dot { background:#fda4af; color:#4c1024; }
 .interrupted { color:#c4b5fd; }.unknown { color:#a8b6ca; }
+.stale { opacity:.65; } .stale .activity-dot { animation:none; }
 @keyframes activity-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .busy .activity-dot { animation:none; } }
 </style>

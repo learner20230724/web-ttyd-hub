@@ -103,10 +103,10 @@ app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../se
       await failedList;
       assert.equal(await page.locator('.working-badge').textContent(), '1', 'A failed HTTP read cannot hide state while WebSocket remains connected');
       for (const socket of wss.clients) socket.close();
-      await page.locator('.mobile-session-header').getByText('连接中断', { exact: true }).waitFor();
+      await page.locator('.mobile-session-header').getByText(/待同步/).waitFor();
       await compactTitle();
       assert.equal(await page.locator('.status-guidance').count(), 0, 'Connection status also uses only the title row');
-      await page.locator('.working-badge').waitFor({ state: 'detached' });
+      await page.locator('.activity-counters.stale .working-badge').waitFor();
       assert.equal(await page.getByLabel('消息输入').inputValue(), '保留这条尚未发送的中文草稿');
       failing = false; manager.emit('session:activity', sessions[0]);
       await page.locator('.mobile-session-header .activity-badge.busy').waitFor();

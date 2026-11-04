@@ -79,7 +79,7 @@ function handleMobileOverlayClick() {
           </svg>
         </div>
         <h1 class="toolbar-title"><template v-if="isMobile">TTYD<span class="brand-suffix"> Hub</span></template><template v-else>Web TTYd Hub</template></h1>
-        <div v-if="isMobile && (store.unreadCount || store.workingCount)" class="activity-counters">
+        <div v-if="isMobile && (store.unreadCount || store.workingCount)" :class="['activity-counters', { stale: store.connectionIssue || store.cachedSnapshot }]">
           <button v-if="store.unreadCount > 0" type="button" class="unread-shortcut"
             :aria-label="`查看下一个未读会话，共 ${store.unreadCount} 个`"
             title="打开列表中最上方的未读会话" @click="store.selectNextUnread()">
@@ -141,6 +141,7 @@ function handleMobileOverlayClick() {
 .unread-badge { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:24px; height:24px; border-radius:50%; background:var(--success); color:#03291e; font-size:11px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1; }
 .working-badge { display:inline-flex; position:relative; align-items:center; justify-content:center; width:24px; height:24px; color:#bbc2cc; font-size:11px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1; }
 .working-badge::before { content:''; position:absolute; inset:0; border:2px solid #bbc2cc40; border-top-color:#bbc2cc; border-radius:50%; animation:working-spin 1s linear infinite; }
+.activity-counters.stale { opacity:.65; } .activity-counters.stale .working-badge::before { animation:none; }
 @keyframes working-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .working-badge::before { animation:none; } }
 .reading-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }

@@ -183,7 +183,8 @@ class CodexActivity {
     const revision = (this.versions.get(session.name) || 0) + (changed ? 1 : 0);
     this.versions.set(session.name, revision);
     session.stateEpoch = this.epoch; session.activityRevision = revision;
-    session.verifiedAt = Date.now();
+    if (activity.available) session.verifiedAt = Date.now();
+    session.observationReason = activity.available ? null : activity.detected ? 'source-unavailable' : 'observer-unavailable';
     this.readiness.get(session.name)?.check();
     if (changed) this.manager.emit('session:activity', this.manager.serialize(session));
   }

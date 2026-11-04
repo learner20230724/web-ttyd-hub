@@ -66,7 +66,7 @@ function transition(name, phase, completed = null) {
     await desktop.context.unroute('**/api/sessions', holdList);
     await Promise.all(heldLists.map(release => release()));
     assert.equal(await card(desktop.page, 'done').getAttribute('data-activity-state'), 'idle');
-    assert(!/已完成 · 已读/.test(await card(desktop.page, 'done').textContent()));
+    assert(/已完成 · 已读/.test(await card(desktop.page, 'done').textContent()));
     assert.equal(await desktop.page.locator('.session-card.active').count(), 0, 'Remote reads never switch selection');
     await select(desktop.page, 'second'); await state(phone.page, 'second', 'idle');
     assert.equal(await phone.page.locator('.unread-badge').count(), 0);

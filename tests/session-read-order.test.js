@@ -184,7 +184,7 @@ test('Working count excludes the current session, updates on selection, and excl
   f.store.select('thinking'); await f.nextTick();
   assert.equal(f.store.workingCount, 3, 'Opening a running session removes it from the count immediately');
   f.store.connectionIssue = true;
-  assert.equal(f.store.workingCount, 0, 'Do not present stale work as current when disconnected');
+  assert.equal(f.store.workingCount, 3, 'Retain last confirmed count; presentation marks it stale');
   f.store.connectionIssue = false;
   assert.equal(f.store.workingCount, 3);
   f.store.select(null); await f.nextTick();

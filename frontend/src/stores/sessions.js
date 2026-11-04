@@ -1,3 +1,4 @@
+import { createStateOrder } from '../utils/state-order.mjs'
 import { pageHidden, receiveVisibility } from '../utils/page-visibility.mjs'
 import { hubUrl } from '../utils/base.mjs'
 import { pruneContent } from '../utils/session-content.mjs'
@@ -10,6 +11,15 @@ import { loadMetadata, saveMetadata, scopedStorageKey } from '../utils/session-m
 import { untilAbort } from '../utils/request-deadline.mjs'
 
 export const useSessionStore = defineStore('sessions', () => {
+  const order = createStateOrder()
+  const diagnostics = []
+  const record = (event, detail = {}) => { diagnostics.push({ at: Date.now(), event, ...detail }); if (diagnostics.length > 200) diagnostics.shift() }
+  const diagnosticView = () => ({ build: typeof __HUB_BUILD__ === 'undefined' ? 'test' : __HUB_BUILD__, epoch: order.epoch, events: diagnostics.slice() })
+  window.ttydDiagnostics = diagnosticView
+  onScopeDispose(() => { if (window.ttydDiagnostics === diagnosticView) delete window.ttydDiagnostics })
+  const clock = ref(Date.now())
+  const checked = new Map()
+  const stale = session => cachedSnapshot.value || (checked.has(session.name) && clock.value - checked.get(session.name) > 20000)
   const cached = loadMetadata()
   const sessions = ref(cached?.sessions || [])
   const cachedSnapshot = ref(Boolean(cached))
@@ -29,6 +39,7 @@ export const useSessionStore = defineStore('sessions', () => {
   function markRead() {
     if (pageHidden() || !document.hasFocus() || connectionIssue.value) return
     const session = sessions.value.find(s => s.name === current.value)
+    if (session && stale(session)) return
     const state = session && activityState(session)
     // Keep old history read on upgrade. Once its current version really reaches
     // the reader, replace the legacy wildcard so a later final can be unread.
@@ -54,11 +65,13 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
   function activityState(session) {
-    return connectionIssue.value ? 'unknown' : classifyActivity(session, read.value, readRevisions.value)
+    return cachedSnapshot.value ? 'unknown' : classifyActivity(session, read.value, readRevisions.value)
   }
-  const activityStatus = session => cachedSnapshot.value
-    ? { state: 'unknown', label: '本地缓存', detail: '正在连接并更新状态，当前显示上次保存的内容。' }
-    : activityPresentation(session, read.value, connectionIssue.value, readRevisions.value)
+  const activityStatus = session => {
+    const display = session.activity?.available === false && session.lastKnownActivity ? { ...session, activity: session.lastKnownActivity } : session
+    const status = activityPresentation(display, read.value, false, readRevisions.value)
+    return stale(session) || connectionIssue.value || session.activity?.available === false ? { ...status, ...(session.activity?.available === false ? { state: 'unknown' } : {}), stale: true, label: `${status.label} · 待同步` } : status
+  }
   document.addEventListener('visibilitychange', markRead)
   window.addEventListener('focus', markRead)
   onScopeDispose(() => { document.removeEventListener('visibilitychange', markRead); window.removeEventListener('focus', markRead) })
@@ -183,11 +196,12 @@ export const useSessionStore = defineStore('sessions', () => {
   function receiveActivity(value) {
     const session = sessions.value.find(s => s.name === value?.name && s.createdAt === value.createdAt)
     if (!session || !value.activity || typeof value.activity !== 'object') return false
-    if (value.stateEpoch && session.stateEpoch && (value.stateEpoch !== session.stateEpoch || value.activityRevision < session.activityRevision)) return false
-    liveActivity.set(value.name, { sequence: ++activitySequence, createdAt: value.createdAt, activity: value.activity })
+    if (!order.accepts(value, session)) { record('state-rejected'); return false }
+    checked.set(value.name, Date.now()); record('state', { revision: value.activityRevision })
+    liveActivity.set(value.name, { sequence: ++activitySequence, createdAt: value.createdAt, activity: value.activity, stateEpoch: value.stateEpoch, activityRevision: value.activityRevision })
     // The notification already contains the authoritative state. A second HTTP
     // round trip adds latency and can stall behind an unrelated list request.
-    sessions.value = sessions.value.map(s => s === session ? { ...s, activity: value.activity, stateEpoch: value.stateEpoch || s.stateEpoch, activityRevision: value.activityRevision ?? s.activityRevision, verifiedAt: value.verifiedAt || Date.now() } : s)
+    sessions.value = sessions.value.map(s => s === session ? { ...s, lastKnownActivity: value.activity.available === false ? s.lastKnownActivity || s.activity : value.activity, activity: value.activity, stateEpoch: value.stateEpoch || s.stateEpoch, activityRevision: value.activityRevision ?? s.activityRevision, verifiedAt: value.verifiedAt || Date.now() } : s)
     // One fresh event cannot validate every other session restored from disk.
     if (!cachedSnapshot.value) connectionIssue.value = false
     scheduleMetadata()
@@ -197,10 +211,15 @@ export const useSessionStore = defineStore('sessions', () => {
   window.addEventListener('hub:state', receiveBodyState)
   onScopeDispose(() => window.removeEventListener('hub:state', receiveBodyState))
   function receiveList(data) {
+    const nextEpoch = data.stateEpoch || data.sessions.find(s => s.stateEpoch)?.stateEpoch
+    if (!order.confirm(nextEpoch)) { record('retired-snapshot'); return false }
+    record('snapshot', { epoch: nextEpoch })
     data.sessions = data.sessions.map(s => {
       const current = sessions.value.find(x => x.name === s.name && x.createdAt === s.createdAt)
+      s = { ...s, lastKnownActivity: s.activity?.available === false ? current?.lastKnownActivity || current?.activity : s.activity }
       return current?.stateEpoch && current.stateEpoch === s.stateEpoch && current.activityRevision > s.activityRevision ? { ...s, activity: current.activity, activityRevision: current.activityRevision } : s
     })
+    for (const s of data.sessions) checked.set(s.name, Date.now())
     const selected = sessions.value.find(s => s.name === current.value)
     cachedSnapshot.value = false
     connectionIssue.value = false
@@ -222,6 +241,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
   function receiveSnapshot(data) {
     if (!Array.isArray(data?.sessions)) return false
+    if (!order.confirm(data.stateEpoch || data.sessions.find(s => s.stateEpoch)?.stateEpoch)) return false
     // The opening snapshot supersedes all HTTP work issued before reconnecting.
     // It also recovers events sent while the new socket was being established.
     listRequest?.abort(); listRequest = null; refreshPending = false
@@ -243,8 +263,8 @@ export const useSessionStore = defineStore('sessions', () => {
       if (listRequest !== request || request.signal.aborted) return
       data.sessions = data.sessions.map(session => {
         const event = liveActivity.get(session.name)
-        return event && event.sequence > activityAtStart && event.createdAt === session.createdAt
-          ? { ...session, activity: event.activity } : session
+        return event && event.sequence > activityAtStart && event.createdAt === session.createdAt && (!event.stateEpoch || event.stateEpoch === session.stateEpoch)
+          ? { ...session, activity: event.activity, stateEpoch: event.stateEpoch || session.stateEpoch, activityRevision: event.activityRevision ?? session.activityRevision } : session
       })
       for (const [name, event] of liveActivity) if (event.sequence <= activityAtStart ||
         !data.sessions.some(s => s.name === name && s.createdAt === event.createdAt)) liveActivity.delete(name)
@@ -255,7 +275,8 @@ export const useSessionStore = defineStore('sessions', () => {
       if (listRequest !== request) return
       // A failed HTTP read cannot invalidate states from an open notification
       // connection. Mark disconnected only when both transports are unavailable.
-      if (activitySequence === activityAtStart && ws?.readyState !== 1) connectionIssue.value = true
+      record('list-failed')
+      if (activitySequence === activityAtStart && (ws?.readyState !== 1 || Date.now() - lastNotification > 20000)) connectionIssue.value = true
       throw error
     } finally {
       clearTimeout(timeout)
@@ -349,11 +370,13 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   function selectNextUnread() {
+    if (connectionIssue.value) return
     const next = unreadSessions.value[0]
     if (next) select(next.name)
   }
 
   function selectNextWorking() {
+    if (connectionIssue.value) return
     // Advance from the current worker before wrapping; choosing the first
     // other worker each time would bounce between two and miss later ones.
     const working = sortedSessions.value.filter(s => activityState(s) === 'busy')
@@ -426,9 +449,10 @@ export const useSessionStore = defineStore('sessions', () => {
   // Phones can suspend a WebSocket without delivering close. Refresh on return
   // and periodically reconcile, even when no activity notification arrives.
   const refreshVisible = (fresh = false) => {
+    clock.value = Date.now()
     if (pageHidden()) return
     if (ws?.readyState === 1) {
-      if (probeAt && Date.now() - probeAt >= 5000) { ws.close(); probeAt = 0 }
+      if (probeAt && Date.now() - probeAt >= 5000) { record('notification-timeout'); ws.close(); probeAt = 0 }
       else if (!probeAt && Date.now() - lastNotification >= 15000) { probeAt = Date.now(); ws.send(JSON.stringify({ event: 'ping', data: probeAt })) }
     }
     if (listRequest && !fresh) { refreshPending = true; return }
@@ -448,7 +472,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
   // A restored browser page or Android WebView can return to the foreground
   // without changing pageHidden(). Neither path should need a terminal input.
-  const resumePage = event => { if (event.persisted) resume() }
+  const resumePage = event => { if (event.persisted) resume(event) }
   let refreshTimer
   onScopeDispose(() => {
     persistMetadata()

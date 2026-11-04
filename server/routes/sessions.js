@@ -45,6 +45,10 @@ module.exports = function (sessionManager) {
     try { res.json(await sessionManager.activity.questions.respond(req.params.name, req.params.id, req.body)); }
     catch (err) { res.status(err.status || 503).json({ error: err.status ? err.message : '追问连接暂不可用，请查看全文确认当前状态' }); }
   });
+  router.get('/diagnostics', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ build: require('../services/build-version'), epoch: sessionManager.activity?.epoch, sessions: sessionManager.list().map(s => ({ name: s.name, createdAt: s.createdAt, revision: s.activityRevision, verifiedAt: s.verifiedAt, available: s.activity?.available, phase: s.activity?.phase, reason: s.observationReason || null })) });
+  });
   router.get('/shells', (req, res) => {
     res.json({ shells: sessionManager.getShells(), platform: process.platform });
   });
@@ -80,7 +84,7 @@ module.exports = function (sessionManager) {
 
   router.get('/', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    res.json({ sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot() });
+    res.json({ stateEpoch: sessionManager.activity?.epoch, sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot() });
   });
 
   router.post('/sync', (req, res) => {
@@ -128,7 +132,7 @@ module.exports = function (sessionManager) {
       // body even if the request was already capturing its terminal output.
       if (scope !== contentScope(req, 'history')) throw replacedSession();
       const current = sessionManager.getSession(req.params.name);
-      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity })).toString('base64url'));
+      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity && { ...current.activity, ...(current.activity.error ? { error: String(current.activity.error).slice(0, 256) } : {}) } })).toString('base64url'));
       sendContent(req, res, data, scope);
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
@@ -143,7 +147,7 @@ module.exports = function (sessionManager) {
       const data = await sessionManager.mobile(req.params.name, full);
       if (scope !== contentScope(req, full ? 'full' : 'answer')) throw replacedSession();
       const current = sessionManager.getSession(req.params.name);
-      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity })).toString('base64url'));
+      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity && { ...current.activity, ...(current.activity.error ? { error: String(current.activity.error).slice(0, 256) } : {}) } })).toString('base64url'));
       sendContent(req, res, data, scope);
     }
     catch (err) { res.status(err.status || 400).json({ error: err.message }); }

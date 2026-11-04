@@ -22,7 +22,7 @@ function setupWebSocket(server, sessionManager) {
       try { const value = JSON.parse(raw); if (value.event === 'ping') ws.send(JSON.stringify({ event: 'pong', data: value.data })); } catch {}
     });
     if (sessionManager.list) ws.send(JSON.stringify({ event: 'session:snapshot', data: {
-      sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot(),
+      stateEpoch: sessionManager.activity?.epoch, sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot(),
     } }));
   });
 
