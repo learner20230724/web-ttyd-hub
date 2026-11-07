@@ -128,3 +128,11 @@ Linux 新启动的 Codex 使用进程级 `tui.terminal_title=["thread-id"]`，�
 全新 Codex 在首条输入前可能尚未创建 rollout，属于正常空会话。回答接口此时返回当前终端画面。手机回答页现在显示这份画面并标为“实时终端”，持续核对；来源暂时失联时同样替换旧回答，不再让缓存停在上次输入或要求手动切换全文。结构化记录恢复后自动切回对话。真实网络故障仍保留缓存；实时终端降级不提交结构化回复的已读确认。
 
 验证：`npm test`、`npm run build`、`node tests/mobile-answer-presentation-browser.cjs`、`node tests/mobile-answer-convergence-browser.cjs`；`node tests/codex-cold-start-integration.cjs` 用隔离 CODEX_HOME、私有 tmux 和本地合成模型验证安装的 Codex 冷恢复、空白新会话与首轮回答，无生产输入或真实模型调用。手机检查为 Playwright，未做 M153 真机验证。沿用 `npm run deploy:web`，重新加载网页／APP 在线页面后生效，无需新 APK。
+
+### 2026-11-07 无输入刷新与阅读切换补充
+
+不能把“发送消息后刷新了”当作恢复成功。前端已有的一秒时钟现在独立核对正文读取期限，在 WebView 丢失一次性刷新回调后恢复读取；已完成视图每 5 秒条件核对，工作中仍为 1.2 秒，正在进行的请求不重复启动。无状态通知、完成标记没有变化时也会读到随后出现的正文。切换为两个固定的“回答”“全文”按钮，选中状态立即更新；重复点击当前视图会重新核对正文，保留阅读位置和输入草稿。迟到的另一视图请求不能覆盖当前视图。
+
+共享 daemon 的已加载历史会话可能没有保持 rollout 文件描述符打开。打开文件发现失败时，观察器通过已验证的本地 daemon socket，只读调用 `thread/loaded/list` 和 `thread/read(includeTurns:false)`，匹配当前终端标题，再核对 sessions 目录、真实路径、元数据 UUID 与 cwd。总读取有 3.5 秒截止；歧义、越界和校验失败保持未关联。不发送输入，不调用 `thread/resume` 或启动模型。此补充同时适用于尚未重启、仍使用旧标题的现有终端。
+
+`tests/mobile-passive-refresh-browser.cjs` 故意丢失正文定时回调、保持完成状态不变：旧客户端在 7 秒内无法更新，新客户端自动显示新回复；全程输入请求为零。另覆盖 360px 触摸下慢速全文请求、连续来回切换、重复点击当前视图。真实 Codex 隔离测试补充了隐藏 rollout FD 后的只读发现，确认没有额外模型请求。单元测试 213 通过、1 项跳过；回答展示、自动收敛、本地缓存与真实 Codex 隔离测试通过。以上不等于用户 M153 现场验证。

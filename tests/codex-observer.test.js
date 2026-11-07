@@ -158,3 +158,34 @@ test('live thread ID binds unnamed/renamed threads and rejects stale or collidin
   assert.equal(selectRollout([root, candidate(id.slice(0, 29) + '7654321', null)], id.slice(0, 29) + '...', true), null);
   assert.equal(selectRollout([root], id.slice(0, 8) + '...', true), null);
 });
+
+test('idle loaded thread resolves its closed rollout without new input; unrelated paths and collisions fail closed', async t => {
+  const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
+  const { resolveLoadedRollout } = require('../server/services/codex-observer');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-closed-rollout-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const id = '01a1b635-0ac0-7652-9d31-5db8d1234567', cwd = path.join(dir, 'project');
+  const file = path.join(dir, 'sessions', 'today', 'rollout-' + id + '.jsonl');
+  await fs.mkdir(path.dirname(file), { recursive: true }); await fs.mkdir(cwd);
+  await fs.writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id, cwd, source: 'cli' } }) + '\n');
+  let threads = [{ id, cwd, path: file, name: 'Idle saved reply', source: 'cli' }];
+  const calls = [];
+  const rpc = { async call(method, params) {
+    calls.push(method);
+    if (method === 'thread/loaded/list') return { data: threads.map(x => x.id) };
+    assert.equal(method, 'thread/read'); assert.equal(params.includeTurns, false);
+    return { thread: threads.find(x => x.id === params.threadId) };
+  } };
+  const opened = [path.join(dir, 'state_5.sqlite')]; // No open rollout descriptor.
+  assert.equal(await resolveRollout(opened, 'Idle saved reply | project', true), null, 'Old FD-only discovery misses the saved reply');
+  assert.equal(await resolveLoadedRollout(opened, 'Idle saved reply | project', rpc), file);
+  assert.equal(await resolveLoadedRollout(opened, id.slice(0, 29) + '...', rpc), file);
+  assert.equal(await resolveLoadedRollout(opened, 'Other | project', rpc), null);
+  threads.push({ ...threads[0], id: 'other' });
+  assert.equal(await resolveLoadedRollout(opened, 'Idle saved reply | project', rpc), null);
+  threads.pop();
+  assert.equal(await resolveLoadedRollout([path.join(dir, 'other', 'state_5.sqlite')], id, rpc), null);
+  await fs.writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id: 'wrong', cwd, source: 'cli' } }) + '\n');
+  assert.equal(await resolveLoadedRollout(opened, id, rpc), null);
+  assert(calls.every(x => ['thread/read', 'thread/loaded/list'].includes(x)), 'Discovery cannot resume a thread or submit input');
+});

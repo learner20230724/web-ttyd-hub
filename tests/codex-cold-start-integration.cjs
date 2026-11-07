@@ -53,6 +53,11 @@ const previousTmux = Object.fromEntries(['TMUX', 'TMUX_PANE', 'TMUX_TMPDIR'].map
   await client.call('turn/start', { threadId: thread.id, input: [{ type: 'text', text: 'Synthetic completed turn.', text_elements: [] }] });
   await until(() => events.find(message => message.method === 'turn/completed' && message.params.threadId === thread.id));
   assert.equal(requests, 1);
+  const { resolveLoadedRollout } = require('../server/services/codex-observer');
+  const databases = (await fs.readdir(home)).filter(x => /^state_\d+\.sqlite$/.test(x)).map(x => path.join(home, x));
+  // Hide the rollout FD: passive discovery must locate completed history.
+  assert(await resolveLoadedRollout(databases, 'Cold resume fixture | project', client));
+  assert.equal(requests, 1, 'Metadata discovery cannot invoke the model');
   client.close(); initial.kill();
   if (initial.exitCode === null && initial.signalCode === null) await once(initial, 'exit');
 

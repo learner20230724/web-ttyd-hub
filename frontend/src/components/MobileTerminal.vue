@@ -16,7 +16,7 @@ import CodexQuestions from './CodexQuestions.vue'
 import ImageAttachments from './ImageAttachments.vue'
 import MessageImages from './MessageImages.vue'
 const emit = defineEmits(['show-execution'])
-const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, readingVisible: { type: Boolean, default: true }, fontSize: { type: Number, default: 16 } })
+const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, refreshTrigger: Number, readingVisible: { type: Boolean, default: true }, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const status = computed(() => session.value ? store.activityStatus(session.value) : null)
@@ -32,6 +32,10 @@ const elapsedTimer = setInterval(() => {
     if (!pageHidden()) void store.fetchSessions().catch(() => {})
     resumeReading()
   }
+  // WebViews can lose a one-shot timer across suspension. The existing clock
+  // independently checks the read deadline; new input must never be the retry.
+  if (!pageHidden() && !store.cachedSnapshot && session.value && !readingInFlight &&
+      Date.now() >= nextReadAt) void refresh()
 }, 1000)
 const elapsed = computed(() => {
   if (!session.value?.activity?.busy || store.connectionIssue) return ''
@@ -108,6 +112,7 @@ const outputSegments = computed(() => {
   return renderedOutput.get(data)
 })
 const positions = new Map()
+let readingInFlight = false, nextReadAt = Infinity
 let timer, disposed = false, epoch = 0, refreshSequence = 0, visibleKey = null, switching = false, quickRefreshUntil = 0
 let measuredPane = null, measuredWidth = 0, measuredHeight = 0
 function rememberReadingSize(element) {
@@ -180,7 +185,7 @@ function refreshDelay() {
   // lamp is not proof that the answer displayed has reached that snapshot.
   const displayed = codexAnswer.value ? answerData.value : content.value
   return activity.busy || activity.available === false || activity.phase === 'unknown' || answerUnavailable.value ||
-    contentBehind(displayed, activity) || error.value || pendingMessages.value.length || sending.value || questionPending.value || Date.now() < quickRefreshUntil ? 1200 : 15000
+    contentBehind(displayed, activity) || error.value || pendingMessages.value.length || sending.value || questionPending.value || Date.now() < quickRefreshUntil ? 1200 : 5000
 }
 async function refresh(token = epoch, fresh = false) {
   if (disposed || token !== epoch) return
@@ -190,6 +195,7 @@ async function refresh(token = epoch, fresh = false) {
   // disk readable, but wait for the authoritative list before requesting data.
   if (!selected || pageHidden() || store.cachedSnapshot) return
   const sequence = ++refreshSequence
+  readingInFlight = true
   const current = () => !disposed && token === epoch && sequence === refreshSequence
   try {
     const entry = await fetchContent(selected, view, { fresh })
@@ -202,7 +208,13 @@ async function refresh(token = epoch, fresh = false) {
     }
   } catch (e) {
     if (current()) error.value = Object.keys(content.value).length ? '正在显示缓存，暂时无法更新。' : e.message
-  } finally { if (current() && !pageHidden() && !store.cachedSnapshot) { clearTimeout(timer); timer = setTimeout(() => refresh(token), refreshDelay()) } }
+  } finally {
+    if (current()) {
+      readingInFlight = false
+      nextReadAt = Date.now() + refreshDelay()
+      if (!pageHidden() && !store.cachedSnapshot) { clearTimeout(timer); timer = setTimeout(() => refresh(token), refreshDelay()) }
+    }
+  }
 }
 function resumeReading(event) {
   receiveVisibility(event)
@@ -222,13 +234,13 @@ watch(() => [store.current, session.value?.activity?.phase, session.value?.activ
   // A newly completed turn still replaces an older in-flight progress request.
   if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, Boolean(value[3] && value[3] !== previous[3]))
 })
-watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot], async ([name, full], previous) => {
+watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot, () => props.refreshTrigger], async ([name, full], previous) => {
   const previousName = previous?.[0]
   if (visibleKey && pane.value) positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
   if (previousName && name !== previousName) drafts.set(previousName, draft.value)
   if (name !== previousName) { draft.value = drafts.get(name) || ''; more.value = false }
   const token = ++epoch, selected = session.value
-  clearTimeout(timer); error.value = ''; answerStartedAt.value = Date.now(); switching = true
+  clearTimeout(timer); readingInFlight = false; nextReadAt = Date.now(); error.value = ''; answerStartedAt.value = Date.now(); switching = true
   const view = full ? 'full' : 'answer'
   visibleKey = selected ? contentKey(selected, view) : null
   follow.value = positions.get(visibleKey)?.follow ?? true
@@ -340,7 +352,7 @@ onBeforeUnmount(() => {
           <button v-if="!showExecution" type="button" @click="emit('show-execution', status.state === 'waiting')">查看全文 <span aria-hidden="true">↗</span></button>
         </div>
       </div>
-      <div ref="pane" class="mobile-reading" @scroll.passive="scrolled"
+      <div ref="pane" :data-view="showExecution ? 'full' : 'answer'" class="mobile-reading" @scroll.passive="scrolled"
         :data-content-revision="(codexAnswer ? answerData : content)?.contentRevision || null"
         :data-content-completed="(codexAnswer ? answerData : content)?.completed || null">
         <template v-if="!showExecution && messages.length">

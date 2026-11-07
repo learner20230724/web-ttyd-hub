@@ -138,9 +138,43 @@ async function resolveRollout(files, title, shared = false) {
   return selectRollout(candidates, title, shared)?.path || null;
 }
 
+// A resumed idle thread need not keep its rollout FD open. Resolve only among
+// threads loaded in the daemon to which this pane's client is actually connected.
+async function resolveLoadedRollout(files, title, rpc) {
+  const ids = new Set(); let cursor;
+  do {
+    const page = await rpc.call('thread/loaded/list', { limit: 100, ...(cursor ? { cursor } : {}) }, 3000);
+    if (!Array.isArray(page.data)) return null;
+    for (const id of page.data) ids.add(id);
+    if (ids.size > 500 || page.nextCursor === cursor && cursor) return null;
+    cursor = page.nextCursor;
+  } while (cursor);
+  const candidates = [];
+  for (const id of ids) {
+    const { thread } = await rpc.call('thread/read', { threadId: id, includeTurns: false }, 3000);
+    if (thread?.id !== id || thread.parentThreadId || !thread.path || !thread.cwd) continue;
+    candidates.push({ path: thread.path, name: thread.name,
+      meta: { id, cwd: thread.cwd, source: thread.source }, projectName: await projectName(thread.cwd) });
+  }
+  const selected = selectRollout(candidates, title, true);
+  if (!selected || !rolloutPattern.test(selected.path)) return null;
+  // The daemon metadata is not permission to read arbitrary files or symlinks.
+  const roots = files.filter(file => /[/\\]state_\d+\.sqlite$/.test(file)).map(file => path.join(path.dirname(file), 'sessions'));
+  const filename = await fs.realpath(selected.path);
+  let allowed = false;
+  for (const root of roots) {
+    const canonical = await fs.realpath(root).catch(() => null);
+    if (canonical && filename.startsWith(canonical + path.sep)) allowed = true;
+  }
+  if (!allowed) return null;
+  const meta = await metadata(filename);
+  return meta?.id === selected.meta.id && meta.cwd === selected.meta.cwd &&
+    !JSON.stringify(meta.source || '').includes('subagent') ? filename : null;
+}
+
 class LinuxCodexObserver {
   async begin() {
-    this.peers = null; this.daemons = new Map();
+    this.peers = null; this.daemons = new Map(); this.loaded = new Map();
   }
   async observe(pid, title) {
     const client = await findCodex(pid);
@@ -158,7 +192,21 @@ class LinuxCodexObserver {
       const args = (await fs.readFile(`/proc/${daemonPid}/cmdline`, 'utf8')).split('\0');
       return args.includes('app-server') && args.includes('--managed-daemon') ? openedFiles(daemonPid) : [];
     })().catch(() => []));
-    const rollout = await resolveRollout(await this.daemons.get(daemonPid), title, true);
+    const files = await this.daemons.get(daemonPid);
+    let rollout = await resolveRollout(files, title, true);
+    if (!rollout && files.length) {
+      // One read-only connection per resolution, always closed; never resume a
+      // thread, submit input, or invoke a model just to populate the answer view.
+      const key = `${connection.socket}:${title}`;
+      if (!this.loaded.has(key)) this.loaded.set(key, (async () => {
+        const rpc = new (require('./codex-rpc').CodexRpc)();
+        const deadline = setTimeout(() => rpc.close(), 3500);
+        try { await rpc.connect(connection.socket); return await resolveLoadedRollout(files, title, rpc); }
+        catch { return null; }
+        finally { clearTimeout(deadline); rpc.close(); }
+      })());
+      rollout = await this.loaded.get(key);
+    }
     return { detected: true, path: rollout, socket: rollout ? connection.socket : null };
   }
 }
@@ -173,4 +221,4 @@ function terminalStatus(text) {
   if (/^\s*[•◦\u2800-\u28ff]\s*[^\n]{0,160}\(\d[^\n]*esc to interrupt\)/im.test(tail)) return 'working';
   return null;
 }
-module.exports = { titleThreadPrefix, LinuxCodexObserver, daemonConnections, daemonPeers, selectRollout, resolveRollout, terminalStatus };
+module.exports = { resolveLoadedRollout, titleThreadPrefix, LinuxCodexObserver, daemonConnections, daemonPeers, selectRollout, resolveRollout, terminalStatus };
