@@ -74,8 +74,20 @@ async function projectName(cwd) {
   }
   return path.basename(configuredRoot || cwd);
 }
+// The TUI truncates thread-id at 32 graphemes (29 characters + "...").
+// Accept only that exact ID shape, never arbitrary title suffixes.
+function titleThreadPrefix(title) {
+  const label = plainTitle(plainTitle(title).replace(/^\[ [!.] \] Action Required \| /, ''));
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-(?:[0-9a-f]{12}|[0-9a-f]{5}\.\.\.)$/i.test(label)
+    ? label.replace(/\.\.\.$/, '').toLowerCase() : null;
+}
 function selectRollout(candidates, title, shared) {
   const roots = candidates.filter(c => c.meta?.id && !JSON.stringify(c.meta.source || '').includes('subagent'));
+  const prefix = titleThreadPrefix(title);
+  if (prefix) {
+    const matches = roots.filter(c => c.meta.id.toLowerCase().startsWith(prefix));
+    return matches.length === 1 ? matches[0] : null;
+  }
   if (!shared && roots.length === 1) return roots[0];
   const label = plainTitle(title);
   // Codex 0.162 blinks between these two prefixes while requesting input.
@@ -97,6 +109,7 @@ async function resolveRollout(files, title, shared = false) {
   const paths = files.filter(file => rolloutPattern.test(file));
   const candidates = (await Promise.allSettled(paths.map(async filename => ({ path: filename, meta: await metadata(filename) }))))
     .filter(r => r.status === 'fulfilled').map(r => r.value);
+  if (titleThreadPrefix(title)) return selectRollout(candidates, title, shared)?.path || null;
   if (!shared && candidates.length === 1) return selectRollout(candidates, title, false)?.path || null;
   // Names are metadata, not message text. Read only rows for files verified open
   // in this daemon; never search unrelated conversations by cwd or modification time.
@@ -160,4 +173,4 @@ function terminalStatus(text) {
   if (/^\s*[•◦\u2800-\u28ff]\s*[^\n]{0,160}\(\d[^\n]*esc to interrupt\)/im.test(tail)) return 'working';
   return null;
 }
-module.exports = { LinuxCodexObserver, daemonConnections, daemonPeers, selectRollout, resolveRollout, terminalStatus };
+module.exports = { titleThreadPrefix, LinuxCodexObserver, daemonConnections, daemonPeers, selectRollout, resolveRollout, terminalStatus };

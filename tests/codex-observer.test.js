@@ -146,3 +146,15 @@ test('a missing terminal footer cannot discard a verified dialogue or completed 
   assert.equal(activity.messages(session.name).at(-1).text, '这条最终回复必须在回答里显示');
   assert.equal(session.activity.phase, 'completed');
 });
+
+test('live thread ID binds unnamed/renamed threads and rejects stale or colliding IDs', () => {
+  const id = '01a1b635-0ac0-7652-9d31-5db8d1234567';
+  const root = candidate(id, null), stale = candidate('01a1b635-0ac0-7652-9d31-aaaaa1234567', 'Old');
+  for (const title of [id, id.slice(0, 29) + '...', '⠙ ' + id.slice(0, 29) + '...', '[ ! ] Action Required | ' + id]) {
+    assert.equal(selectRollout([stale, root], title, true), root);
+    assert.equal(selectRollout([stale], title, false), null, 'A lone old open file is not the current thread');
+    assert.equal(selectRollout([root, candidate(id, null, { subagent: {} })], title, true), root);
+  }
+  assert.equal(selectRollout([root, candidate(id.slice(0, 29) + '7654321', null)], id.slice(0, 29) + '...', true), null);
+  assert.equal(selectRollout([root], id.slice(0, 8) + '...', true), null);
+});

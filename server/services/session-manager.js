@@ -134,7 +134,7 @@ class SessionManager extends EventEmitter {
     // Interactive startup loads the same rc files (including proxy exports) as a
     // normal terminal before Codex starts. Attaching never executes it again.
     // Pass paths as positional arguments, and leave a usable shell after Codex exits.
-    const args = require('./codex-launch').codexArgs(resumeThreadId);
+    const args = ['-c', 'tui.terminal_title=["thread-id"]', ...require('./codex-launch').codexArgs(resumeThreadId)];
     return [shell.path, '-ic', 'codex_bin="$1"; login_shell="$2"; shift 2; "$codex_bin" "$@"; exec "$login_shell" -l', 'hub-codex', codex, shell.path, ...args];
   }
 

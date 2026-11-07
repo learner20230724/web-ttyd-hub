@@ -59,7 +59,7 @@ const previousTmux = Object.fromEntries(['TMUX', 'TMUX_PANE', 'TMUX_TMPDIR'].map
   tm = (...args) => execFileSync('tmux', args, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trimEnd();
   const resumeStarted = Date.now();
   timing = { firstResponseMs: null, firstResponseStructured: false, sourceReadyMs: null, observations: [] };
-  tm('new-session', '-d', '-s', 'cold-fixture', '-x', '120', '-y', '40', '-c', project, 'codex', 'resume', thread.id, '--yolo');
+  tm('new-session', '-d', '-s', 'cold-fixture', '-x', '120', '-y', '40', '-c', project, 'codex', '-c', 'tui.terminal_title=["thread-id"]', 'resume', thread.id, '--yolo');
   const pane = () => {
     const [pid, id, ...title] = tm('list-panes', '-t', '=cold-fixture', '-F', '#{pane_pid}\t#{pane_id}\t#{pane_title}').split('\t');
     return { pid, id, title: title.join('\t') };
@@ -69,7 +69,7 @@ const previousTmux = Object.fromEntries(['TMUX', 'TMUX_PANE', 'TMUX_TMPDIR'].map
   observer.observe = async (...args) => {
     const result = await observe(...args);
     timing.observations.push({ atMs: Date.now() - resumeStarted, detected: result.detected,
-      titleReady: args[1].endsWith('Cold resume fixture | project'), bound: Boolean(result.path) });
+      titleReady: Boolean(require('../server/services/codex-observer').titleThreadPrefix(args[1])), bound: Boolean(result.path) });
     return result;
   };
   const session = { name: 'cold-fixture', shell: 'codex', status: 'running' };
@@ -107,8 +107,28 @@ const previousTmux = Object.fromEntries(['TMUX', 'TMUX_PANE', 'TMUX_TMPDIR'].map
   const freshObserver = new LinuxCodexObserver(); await freshObserver.begin();
   const p = pane(); assert((await freshObserver.observe(p.pid, p.title)).path, 'No prior observer state is required');
   assert.equal(requests, 1, 'Opening, resuming and switching views must never send a new model input');
+  // A genuinely new thread has no rollout until its first input. Exercise the
+  // real launcher/title and then first-turn convergence, not just named resumes.
+  tm('new-session', '-d', '-s', 'fresh-fixture', '-x', '120', '-y', '40', '-c', project,
+    'codex', '-c', 'tui.terminal_title=["thread-id"]', '--yolo');
+  const fresh = { name: 'fresh-fixture', shell: 'codex', status: 'running' };
+  manager.sessions.set(fresh.name, fresh);
+  const freshManager = { activity, ensurePane: async () => {}, getSession: () => fresh,
+    history: async () => ({ text: tm('capture-pane', '-p', '-t', 'fresh-fixture:') }) };
+  const welcome = await SessionManager.prototype.mobile.call(freshManager, fresh.name, false);
+  assert(welcome.text?.includes('Ask Codex') || Array.isArray(welcome.messages));
+  assert.equal(requests, 1, 'Opening an empty thread must not call the model');
+  tm('send-keys', '-t', 'fresh-fixture:', '-l', 'Synthetic first fresh message.');
+  await delay(500);
+  tm('send-keys', '-t', 'fresh-fixture:', 'Enter');
+  try { await until(() => fresh.activity?.phase === 'completed'); }
+  catch (error) { console.error('Synthetic fresh terminal:', tm('capture-pane', '-p', '-t', 'fresh-fixture:')); throw error; }
+  const freshAnswer = await SessionManager.prototype.mobile.call(freshManager, fresh.name, false);
+  assert(freshAnswer.messages.some(m => m.text === 'Synthetic first fresh message.'));
+  assert(freshAnswer.messages.some(m => m.text === 'Cold resume final answer.'));
+  assert(requests >= 2 && requests <= 3, 'Fresh turn plus optional Codex auto-title request use only the local model');
   console.log('Installed Codex cold resume timings:', JSON.stringify(timing));
-  console.log('Installed Codex cold resume: bounded first request, passive daemon recovery, idle final reply, completion and answer/full passed without new input.');
+  console.log('Installed Codex: cold resume without new input, fresh empty thread and first synthetic turn all passed.');
 })().catch(error => { if (timing) console.error('Cold resume timing at failure:', JSON.stringify(timing)); console.error(error); process.exitCode = 1; }).finally(async () => {
   activity?.close(); client?.close(); initial?.kill();
   try { tm?.('kill-server'); } catch {}

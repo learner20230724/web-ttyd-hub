@@ -120,3 +120,11 @@ Android 1.6.1 通过同源页面的 `hub:visibility` 生命周期通知启动既
 首次拖动或键盘排序后，共享排列保存 `manual: true`。同一置顶分组内以用户顺序为准，任务阶段、未读变化和后续已读不再改变位置；刷新、重新打开、跨设备同步和服务重启均保留。首次切换使用当前显示顺序作为移动基线，避免其他卡片一起跳动。置顶分组仍在最上方，跨置顶分组需先调整置顶；尚未手动排序的列表继续原有任务状态分组。旧布局无需迁移，旧客户端收到新标记后需重新加载新版网页才能按手动优先显示。
 
 `node tests/manual-sort-browser.cjs` 使用合成会话，真实鼠标与 CDP 触摸拖动跨任务状态，验证跨端同步、已读后顺序不变及重开持久化，不操作生产会话。
+
+## 2026-11-07 回答来源与新会话
+
+Linux 新启动的 Codex 使用进程级 `tui.terminal_title=["thread-id"]`，不改用户全局配置。观察器优先以当前终端给出的完整 UUID 或 Codex 显示的 29 字符 UUID 前缀，核对该客户端／已验证 daemon 实际打开的主线程记录；截断冲突不关联，不依赖自动命名。切换线程后即使旧文件仍打开，也不能把旧线程作为新回答。已运行终端保留原有标题匹配，不为升级终止任务。
+
+全新 Codex 在首条输入前可能尚未创建 rollout，属于正常空会话。回答接口此时返回当前终端画面。手机回答页现在显示这份画面并标为“实时终端”，持续核对；来源暂时失联时同样替换旧回答，不再让缓存停在上次输入或要求手动切换全文。结构化记录恢复后自动切回对话。真实网络故障仍保留缓存；实时终端降级不提交结构化回复的已读确认。
+
+验证：`npm test`、`npm run build`、`node tests/mobile-answer-presentation-browser.cjs`、`node tests/mobile-answer-convergence-browser.cjs`；`node tests/codex-cold-start-integration.cjs` 用隔离 CODEX_HOME、私有 tmux 和本地合成模型验证安装的 Codex 冷恢复、空白新会话与首轮回答，无生产输入或真实模型调用。手机检查为 Playwright，未做 M153 真机验证。沿用 `npm run deploy:web`，重新加载网页／APP 在线页面后生效，无需新 APK。

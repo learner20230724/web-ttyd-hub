@@ -32,7 +32,7 @@ test('Codex launcher loads interactive shell proxy settings before running the c
     assert.equal(old.ready, null);
     assert.equal(old.proxy, null);
     const fixed = run(command.slice(1));
-    assert.deepEqual(fixed, { args: ['--yolo'], ready: 'loaded', proxy: 'http://127.0.0.1:19799' });
+    assert.deepEqual(fixed, { args: ['-c', 'tui.terminal_title=["thread-id"]', '--yolo'], ready: 'loaded', proxy: 'http://127.0.0.1:19799' });
   } finally {
     process.env.PATH = originalPath;
     manager.cleanup();
@@ -103,7 +103,7 @@ test('Codex starts once with --yolo, survives clients and Hub restart, and exits
     const created = await api('', { name: '自动 Codex', shell: 'codex' });
     assert.equal(created.shell, 'codex');
     await until(() => starts().length === 1);
-    assert.deepEqual(starts()[0].args, ['--yolo']);
+    assert.deepEqual(starts()[0].args, ['-c', 'tui.terminal_title=["thread-id"]', '--yolo']);
     const pane = () => tmux('display-message', '-p', '-t', `=${created.name}:`, '#{pane_id}:#{pane_pid}');
     const originalPane = pane();
     const originalCodexPid = starts()[0].pid;
@@ -138,7 +138,7 @@ test('Codex starts once with --yolo, survives clients and Hub restart, and exits
     assert.equal(starts().length, 1, 'An explicit Bash session must remain an ordinary terminal');
     const resumed = await api('', { shell: 'codex', cwd: project, resumeThreadId: resumeId });
     await until(() => starts().length === 2);
-    assert.deepEqual(starts()[1].args, ['resume', resumeId, '--yolo']);
+    assert.deepEqual(starts()[1].args, ['-c', 'tui.terminal_title=["thread-id"]', 'resume', resumeId, '--yolo']);
     assert.equal(tmux('display-message', '-p', '-t', `=${resumed.name}:`, '#{pane_current_path}'), project);
     const reattached = await api('', { shell: 'codex', cwd: project, resumeThreadId: resumeId });
     assert.equal(reattached.name, resumed.name); assert.equal(starts().length, 2);

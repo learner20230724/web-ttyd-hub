@@ -43,16 +43,18 @@ const elapsed = computed(() => {
 const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
 const answerStartedAt = ref(Date.now()), structuredAnswers = shallowReactive(new Map())
 const codexAnswer = computed(() => !props.showExecution && (session.value?.shell === 'codex' || session.value?.activity?.detected))
-// Availability follows the dialogue actually rendered, including a retained
-// verified reply during a temporary source gap, rather than the latest payload.
-const answerData = computed(() => Array.isArray(content.value.messages) ? content.value :
+// A live terminal fallback must supersede older dialogue, otherwise the answer
+// can remain frozen at the previous input while the terminal already moved on.
+const liveFallback = computed(() => codexAnswer.value && !Array.isArray(content.value.messages) &&
+  typeof content.value.text === 'string' && Boolean(content.value.text.trim()))
+const answerData = computed(() => liveFallback.value ? null : Array.isArray(content.value.messages) ? content.value :
   codexAnswer.value && session.value ? structuredAnswers.get(contentKey(session.value, 'answer')) : null)
 const answerUnavailable = computed(() => codexAnswer.value && !Array.isArray(answerData.value?.messages))
 const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话还没有回答。' : store.cachedSnapshot
   ? '此视图暂无本地缓存，联网后自动加载。' :
   error.value ? '暂时无法读取回答，正在自动重试。' : Object.keys(content.value).length
-    ? '对话记录尚未就绪，可先查看全文。' : now.value - answerStartedAt.value >= 10000
-      ? '仍在读取对话，可先查看全文。' : '正在读取回答…')
+    ? '正在同步…' : now.value - answerStartedAt.value >= 10000
+      ? '正在同步…' : '正在读取回答…')
 const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
 const imagePicker = ref(null), imageUploading = ref(false), imageDrafts = ref({})
@@ -348,7 +350,8 @@ onBeforeUnmount(() => {
             <MessageImages v-if="message.images?.length" :images="message.images" :session-name="session.name" @loaded="alignReading" />
           </article>
         </template>
-        <div v-else-if="showExecution || !codexAnswer" class="terminal-segments">
+        <div v-else-if="showExecution || !codexAnswer || liveFallback" class="terminal-segments">
+          <div v-if="liveFallback" class="speaker">实时终端</div>
           <template v-for="(segment, index) in outputSegments" :key="index">
             <div v-if="segment.type === 'table'" class="terminal-table" role="region" aria-label="终端表格，可左右滑动" tabindex="0">
               <table><tbody><tr v-for="(row, r) in segment.rows" :key="r"><td v-for="(cell, c) in row" :key="c">{{ cell }}</td></tr></tbody></table>
@@ -356,9 +359,8 @@ onBeforeUnmount(() => {
             <pre v-else class="mobile-output"><span v-for="(run, i) in segment.runs" :key="i" :style="run.style">{{ run.text }}</span></pre>
           </template>
         </div>
-        <div v-if="codexAnswer && !messages.length" class="reading-placeholder answer-placeholder" role="status">
+        <div v-if="codexAnswer && !messages.length && !liveFallback" class="reading-placeholder answer-placeholder" role="status">
           <p>{{ answerPlaceholder }}</p>
-          <button type="button" @click="emit('show-execution', true)">查看全文</button>
         </div>
         <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" :role="item.status === 'uncertain' ? 'alert' : 'status'">
           <div class="pending-text">{{ item.text }}</div>
