@@ -138,7 +138,7 @@ async function cachedHeldList(browser) {
     await f.page.waitForTimeout(1000);
     assert.equal(f.listRequests, 1, 'Only the initial held request exists while the cached WebView is hidden');
     assert.equal(f.mobileRequests, 0, 'Cached identity remains unverified until a fresh list arrives');
-    assert.equal(await f.page.locator('.unread-badge, .working-badge').count(), 0, 'Cached task states are not advertised as live');
+    assert.equal(await f.page.locator('.activity-counters.stale').count(), 1, 'Cached counts retain their ordering but are explicitly stale');
     await f.page.evaluate(() => { window.__lifecycleHidden = false; });
     try {
       await f.page.locator('.message.assistant').filter({ hasText: initialAnswer }).waitFor({ timeout: 2500 });

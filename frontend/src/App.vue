@@ -35,6 +35,8 @@ watch([() => store.current, () => store.loaded], ([name, loaded]) => {
 provide("toast", toastRef);
 store.init();
 
+function updatePage() { window.dispatchEvent(new Event('pagehide')); location.reload(); }
+
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value;
 }
@@ -47,6 +49,7 @@ function handleMobileOverlayClick() {
 <template>
   <div class="app-layout">
     <header class="toolbar glass">
+      <button v-if="store.updateAvailable" class="icon-btn" @click="updatePage">更新</button>
       <div class="toolbar-left">
         <button
           class="icon-btn toggle-btn"

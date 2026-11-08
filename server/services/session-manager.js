@@ -74,7 +74,7 @@ class SessionManager extends EventEmitter {
     for (const event of ['session:created', 'session:renamed', 'session:stopped', 'session:deleted', 'session:exited', 'session:identity', 'session:archived', 'session:restored']) {
       this.on(event, () => {
         this.sync.prune();
-        if (this.state && !this.restoring && !this.closing) this.state.save(this.list(), this.sync.snapshot());
+        if (this.state && !this.restoring && !this.closing) this.state.save(this.list(), this.sync.durable());
       });
     }
   }
@@ -94,7 +94,7 @@ class SessionManager extends EventEmitter {
       await this.purgeExpired();
       for (const saved of records) if (saved.status === 'running' && this.sessions.has(saved.name)) await this.restart(saved.name);
       this.sync.prune();
-      this.state.save(this.list(), this.sync.snapshot());
+      this.state.save(this.list(), this.sync.durable());
     } finally { this.restoring = false; }
   }
 
@@ -302,7 +302,7 @@ class SessionManager extends EventEmitter {
     if (session.status === 'running') {
       throw new Error(`Session "${name}" is already running`);
     }
-    const command = this.resolveCommand(session.shell, session.resumeThreadId);
+    const command = this.resolveCommand(session.shell, session.codexThreadId || session.resumeThreadId);
     const port = await this.portManager.allocate();
 
     const tmuxArgs = ['tmux', 'new', '-A', '-s', name, ...(session.cwd ? ['-c', session.cwd] : []), ...command];
@@ -368,7 +368,7 @@ class SessionManager extends EventEmitter {
       catch {
         const args = ['new-session', '-d', '-s', name, '-x', '120', '-y', '40'];
         if (session.cwd) args.push('-c', session.cwd);
-        args.push(...this.resolveCommand(session.shell, session.resumeThreadId));
+        args.push(...this.resolveCommand(session.shell, session.codexThreadId || session.resumeThreadId));
         await runFile('tmux', args);
       }
     })();
@@ -395,7 +395,9 @@ class SessionManager extends EventEmitter {
     const contentRevision = hasSnapshot ? snapshot?.contentRevision || null : activity?.contentRevision || null;
     const messages = hasSnapshot ? snapshot?.messages || null : this.activity.messages(name);
     const inputReceipts = hasSnapshot ? snapshot?.inputReceipts || [] : this.activity.inputReceipts(name);
-    if (!full && (messages?.length || (activity?.available && (!hasSnapshot || snapshot)))) return { messages: messages || [], inputReceipts, completed, contentRevision, activity };
+    const threadId = session.codexThreadId || session.resumeThreadId || null;
+    if (!full && (messages?.length || (activity?.available && (!hasSnapshot || snapshot)))) return { messages: messages || [], inputReceipts, completed, contentRevision, activity, threadId, sourceState: 'ready', hasEarlier: snapshot?.hasEarlier || false };
+    if (!full && (session.shell === 'codex' || activity?.detected)) return { messages: [], inputReceipts: [], threadId, sourceState: 'unavailable' };
     // Keep output readable when structured dialogue is unavailable. A live
     // terminal snapshot can contain the final reply that an older cache lacks.
     return { ...await this.history(name), inputReceipts, completed, contentRevision, activity };
@@ -403,8 +405,9 @@ class SessionManager extends EventEmitter {
 
   input(name, { text, key, images = [] }) {
     const session = this.getSession(name);
+    const threadId = session.codexThreadId || session.resumeThreadId;
     const checkSession = () => {
-      if (this.sessions.get(name) !== session) throw new Error('会话已更换，请确认后重新发送');
+      if (this.sessions.get(name) !== session || threadId && threadId !== (session.codexThreadId || session.resumeThreadId)) throw new Error('会话已更换，请确认后重新发送');
     };
     if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'S-Left', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
     if (text != null && (typeof text !== 'string' || Buffer.byteLength(text) > 64000 || /[\x00-\x08\x0b-\x1f\x7f]/.test(text))) throw new Error('输入文字无效或超过 64 KB');
@@ -440,7 +443,8 @@ class SessionManager extends EventEmitter {
       const { stdout } = await runFile('tmux', [
         'capture-pane', '-p', '-e', '-J', '-S', '-20000', '-t', `=${session.name}:`
       ], { env: SPAWN_ENV, encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
-      return { name: session.name, text: stripVTControlCharacters(stdout), ansi: stdout, capturedAt: new Date().toISOString() };
+      const size = await runFile('tmux', ['display-message', '-p', '-t', `=${session.name}:`, '#{history_size}'], { env: SPAWN_ENV, timeout: 1000 }).catch(() => null);
+      return { name: session.name, text: stripVTControlCharacters(stdout), ansi: stdout, truncated: size ? Number(size.stdout.trim()) > 20000 : null, historyLimit: 20000, capturedAt: new Date().toISOString() };
     } catch (_) {
       throw new Error('History is unavailable: the tmux pane may have exited / 暂无历史输出，终端可能尚未连接或已退出');
     }

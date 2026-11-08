@@ -40,6 +40,7 @@ function setupWebSocket(server, sessionManager) {
     'session:archived',
     'session:restored',
     'session:activity',
+    'session:identity',
     'session:sync',
     'session:renamed',
     'session:stopped',

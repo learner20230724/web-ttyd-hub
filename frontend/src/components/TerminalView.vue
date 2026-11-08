@@ -7,6 +7,7 @@ import ImageAttachments from './ImageAttachments.vue';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../stores/sessions';
 import { snapshotSequence, pendingWrapSequence, suppressQueryReplies } from '../utils/terminal-snapshot.mjs';
+import { untilAbort } from '../utils/request-deadline.mjs';
 import { hubUrl } from '../utils/base.mjs';
 import { loadContent, peekContent, saveContent } from '../utils/session-content.mjs';
 import { terminalCache, validSnapshot, applyTerminalDelta, encodeTerminalBytes, decodeTerminalBytes } from '../utils/terminal-cache.mjs';
@@ -17,7 +18,7 @@ const currentSession = computed(() => store.sessions.find(s => s.name === store.
 const runningName = computed(() => currentSession.value?.status === 'running' ? currentSession.value.name : null);
 // Windows workers own their ConPTY renderer; the native stream below uses tmux.
 const nativeName = computed(() => store.platform && store.platform !== 'win32' ? runningName.value : null);
-const nativeKey = computed(() => nativeName.value ? JSON.stringify([nativeName.value, currentSession.value.createdAt || '']) : null);
+const nativeKey = computed(() => nativeName.value ? JSON.stringify([nativeName.value, currentSession.value.createdAt || '', currentSession.value.codexThreadId || currentSession.value.resumeThreadId || '']) : null);
 const windowsSrc = computed(() => store.platform === 'win32' && runningName.value && !store.cachedSnapshot
   ? hubUrl(`/terminal/${encodeURIComponent(runningName.value)}`) : null);
 const host = ref(null);
@@ -28,18 +29,19 @@ async function attachImages() {
   const selected = currentSession.value, images = attachments.value.slice();
   if (!selected || !images.length || attaching.value) return;
   attaching.value = true; imageError.value = '';
+  const request = new AbortController(), timeout = setTimeout(() => request.abort(), 15000);
   try {
-    const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(selected.name)}/input`), { method:'POST', headers: { 'Content-Type':'application/json', 'X-TTYD-Generation': selected.createdAt || '' }, body: JSON.stringify({ images: images.map(x => x.id), key:null }) });
-    const data = await res.json(); if (!res.ok) throw new Error(data.error);
+    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(selected.name)}/input`), { method:'POST', headers: { 'Content-Type':'application/json', 'X-TTYD-Generation': selected.createdAt || '', 'X-TTYD-Thread': selected.codexThreadId || selected.resumeThreadId || '' }, body: JSON.stringify({ images: images.map(x => x.id), key:null }), signal: request.signal }), request.signal);
+    const data = await untilAbort(res.json(), request.signal); if (!res.ok) throw new Error(data.error);
     if (currentSession.value?.name === selected.name && currentSession.value?.createdAt === selected.createdAt) { attachments.value = []; host.value?.terminal?.focus(); }
   } catch (error) { imageError.value = `未确认加入终端，请先查看输入区：${error.message}`; }
-  finally { attaching.value = false; }
+  finally { clearTimeout(timeout); attaching.value = false; }
 }
 const connection = ref('');
 const windowsReady = ref(false);
 let nativeReadGuard = () => false;
 const releaseReadGuard = store.setReadGuard(selected => store.platform === 'win32'
-  ? windowsReady.value && !store.cachedSnapshot && runningName.value === selected.name
+  ? false // An iframe load cannot prove which completion reached its renderer.
   : nativeReadGuard(selected));
 watch(windowsSrc, () => { windowsReady.value = false; });
 function windowsLoaded() { windowsReady.value = true; store.markRead(); }
@@ -51,7 +53,7 @@ watch(nativeKey, async key => {
   dispose();
   nativeReadGuard = () => false;
   if (!key) return;
-  const [name, createdAt] = JSON.parse(key), session = { name, createdAt };
+  const [name, createdAt, codexThreadId] = JSON.parse(key), session = { name, createdAt, codexThreadId };
   await nextTick();
   if (version !== revision || !host.value) return;
   const element = host.value;

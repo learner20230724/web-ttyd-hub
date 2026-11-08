@@ -79,3 +79,14 @@ test('Windows does not send delayed Enter after a pasted worker is replaced', as
   await assert.rejects(manager.input('fixture', { text: 'Old session only', key: 'Enter' }), /会话已更换/);
   assert.deepEqual(terminal.commands, ['worker-text']);
 });
+
+for (const [platform, Manager] of [['Linux', Linux], ['Windows', Windows]]) {
+  test(`${platform} queued input rejects a changed Codex thread in the same terminal generation`, async () => {
+    const manager=fixture(Manager), previous=deferred();
+    const session=manager.sessions.get('fixture');session.codexThreadId='A';
+    manager.inputQueues.set('fixture',previous.promise);
+    const pending=manager.input('fixture',{key:'Enter'});
+    session.codexThreadId='B';previous.resolve();
+    await assert.rejects(pending,/会话已更换/);assert.deepEqual(terminal.commands,[]);
+  });
+}

@@ -49,10 +49,10 @@ test('confirming a newer revision of the same completed turn persists and broadc
   assert.equal(f.saved.length, 2); assert.equal(f.broadcasts.length, 2);
 });
 
-test('legacy read operations remain compatible and record the current revision when known', () => {
+test('legacy reads cannot acknowledge a versioned answer', () => {
   const f = fixture('r2');
-  assert.equal(f.manager.sync.apply(f.op()).accepted, true);
-  assert.deepEqual(f.manager.sync.snapshot().read.reader, marker('r2'));
+  assert.equal(f.manager.sync.apply(f.op()).accepted, false);
+  assert.equal(f.manager.sync.snapshot().read.reader, undefined);
   const oldServer = fixture(null);
   assert.equal(oldServer.manager.sync.apply(oldServer.op()).accepted, true);
   assert.deepEqual(oldServer.manager.sync.snapshot().read.reader, marker());

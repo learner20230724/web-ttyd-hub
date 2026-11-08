@@ -109,8 +109,14 @@ async function fixture(browser, scenario) {
   const page = await context.newPage(), errors = [], browserInputs = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', req => { if (req.method() !== 'GET') browserInputs.push(req.url()); });
-  await page.goto(url);
-  await page.getByText(partial, { exact: true }).waitFor({ timeout: 2500 });
+  try {
+    await page.goto(url);
+    if (!retained) await page.getByText(partial, { exact: true }).waitFor({ timeout: 5000 });
+  } catch (error) {
+    await context.close(); wss.clients.forEach(client => client.terminate()); wss.close();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    throw error;
+  }
   if (lateRevision) {
     session.activity = { ...session.activity, contentRevision: 'r2' };
     if (scenario === 'late-revision-ws') manager.emit('session:activity', session);

@@ -15,7 +15,7 @@ const { CodexActivity } = require('../server/services/codex-activity');
 
 const createdAt = '2026-10-20T00:00:00Z';
 const answer = '合成历史最终回答：冷启动无需发送消息即可阅读。';
-const dialoguePending = '对话记录尚未就绪，可先查看全文。';
+const dialoguePending = '正在同步…';
 const terminal = '完整终端合成记录\n• Ran synthetic-build\n  └ TOOL_DETAIL_ONLY_IN_FULL\n' + answer;
 const screenshots = path.join(__dirname, '../output/playwright/ux-audit');
 
@@ -123,7 +123,7 @@ async function fixture(browser, { hidden = false, cachedFallback = false, withOt
         assert.equal(await f.page.getByText('暂时无法读取回答，正在自动重试。', { exact: true }).count(), 0,
           'An optional cached terminal snapshot is not a failed answer request');
         if (cachedFallback) await f.page.screenshot({ path: path.join(screenshots, '01-cold-start-fallback.png') });
-        await f.page.locator('.answer-placeholder').getByRole('button', { name: '查看全文', exact: true }).tap();
+        await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
         await f.page.getByText(/TOOL_DETAIL_ONLY_IN_FULL/).waitFor({ timeout: 1000 });
         await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
         await f.page.getByText(cachedFallback ? dialoguePending : '正在读取回答…', { exact: true }).waitFor({ timeout: 1000 });
@@ -172,7 +172,7 @@ async function fixture(browser, { hidden = false, cachedFallback = false, withOt
       assert.equal(await unavailable.page.locator('.mobile-output').count(), 0);
       assert.equal(await unavailable.page.locator('.status-guidance').count(), 0, 'An unavailable answer needs no additional header banner');
       await unavailable.page.screenshot({ path: path.join(screenshots, '05-answer-source-unavailable.png') });
-      await unavailable.page.locator('.answer-placeholder').getByRole('button', { name: '查看全文', exact: true }).tap();
+      await unavailable.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
       await unavailable.page.getByText(/TOOL_DETAIL_ONLY_IN_FULL/).waitFor({ timeout: 1000 });
       assert.equal(unavailable.inputs, 0);
       await unavailable.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();

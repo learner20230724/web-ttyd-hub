@@ -51,7 +51,9 @@ test('Chinese creation and rename preserve the live terminal, broadcast, and lif
   const base = `http://127.0.0.1:${env.PORT}`;
   let terminal, events;
   async function api(url, method = 'GET', body) {
-    const res = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json' },
+    const name = url.split('/')[3];
+    const selected = name && (await (await fetch(base + '/api/sessions')).json()).sessions.find(s => s.name === name);
+    const res = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', ...(selected ? { 'X-TTYD-Generation': selected.createdAt } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: res.status, data: await res.json() };
   }

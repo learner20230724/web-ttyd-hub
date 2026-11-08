@@ -18,6 +18,7 @@ app.get('/api/sessions/:name/mobile', (req, res) => contentResponse(req, res, re
   ? { text: terminalText, activity: session.activity }
   : { messages: state.messages, inputReceipts: state.inputReceipts || [], activity: session.activity }));
 app.post('/api/sessions/:name/input', async (req, res) => {
+  const receivedAfter = new Date().toISOString();
   writes.push(req.body);
   if (holdInput) {
     if (holdInput === 'body') res.type('json').write('{');
@@ -28,12 +29,12 @@ app.post('/api/sessions/:name/input', async (req, res) => {
   if (req.body.text && req.body.key === 'Enter' && confirm) {
     if (kind === 'question') {
       const id = 'call-' + sequence++;
-      applyEvent(state, { type: 'response_item', payload: { type: 'function_call', name: 'request_user_input', call_id: id } });
-      applyEvent(state, { type: 'response_item', payload: { type: 'function_call_output', call_id: id, output: JSON.stringify({ answers: { choice: { answers: ['Option A', 'user_note: ' + req.body.text] } } }) } });
-    } else state.messages.push({ id: 'message-' + sequence++, role: 'user', text: req.body.text });
+      applyEvent(state, { type: 'response_item', timestamp: new Date().toISOString(), payload: { type: 'function_call', name: 'request_user_input', call_id: id } });
+      applyEvent(state, { type: 'response_item', timestamp: new Date().toISOString(), payload: { type: 'function_call_output', call_id: id, output: JSON.stringify({ answers: { choice: { answers: ['Option A', 'user_note: ' + req.body.text] } } }) } });
+    } else state.messages.push({ id: 'message-' + sequence++, role: 'user', text: req.body.text, timestamp: new Date().toISOString() });
   }
   await new Promise(r => setTimeout(r, 100));
-  res.json({ ok: true });
+  res.json({ ok: true, receivedAfter });
 });
 app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
 (async () => {

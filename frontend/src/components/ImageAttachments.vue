@@ -1,11 +1,13 @@
 <script setup>
 import { ref, onBeforeUnmount } from 'vue'
+import { untilAbort } from '../utils/request-deadline.mjs'
+import { draftKey } from '../utils/session-drafts.mjs'
 import { hubUrl } from '../utils/base.mjs'
 const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, previewTarget: String })
 const emit = defineEmits(['update:modelValue', 'busy', 'error'])
 const picker = ref(null), uploading = ref(false)
 let disposed = false
-const request = new AbortController()
+let request = new AbortController()
 onBeforeUnmount(() => { disposed = true; request.abort() })
 async function addFiles(files) {
   if (props.disabled || uploading.value) return
@@ -13,20 +15,22 @@ async function addFiles(files) {
   if (!selected.length) return
   if (selected.length + props.modelValue.length > 8) { emit('error', '一次最多添加 8 张图片'); return }
   const session = props.session, items = [...props.modelValue]
+  request = new AbortController()
+  const timeout = setTimeout(() => request.abort(), 60000)
   uploading.value = true; emit('busy', true); emit('error', '')
   try {
     for (const file of selected) {
       if (file.size > 20 * 1024 * 1024) throw new Error('每张图片最大 20 MB')
-      const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images`), {
-        method: 'POST', headers: { 'Content-Type': file.type, 'X-TTYD-Generation': session.createdAt || '' }, body: file, signal: request.signal,
-      })
-      const data = await res.json()
+      const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images`), {
+        method: 'POST', headers: { 'Content-Type': file.type, 'X-TTYD-Generation': session.createdAt || '', 'X-TTYD-Thread': session.codexThreadId || session.resumeThreadId || '' }, body: file, signal: request.signal,
+      }), request.signal)
+      const data = await untilAbort(res.json(), request.signal)
       if (!res.ok) throw new Error(data.error || '图片上传失败')
-      if (disposed || props.session.name !== session.name || props.session.createdAt !== session.createdAt) return
+      if (disposed || draftKey(props.session) !== draftKey(session)) return
       if (!items.some(item => item.id === data.id)) items.push({ id: data.id, name: file.name || '截图' }); emit('update:modelValue', [...items])
     }
   } catch (error) { if (!disposed) emit('error', error.message) }
-  finally { uploading.value = false; if (!disposed) emit('busy', false); if (picker.value) picker.value.value = '' }
+  finally { clearTimeout(timeout); uploading.value = false; if (!disposed) emit('busy', false); if (picker.value) picker.value.value = '' }
 }
 function paste(event) {
   const files = Array.from(event.clipboardData?.files || []).filter(f => f.type.startsWith('image/'))

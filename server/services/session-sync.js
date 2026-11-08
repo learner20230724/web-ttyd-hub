@@ -1,3 +1,4 @@
+const { createHash } = require('node:crypto');
 // Shared by every client of this Hub (the Hub has no per-user accounts).
 // Mutate individual intentions, never replace state with a device's snapshot.
 const validName = value => typeof value === 'string' && /^[a-zA-Z0-9_-]+$/.test(value);
@@ -13,6 +14,7 @@ class SessionSync {
     if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
         !value.read || typeof value.read !== 'object' || Array.isArray(value.read) ||
         (value.layout !== null && !validLayout(value.layout)) ||
+        (value.operations !== undefined && (!Array.isArray(value.operations) || value.operations.length > 4096 || value.operations.some(x => !x || typeof x.id !== 'string' || !/^[a-f0-9]{64}$/.test(x.hash) || !Number.isSafeInteger(x.issuedAt)))) ||
         !Object.entries(value.read).every(([name, marker]) => validName(name) && marker && validTime(marker.createdAt) &&
           typeof marker.completed === 'string' && marker.completed.length > 0 && marker.completed.length <= 1000 &&
           (marker.contentRevision === undefined || validRevision(marker.contentRevision)))) {
@@ -21,7 +23,8 @@ class SessionSync {
     return value;
   }
   restore(value) { this.value = value == null ? empty() : SessionSync.validate(value); }
-  snapshot() { return this.value; }
+  durable() { return this.value; }
+  snapshot() { const { operations, ...publicState } = this.value; return publicState; }
   prune() {
     const names = this.manager.sessions;
     const previous = this.value;
@@ -33,6 +36,23 @@ class SessionSync {
   apply(op) {
     if (!op || !['read', 'pin', 'move', 'initialize'].includes(op.type)) throw new Error('无效的状态同步操作');
     const previous = this.value;
+    let operation;
+    if (op.opId !== undefined) {
+      if (typeof op.opId !== 'string' || !/^[a-zA-Z0-9_-]{16,80}$/.test(op.opId) ||
+          !Number.isSafeInteger(op.issuedAt) || op.issuedAt > Date.now() + 60000 || Date.now() - op.issuedAt > 7 * 86400000)
+        throw new Error('操作已过期，请重新操作');
+      const hash = createHash('sha256').update(JSON.stringify(op)).digest('hex');
+      const seen = previous.operations?.find(x => x.id === op.opId);
+      if (seen) {
+        if (seen.hash !== hash) throw new Error('操作标识冲突');
+        return { shared: this.snapshot(), accepted: true };
+      }
+      operation = { id: op.opId, hash, issuedAt: op.issuedAt };
+      // Never evict a still-retryable operation: old retries could otherwise
+      // overwrite later intentions. Refuse excess work until the window expires.
+      if ((previous.operations || []).filter(x => Date.now() - x.issuedAt <= 7 * 86400000).length >= 4096)
+        throw Object.assign(new Error('同步队列已满，请稍后重试'), { status: 503 });
+    }
     let next = structuredClone(previous);
     const session = this.manager.sessions.get(op.name);
     if (op.type === 'initialize') {
@@ -44,7 +64,7 @@ class SessionSync {
     } else {
       if (!validName(op.name) || !validTime(op.createdAt)) throw new Error('无效的会话身份');
       // Requests from sleeping devices must not affect a same-name replacement.
-      if (!session || session.createdAt !== op.createdAt || session.archivedAt) return { shared: previous, accepted: false };
+      if (!session || session.createdAt !== op.createdAt || session.archivedAt) return { shared: this.snapshot(), accepted: false };
       const layout = next.layout || { order: this.manager.list().map(s => s.name), pinned: [] };
       const promote = () => { layout.order = [op.name, ...layout.order.filter(name => name !== op.name)]; next.layout = layout; };
       if (op.type === 'read') {
@@ -53,10 +73,8 @@ class SessionSync {
         const activity = session.activity || {};
         if (session.status !== 'running' || activity.completed !== op.completed || activity.busy || activity.available === false ||
             activity.error || ['waiting', 'error', 'interrupted', 'unknown'].includes(activity.phase) ||
-            (op.contentRevision !== undefined && op.contentRevision !== activity.contentRevision)) return { shared: previous, accepted: false };
-        // Older clients still acknowledge a completed turn without a content
-        // version. New clients supply it, preventing a stale partial reply from
-        // acknowledging a final reply published under the same turn token.
+            (activity.contentRevision ? op.contentRevision !== activity.contentRevision : op.contentRevision !== undefined)) return { shared: this.snapshot(), accepted: false };
+        // A versioned answer can only be acknowledged at its rendered version.
         const contentRevision = validRevision(activity.contentRevision) ? activity.contentRevision : undefined;
         const marker = next.read[op.name];
         const sameTurn = marker?.createdAt === op.createdAt && marker?.completed === op.completed;
@@ -77,10 +95,10 @@ class SessionSync {
         if (!validName(op.target) || !validTime(op.targetCreatedAt) || typeof op.after !== 'boolean') throw new Error('无效的排序目标');
         const target = this.manager.sessions.get(op.target);
         if (!target || target.createdAt !== op.targetCreatedAt || target.archivedAt || op.name === op.target ||
-            layout.pinned.includes(op.name) !== layout.pinned.includes(op.target)) return { shared: previous, accepted: false };
+            layout.pinned.includes(op.name) !== layout.pinned.includes(op.target)) return { shared: this.snapshot(), accepted: false };
         const positions = new Map(layout.order.map((name, index) => [name, index]));
         const priority = s => {
-          const a = s.activity || {}, marker = next.read[s.name];
+          const a = s.activity?.available === false && s.lastKnownActivity ? s.lastKnownActivity : s.activity || {}, marker = next.read[s.name];
           if (s.status !== 'running') return 2;
           if (a.phase === 'waiting' || a.phase === 'error' || (a.error && !a.busy)) return -1;
           if (a.phase === 'interrupted') return 2;
@@ -96,15 +114,16 @@ class SessionSync {
         next.layout = { ...layout, order, manual: true };
       }
     }
+    if (operation) next.operations = [...(next.operations || []).filter(x => Date.now() - x.issuedAt <= 7 * 86400000), operation];
     if (JSON.stringify(next) !== JSON.stringify(previous)) {
       next.revision++;
       this.value = next;
       try { this.manager.state?.save(this.manager.list(), next); }
       catch { this.value = previous; throw Object.assign(new Error('无法保存会话状态，请稍后重试'), { status: 503 }); }
       // Persist before broadcasting so a successful receipt survives restart.
-      this.manager.emit('session:sync', next);
+      this.manager.emit('session:sync', this.snapshot());
     }
-    return { shared: this.value, accepted: true };
+    return { shared: this.snapshot(), accepted: true };
   }
 }
 module.exports = SessionSync;

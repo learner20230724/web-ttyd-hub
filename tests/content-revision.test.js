@@ -116,9 +116,10 @@ test(platform + ': ' + 'a published dialogue cannot be returned for a replacemen
   f.manager.sessions.set(f.session.name, { ...f.session, createdAt: 'generation-two' });
   f.activity.ready = async () => {};
   const result = await Manager.prototype.mobile.call(f.manager, f.session.name);
-  assert.equal(result.messages, undefined);
-  assert.equal(result.completed, null);
-  assert.equal(result.contentRevision, null);
+  assert.deepEqual(result.messages, []);
+  assert.equal(result.sourceState, 'unavailable');
+  assert.equal(result.completed, undefined);
+  assert.equal(result.contentRevision, undefined);
 });
 
 }

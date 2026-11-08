@@ -1,4 +1,5 @@
 const express = require('express');
+const { matchesThread, currentThread } = require('../services/session-identity');
 const contentResponse = require('../services/content-response');
 const { getProjects, resolveProject } = require('../services/codex-projects');
 const { history, pathKey } = require('../services/codex-history');
@@ -11,7 +12,13 @@ module.exports = function (sessionManager) {
     const name = req.params.name, generation = sessionManager.getSession(name).createdAt || '';
     const requested = req.headers['x-ttyd-generation'];
     if (requested !== undefined && requested !== generation) throw replacedSession();
-    return JSON.stringify([name, generation, view]);
+    const thread = currentThread(sessionManager.getSession(name));
+    if (req.headers['x-ttyd-thread'] !== undefined && req.headers['x-ttyd-thread'] !== (thread || '')) throw replacedSession();
+    return JSON.stringify([name, generation, view, thread]);
+  };
+  const requireIdentity = req => {
+    if (req.headers['x-ttyd-generation'] !== (sessionManager.getSession(req.params.name).createdAt || '')) throw replacedSession();
+    contentScope(req, 'mutation');
   };
   const images = sessionManager.activity?.images || new (require('../services/session-images').SessionImages)();
   router.post('/:name/images', express.raw({ type: 'image/*', limit: '20mb' }), async (req, res) => {
@@ -69,27 +76,30 @@ module.exports = function (sessionManager) {
       const rows = (await history().load()).filter(x => pathKey(x.cwd) === pathKey(cwd) && (!q || `${x.title} ${x.id}`.toLowerCase().includes(q)));
       const sessions = rows.slice(offset, offset + 50).map(({ rolloutPath, ...row }) => {
         const linked = sessionManager.list().find(x => x.shell === 'codex' && x.cwd && pathKey(x.cwd) === pathKey(cwd) &&
-          (x.codexThreadId === row.id || x.resumeThreadId === row.id) && (!x.expiresAt || Date.parse(x.expiresAt) > Date.now()));
+          matchesThread(x, row.id) && (!x.expiresAt || Date.parse(x.expiresAt) > Date.now()));
         return { ...row, hubSession: linked ? { name: linked.name, status: linked.status, archived: !!linked.archivedAt } : null };
       });
       res.json({ sessions, total: rows.length, nextOffset: offset + sessions.length < rows.length ? offset + sessions.length : null });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
 
   router.get('/codex-history/:id', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try { res.json(await history().preview(await resolveProject(req.query.cwd), req.params.id)); }
-    catch (err) { res.status(400).json({ error: err.message }); }
+    catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
 
   router.get('/', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    res.json({ stateEpoch: sessionManager.activity?.epoch, sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot() });
+    res.json({ build: require('../services/build-version'), stateEpoch: sessionManager.activity?.epoch, sessions: sessionManager.list(), shared: sessionManager.sync?.snapshot() });
   });
 
   router.post('/sync', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    try { res.json(sessionManager.sync.apply(req.body)); }
+    try {
+      if (['pin', 'move'].includes(req.body?.type) && !req.body.opId) throw Object.assign(new Error('请刷新页面后重试'), { status: 409 });
+      res.json(sessionManager.sync.apply(req.body));
+    }
     catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
 
@@ -102,7 +112,7 @@ module.exports = function (sessionManager) {
         if (!resumeLocks.has(key)) {
           const task = Promise.resolve().then(async () => {
             const existing = sessionManager.list().find(x => x.shell === 'codex' && x.cwd && pathKey(x.cwd) === pathKey(options.cwd) &&
-              (x.codexThreadId === options.resumeThreadId || x.resumeThreadId === options.resumeThreadId) && (!x.expiresAt || Date.parse(x.expiresAt) > Date.now()));
+              matchesThread(x, options.resumeThreadId) && (!x.expiresAt || Date.parse(x.expiresAt) > Date.now()));
             if (existing) {
               if (existing.archivedAt) sessionManager.restoreArchived(existing.name);
               if (existing.status !== 'running') await sessionManager.restart(existing.name);
@@ -119,7 +129,7 @@ module.exports = function (sessionManager) {
       const session = await sessionManager.create(name, shell, cwd);
       res.status(201).json(session);
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(err.status || 400).json({ error: err.message });
     }
   });
 
@@ -132,7 +142,7 @@ module.exports = function (sessionManager) {
       // body even if the request was already capturing its terminal output.
       if (scope !== contentScope(req, 'history')) throw replacedSession();
       const current = sessionManager.getSession(req.params.name);
-      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity && { ...current.activity, ...(current.activity.error ? { error: String(current.activity.error).slice(0, 256) } : {}) } })).toString('base64url'));
+      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, codexThreadId: currentThread(current), stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity && { ...current.activity, ...(current.activity.error ? { error: String(current.activity.error).slice(0, 256) } : {}) } })).toString('base64url'));
       sendContent(req, res, data, scope);
     } catch (err) {
       res.status(err.status || 400).json({ error: err.message });
@@ -144,68 +154,75 @@ module.exports = function (sessionManager) {
     try {
       const full = req.query.view === 'full';
       const scope = contentScope(req, full ? 'full' : 'answer');
-      const data = await sessionManager.mobile(req.params.name, full);
+      const data = req.query.before !== undefined && !full ? await sessionManager.activity.earlier(req.params.name, req.query.before) : await sessionManager.mobile(req.params.name, full);
       if (scope !== contentScope(req, full ? 'full' : 'answer')) throw replacedSession();
       const current = sessionManager.getSession(req.params.name);
-      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity && { ...current.activity, ...(current.activity.error ? { error: String(current.activity.error).slice(0, 256) } : {}) } })).toString('base64url'));
+      res.set('X-TTYD-State', Buffer.from(JSON.stringify({ name: current.name, createdAt: current.createdAt, codexThreadId: currentThread(current), stateEpoch: current.stateEpoch, activityRevision: current.activityRevision, verifiedAt: current.verifiedAt, activity: current.activity && { ...current.activity, ...(current.activity.error ? { error: String(current.activity.error).slice(0, 256) } : {}) } })).toString('base64url'));
       sendContent(req, res, data, scope);
     }
     catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
   router.post('/:name/input', async (req, res) => {
     try {
-      contentScope(req, 'input');
+      const scope = contentScope(req, 'input');
       const session = sessionManager.getSession(req.params.name);
       const paths = await images.resolveUploads(session, req.body.images);
-      if (session !== sessionManager.getSession(req.params.name)) throw replacedSession();
-      res.json(await sessionManager.input(req.params.name, { text: req.body.text, key: req.body.key, images: paths }));
+      if (session !== sessionManager.getSession(req.params.name) || scope !== contentScope(req, 'input')) throw replacedSession();
+      const receivedAfter = new Date().toISOString();
+      const result = await sessionManager.input(req.params.name, { text: req.body.text, key: req.body.key, images: paths });
+      res.json({ ...result, receivedAfter, threadId: currentThread(session) });
     }
-    catch (err) { res.status(400).json({ error: err.message }); }
+    catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
 
   router.patch('/:name', (req, res) => {
     try {
+      requireIdentity(req);
       res.json(sessionManager.rename(req.params.name, req.body.name));
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(err.status || 400).json({ error: err.message });
     }
   });
 
   router.post('/:name/stop', (req, res) => {
     try {
+      requireIdentity(req);
       const session = sessionManager.stop(req.params.name);
       res.json(session);
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(err.status || 400).json({ error: err.message });
     }
   });
 
   router.post('/:name/restart', async (req, res) => {
     try {
+      requireIdentity(req);
       const session = await sessionManager.restart(req.params.name);
       res.json(session);
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(err.status || 400).json({ error: err.message });
     }
   });
 
   router.post('/:name/restore', (req, res) => {
-    try { res.json(sessionManager.restoreArchived(req.params.name)); }
-    catch (err) { res.status(400).json({ error: err.message }); }
+    try { requireIdentity(req); res.json(sessionManager.restoreArchived(req.params.name)); }
+    catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
   router.delete('/:name/permanent', async (req, res) => {
     try {
+      requireIdentity(req);
       if (!sessionManager.getSession(req.params.name).archivedAt) throw new Error('请先将会话移入归档');
       res.json(await sessionManager.remove(req.params.name));
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
   });
 
   router.delete('/:name', async (req, res) => {
     try {
+      requireIdentity(req);
       const result = sessionManager.archive(req.params.name);
       res.json(result);
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(err.status || 400).json({ error: err.message });
     }
   });
 

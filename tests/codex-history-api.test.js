@@ -60,6 +60,10 @@ test('Project/history API supports search, pagination, previews, resume validati
   assert.equal((await request('/codex-history' + query + '&q=' + id(1))).data.sessions[0].hubSession.name, opened[0].data.name);
   sessions[0].status = 'stopped'; sessions[0].archivedAt = new Date().toISOString(); sessions[0].expiresAt = new Date(Date.now() + 10000).toISOString();
   assert.equal((await request('', body)).data.status, 'running'); assert.equal(calls.length, 1);
+  sessions[0].codexThreadId = id(2);
+  assert.equal((await request('/codex-history' + query + '&q=' + id(1))).data.sessions[0].hubSession, null);
+  const reopened = await request('', body);
+  assert.equal(calls.length, 2); assert.notEqual(reopened.data.name, sessions[0].name);
   assert.equal((await request('', { ...body, resumeThreadId: '../../bad' })).status, 400);
   assert.equal((await request('', { ...body, resumeThreadId: id(99) })).status, 400);
   assert.equal((await request('', { ...body, shell: 'bash' })).status, 400);

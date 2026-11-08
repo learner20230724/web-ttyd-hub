@@ -1,8 +1,9 @@
 <script setup>
 import { pageHidden, receiveVisibility } from '../utils/page-visibility.mjs'
+import { draftKey, loadDrafts, persistDrafts } from '../utils/session-drafts.mjs'
 import { hubUrl } from '../utils/base.mjs'
 
-import { ref, shallowRef, shallowReactive, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, shallowRef, markRaw, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { contentKey, peekContent, loadContent, fetchContent } from '../utils/session-content.mjs'
 import { untilAbort } from '../utils/request-deadline.mjs'
 import { inputKind, receiptCandidates, reconcileInputs } from '../utils/input-receipts.mjs'
@@ -45,15 +46,10 @@ const elapsed = computed(() => {
   return seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`
 })
 const content = shallowRef({}), error = ref(''), draft = ref(''), sending = ref(false), more = ref(false)
-const answerStartedAt = ref(Date.now()), structuredAnswers = shallowReactive(new Map())
+const answerStartedAt = ref(Date.now())
 const codexAnswer = computed(() => !props.showExecution && (session.value?.shell === 'codex' || session.value?.activity?.detected))
-// A live terminal fallback must supersede older dialogue, otherwise the answer
-// can remain frozen at the previous input while the terminal already moved on.
-const liveFallback = computed(() => codexAnswer.value && !Array.isArray(content.value.messages) &&
-  typeof content.value.text === 'string' && Boolean(content.value.text.trim()))
-const answerData = computed(() => liveFallback.value ? null : Array.isArray(content.value.messages) ? content.value :
-  codexAnswer.value && session.value ? structuredAnswers.get(contentKey(session.value, 'answer')) : null)
-const answerUnavailable = computed(() => codexAnswer.value && !Array.isArray(answerData.value?.messages))
+const answerData = computed(() => Array.isArray(content.value.messages) ? content.value : null)
+const answerUnavailable = computed(() => codexAnswer.value && (content.value.sourceState === 'unavailable' || !Array.isArray(answerData.value?.messages)))
 const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话还没有回答。' : store.cachedSnapshot
   ? '此视图暂无本地缓存，联网后自动加载。' :
   error.value ? '暂时无法读取回答，正在自动重试。' : Object.keys(content.value).length
@@ -62,26 +58,40 @@ const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话�
 const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
 const imagePicker = ref(null), imageUploading = ref(false), imageDrafts = ref({})
-const attachmentKey = computed(() => JSON.stringify([session.value?.name, session.value?.createdAt || '']))
+const attachmentKey = computed(() => draftKey(session.value))
 const attachments = computed({ get: () => imageDrafts.value[attachmentKey.value] || [], set: value => { imageDrafts.value[attachmentKey.value] = value } })
 watch(attachmentKey, () => { imageUploading.value = false })
 const canAttach = computed(() => session.value?.shell === 'codex' || session.value?.activity?.detected)
-const drafts = new Map()
+const drafts = loadDrafts()
+let activeDraftKey = ''
+function saveDraft() {
+  if (!activeDraftKey) return
+  const images = imageDrafts.value[activeDraftKey] || []
+  if (draft.value || images.length) drafts.set(activeDraftKey, { text: draft.value, images })
+  else drafts.delete(activeDraftKey)
+  persistDrafts(drafts)
+}
+watch([draft, imageDrafts], saveDraft, { deep: true, flush: 'sync' })
+watch(attachmentKey, key => {
+  saveDraft(); activeDraftKey = ''
+  draft.value = drafts.get(key)?.text || ''
+  imageDrafts.value[key] = drafts.get(key)?.images || []
+  activeDraftKey = key; more.value = false
+}, { immediate: true, flush: 'sync' })
+window.addEventListener('pagehide', saveDraft)
 const pendingBySession = ref({})
 const inputNotices = ref({})
 const inputErrors = ref({})
 let inputRequest = null
 const transcriptIds = new Map()
 let inputGenerations = new Map()
-watch(() => store.sessions.map(s => [s.name, s.createdAt || '']), entries => {
+watch(() => store.sessions.map(s => [s.name, draftKey(s)]), entries => {
   const next = new Map(entries)
   for (const [name, generation] of inputGenerations) {
     if (next.get(name) === generation) continue
-    drafts.delete(name); transcriptIds.delete(name)
+    transcriptIds.delete(name)
     delete pendingBySession.value[name]; delete inputNotices.value[name]; delete inputErrors.value[name]
-    // The selection watcher runs after this list update. Clear before it can
-    // save the removed terminal's visible draft under a reused name.
-    if (store.current === name) draft.value = ''
+    // Drafts are restored separately using the full conversation identity.
   }
   inputGenerations = next
 }, { immediate: true, flush: 'sync' })
@@ -97,7 +107,31 @@ function reconcilePending(name, data) {
 }
 function dismissPending(id) { pendingBySession.value[store.current] = pendingMessages.value.filter(item => item.id !== id) }
 const renderedMessages = new Map(), renderedOutput = new WeakMap()
-const messages = computed(() => (answerData.value?.messages || []).map(m => {
+const earlierMessages = shallowRef([]), earlierAvailable = ref(null), loadingEarlier = ref(false)
+async function loadEarlier() {
+  if (loadingEarlier.value || !session.value) return
+  const selected = session.value, key = visibleKey, token = epoch
+  const before = (earlierMessages.value[0] || answerData.value?.messages?.[0])?.id
+  if (!before) return
+  const request = new AbortController(), timeout = setTimeout(() => request.abort(), 15000)
+  loadingEarlier.value = true
+  try {
+    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(selected.name)}/mobile?before=${encodeURIComponent(before)}`), {
+      signal: request.signal, cache: 'no-store', headers: { 'X-TTYD-Generation': selected.createdAt || '', 'X-TTYD-Thread': selected.codexThreadId || selected.resumeThreadId || '' }
+    }), request.signal)
+    const data = await untilAbort(res.json(), request.signal)
+    if (!res.ok) throw new Error(data.error)
+    if (key !== visibleKey || token !== epoch) return
+    const height = pane.value?.scrollHeight || 0, top = pane.value?.scrollTop || 0
+    follow.value = false
+    earlierMessages.value = [...data.messages, ...earlierMessages.value]
+    earlierAvailable.value = data.hasEarlier
+    await nextTick()
+    if (pane.value) pane.value.scrollTop = top + pane.value.scrollHeight - height
+  } catch (e) { if (key === visibleKey && token === epoch) error.value = e.message }
+  finally { clearTimeout(timeout); loadingEarlier.value = false }
+}
+const messages = computed(() => [...new Map([...earlierMessages.value, ...(answerData.value?.messages || [])].map(m => [m.id, m])).values()].map(m => {
   const key = `${m.role}:${m.id}`
   const old = renderedMessages.get(key)
   if (old?.text === m.text && old?.phase === m.phase && JSON.stringify(old?.images) === JSON.stringify(m.images)) return old
@@ -159,17 +193,9 @@ function scrolled() {
   store.markRead()
 }
 async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight; store.markRead() }
-function retainAnswer(entry) {
-  const data = Array.isArray(entry?.data?.messages) ? entry.data : entry?.retainedAnswer
-  if (!Array.isArray(data?.messages) || structuredAnswers.get(entry.key) === data) return false
-  structuredAnswers.delete(entry.key); structuredAnswers.set(entry.key, data)
-  if (structuredAnswers.size > 32) structuredAnswers.delete(structuredAnswers.keys().next().value)
-  return true
-}
 async function display(entry, first = false) {
   if (!entry || entry.key !== visibleKey) return
-  const answerChanged = retainAnswer(entry)
-  if (entry.data === content.value && !answerChanged) return
+  if (entry.data === content.value) return
   content.value = markRaw(entry.data)
   const key = visibleKey
   await nextTick()
@@ -234,15 +260,14 @@ watch(() => [store.current, session.value?.activity?.phase, session.value?.activ
   // A newly completed turn still replaces an older in-flight progress request.
   if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, Boolean(value[3] && value[3] !== previous[3]))
 })
-watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot, () => props.refreshTrigger], async ([name, full], previous) => {
-  const previousName = previous?.[0]
+watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot, () => props.refreshTrigger, () => session.value?.codexThreadId || session.value?.resumeThreadId], async ([name, full]) => {
   if (visibleKey && pane.value) positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
-  if (previousName && name !== previousName) drafts.set(previousName, draft.value)
-  if (name !== previousName) { draft.value = drafts.get(name) || ''; more.value = false }
   const token = ++epoch, selected = session.value
   clearTimeout(timer); readingInFlight = false; nextReadAt = Date.now(); error.value = ''; answerStartedAt.value = Date.now(); switching = true
   const view = full ? 'full' : 'answer'
-  visibleKey = selected ? contentKey(selected, view) : null
+  const nextKey = selected ? contentKey(selected, view) : null
+  if (visibleKey !== nextKey) { earlierMessages.value = []; earlierAvailable.value = null }
+  visibleKey = nextKey
   follow.value = positions.get(visibleKey)?.follow ?? true
   const cached = selected ? peekContent(selected, view) : null
   content.value = {} // A different session must never display the previous session's text.
@@ -253,8 +278,6 @@ watch([() => store.current, () => props.showExecution, () => session.value?.crea
   // cannot hold up a fresh response. The unseen view only warms from local disk;
   // downloading full terminal logs waits until the user actually opens them.
   if (!cached) void loadContent(selected, view).then(stored => {
-    // loadContent merges a late verified dialogue into the latest entry without
-    // replacing its live payload. That retained answer must still reach the UI.
     if (token === epoch) return display(stored, true)
   })
   const other = full ? 'answer' : 'full'
@@ -269,16 +292,16 @@ async function send(key = 'Enter', withText = true) {
   if (sending.value || imageUploading.value || !session.value || store.cachedSnapshot) return
   // Vue postpones v-model updates during IME composition; send the visible text.
   const name = session.value.name, text = withText ? (composerInput.value?.value ?? draft.value) : ''
-  const generation = session.value.createdAt || ''
+  const generation = session.value.createdAt || '', identity = draftKey(session.value), threadId = session.value.codexThreadId || session.value.resumeThreadId || null
   const sentImages = withText ? attachments.value.slice() : [], imageKey = attachmentKey.value
-  const sameSession = () => inputGenerations.get(name) === generation
+  const sameSession = () => inputGenerations.get(name) === identity
   const kind = inputKind(text, session.value)
   if (withText) draft.value = text
   sending.value = true; error.value = ''
   quickRefreshUntil = Date.now() + 10000
   delete inputNotices.value[name]
   delete inputErrors.value[name]
-  const pending = (text || sentImages.length) && key === 'Enter' && kind === 'prompt' ? { id: `${Date.now()}-${Math.random()}`, text, images: sentImages, codex: true, status: 'sending', before: transcriptIds.get(name) || [] } : null
+  const pending = (text || sentImages.length) && key === 'Enter' && kind === 'prompt' ? { id: `${Date.now()}-${Math.random()}`, text, images: sentImages, codex: true, threadId, sentAt: Date.now(), status: 'sending', before: transcriptIds.get(name) || [] } : null
   if (pending) {
     pendingBySession.value[name] = [...(pendingBySession.value[name] || []), pending]
     await bottom()
@@ -290,16 +313,16 @@ async function send(key = 'Enter', withText = true) {
   let timedOut = false
   const confirmationTimeout = setTimeout(() => { timedOut = true; request.abort() }, 10000)
   try {
-    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TTYD-Generation': generation }, body: JSON.stringify({ text, key, ...(sentImages.length ? { images: sentImages.map(image => image.id) } : {}) }), signal: request.signal }), request.signal)
+    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TTYD-Generation': generation, 'X-TTYD-Thread': threadId || '' }, body: JSON.stringify({ text, key, ...(sentImages.length ? { images: sentImages.map(image => image.id) } : {}) }), signal: request.signal }), request.signal)
     const data = await untilAbort(res.json(), request.signal); if (!res.ok) throw new Error(data.error)
     if (disposed || !sameSession()) return
     if (pending) {
       const item = pendingBySession.value[name]?.find(item => item.id === pending.id)
-      if (item) item.status = 'delivered'
+      if (item) { item.status = 'delivered'; item.receivedAfter = data.receivedAfter; item.threadId = data.threadId || threadId }
     } else if (text) inputNotices.value[name] = { text: key ? '已发送到终端' : '已输入终端，尚未按回车', expiresAt: Date.now() + 4000 }
     if (withText) {
       delete imageDrafts.value[imageKey]
-      drafts.delete(name)
+      drafts.delete(imageKey); persistDrafts(drafts)
       if (store.current === name && draft.value === text) {
         draft.value = ''
         // Vue intentionally skips DOM writes during composition. Clear only
@@ -324,6 +347,7 @@ async function send(key = 'Enter', withText = true) {
   }
 }
 onBeforeUnmount(() => {
+  saveDraft(); window.removeEventListener('pagehide', saveDraft)
   disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
   readingResize?.disconnect()
   inputRequest?.abort()
@@ -356,14 +380,15 @@ onBeforeUnmount(() => {
         :data-content-revision="(codexAnswer ? answerData : content)?.contentRevision || null"
         :data-content-completed="(codexAnswer ? answerData : content)?.completed || null">
         <template v-if="!showExecution && messages.length">
+          <button v-if="earlierAvailable ?? answerData?.hasEarlier" type="button" :disabled="loadingEarlier" @click="loadEarlier">{{ loadingEarlier ? '加载中…' : '加载更早消息' }}</button>
           <article v-for="message in messages" :key="message.id" :class="['message', message.role]" :data-message-id="message.id">
             <div class="speaker">{{ message.role === 'user' ? '你' : message.phase === 'image' ? 'Codex · 图片' : message.phase === 'commentary' ? 'Codex · 工作进展' : 'Codex · 回复' }}</div>
             <div class="markdown" v-html="message.html"></div>
             <MessageImages v-if="message.images?.length" :images="message.images" :session-name="session.name" @loaded="alignReading" />
           </article>
         </template>
-        <div v-else-if="showExecution || !codexAnswer || liveFallback" class="terminal-segments">
-          <div v-if="liveFallback" class="speaker">实时终端</div>
+        <div v-else-if="showExecution || !codexAnswer" class="terminal-segments">
+          <div v-if="content.truncated" class="speaker">最近 {{ content.historyLimit }} 行</div>
           <template v-for="(segment, index) in outputSegments" :key="index">
             <div v-if="segment.type === 'table'" class="terminal-table" role="region" aria-label="终端表格，可左右滑动" tabindex="0">
               <table><tbody><tr v-for="(row, r) in segment.rows" :key="r"><td v-for="(cell, c) in row" :key="c">{{ cell }}</td></tr></tbody></table>
@@ -371,7 +396,7 @@ onBeforeUnmount(() => {
             <pre v-else class="mobile-output"><span v-for="(run, i) in segment.runs" :key="i" :style="run.style">{{ run.text }}</span></pre>
           </template>
         </div>
-        <div v-if="codexAnswer && !messages.length && !liveFallback" class="reading-placeholder answer-placeholder" role="status">
+        <div v-if="codexAnswer && !messages.length" class="reading-placeholder answer-placeholder" role="status">
           <p>{{ answerPlaceholder }}</p>
         </div>
         <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" :role="item.status === 'uncertain' ? 'alert' : 'status'">

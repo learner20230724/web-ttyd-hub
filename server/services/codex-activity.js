@@ -93,7 +93,7 @@ function applyEvent(state, event) {
             const text = answer.replace(/^user_note: ?/, '');
             if (!text.trim() || Buffer.byteLength(text) > 64000) return;
             state.inputReceipts ||= [];
-            state.inputReceipts.push({ id: `answer:${p.call_id}:${question}:${index}`, text });
+            state.inputReceipts.push({ id: `answer:${p.call_id}:${question}:${index}`, text, timestamp: event.timestamp });
             if (state.inputReceipts.length > 300) state.inputReceipts.shift();
           });
         }
@@ -176,9 +176,10 @@ class CodexActivity {
         generation, state.identity || '', state.path || '', messages, inputReceipts, completed,
       ])).digest('hex');
       activity = { ...activity, contentRevision };
-      this.snapshots.set(session.name, { generation, messages, inputReceipts, completed, contentRevision, activity });
+      this.snapshots.set(session.name, { generation, threadId: session.codexThreadId || session.resumeThreadId || null, messages, inputReceipts, completed, contentRevision, activity, hasEarlier: state.sequence > messages.length });
     } else this.snapshots.delete(session.name);
     const changed = JSON.stringify(session.activity) !== JSON.stringify(activity);
+    if (activity.available) session.lastKnownActivity = activity;
     session.activity = activity;
     const revision = (this.versions.get(session.name) || 0) + (changed ? 1 : 0);
     this.versions.set(session.name, revision);
@@ -219,6 +220,8 @@ class CodexActivity {
       const threadId = filename.match(/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i)?.[1];
       if (threadId && threadId !== session.codexThreadId) {
         session.codexThreadId = threadId;
+        session.lastKnownActivity = null;
+        this.snapshots.delete(session.name);
         this.manager.emit('session:identity', this.manager.serialize(session));
       }
       let state = this.states.get(session.name);
@@ -295,9 +298,38 @@ class CodexActivity {
       for (const session of this.manager.sessions.values()) this.publish(session, { available: false, busy: false, phase: 'unknown', completed: null, source: null });
     }
   }
+  async earlier(name, before) {
+    if (typeof before !== 'string' || before.length > 160) throw new Error('无效的历史位置');
+    const session = this.manager.getSession(name), source = this.states.get(name);
+    if (!source || !this.contentSnapshot(name)) throw new Error('对话尚未同步');
+    const identity = source.identity, filename = source.path, end = source.offset;
+    const state = { messages: [], sequence: 0 }, started = Date.now();
+    const stream = createReadStream(filename, { end: end - 1 });
+    const lines = require('node:readline').createInterface({ input: stream, crlfDelay: Infinity });
+    let found = false, messages;
+    try {
+      for await (const line of lines) {
+        if (Date.now() - started > 10000) throw new Error('历史读取超时，请重试');
+        let event;
+        try { event = JSON.parse(line); } catch { continue; }
+        const previous = state.messages.slice();
+        await source.projectImages?.(event); applyEvent(state, event);
+        const index = state.messages.findIndex(m => m.id === before);
+        if (index !== -1) {
+          messages = [...new Map([...previous, ...state.messages.slice(0, index)].map(m => [m.id, m])).values()].slice(-300);
+          found = true; break;
+        }
+      }
+    } finally { lines.close(); stream.destroy(); }
+    const stat = await fs.stat(filename);
+    if (!found || this.manager.getSession(name) !== session || this.states.get(name) !== source ||
+        identity !== `${stat.dev}:${stat.ino}` || stat.size < end) throw new Error('历史已变化，请重新读取');
+    return { messages, threadId: session.codexThreadId || session.resumeThreadId || null,
+      hasEarlier: Boolean(messages.length && Number(messages[0].id.split(':').at(-1)) > 0) };
+  }
   contentSnapshot(name) {
     const value = this.snapshots.get(name), session = this.manager.sessions.get(name);
-    return session && value?.generation === (session.createdAt || '') ? value : null;
+    return session && value?.generation === (session.createdAt || '') && value.threadId === (session.codexThreadId || session.resumeThreadId || null) ? value : null;
   }
   messages(name) {
     const published = this.contentSnapshot(name);

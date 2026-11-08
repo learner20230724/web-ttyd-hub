@@ -8,7 +8,7 @@ const STORAGE_TIMEOUT = 500
 const CONDITIONAL_WAIT = 75
 let database, liveSessions = null
 const databaseName = 'ttyd-hub-content-v1' + (basePath ? ':' + basePath : '')
-export const contentKey = (session, view) => JSON.stringify([...(basePath ? [basePath] : []), session.name, session.createdAt || '', view])
+export const contentKey = (session, view) => JSON.stringify([...(basePath ? [basePath] : []), session.name, session.createdAt || '', view, ...((session.codexThreadId || session.resumeThreadId) ? [session.codexThreadId || session.resumeThreadId] : [])])
 const allowed = entry => !liveSessions || liveSessions.get(entry.sessionId) === entry.generation
 const structured = data => Array.isArray(data?.messages)
 function retainAnswer(entry, previous) {
@@ -137,7 +137,7 @@ export async function fetchContent(session, view, { mobile = true, fresh = false
     const timeout = setTimeout(() => controller.abort(), 15000)
     try {
       const url = hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/${path}`)
-      const headers = session.createdAt ? { 'X-TTYD-Generation':session.createdAt } : {}
+      const headers = { 'X-TTYD-Generation':session.createdAt || '', 'X-TTYD-Thread':session.codexThreadId || session.resumeThreadId || '' }
       let data, etag
       for (let attempt = 0; attempt < 2; attempt++) {
         const conditional = attempt === 0 && cached?.etag

@@ -96,9 +96,8 @@ async function readableCache(browser) {
     await until(() => f.fallbackResponses > 0, 'successful terminal fallback');
     await f.advanceClock();
     assert.equal(await f.page.locator('.message').count(), 0);
-    assert.match(await f.page.locator('.terminal-segments').innerText(), /SYNTHETIC_TOOL_DETAIL_ONLY_IN_FULL/);
-    assert.equal(await f.page.locator('.answer-placeholder').count(), 0,
-      'Live output needs no unavailable placeholder');
+    assert.equal(await f.page.locator('.terminal-segments').count(), 0);
+    assert.equal(await f.page.locator('.answer-placeholder').count(), 1);
     assert.doesNotMatch(await f.page.locator('.mobile-reading').innerText(), /暂时无法读取回答|正在自动重试/);
   } finally { await f.close(); }
 }
@@ -108,16 +107,16 @@ async function successfulFallback(browser) {
   try {
     await until(() => f.fallbackResponses > 0, 'first successful fallback');
     await f.advanceClock();
-    await f.page.getByText('实时终端', { exact: true }).waitFor({ timeout: 1500 });
+    await f.page.locator('.answer-placeholder').waitFor({ timeout: 1500 });
     assert.doesNotMatch(await f.page.locator('.mobile-reading').innerText(), /暂时无法读取回答|正在自动重试/);
-    assert.equal(await f.page.locator('.terminal-segments').count(), 1, 'Current terminal output is explicitly labelled during a source gap');
+    assert.equal(await f.page.locator('.terminal-segments').count(), 0, 'Terminal output belongs only to full view');
     f.setReply('New live output while the source remains unavailable'); await f.refresh();
-    await f.page.getByText(/New live output while the source remains unavailable/).waitFor();
+    assert.equal(await f.page.getByText(/New live output while the source remains unavailable/).count(), 0);
     await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
     await f.page.getByText(new RegExp(fullDetail)).waitFor({ timeout: 1500 });
     assert.equal(await f.page.locator('.message').count(), 0);
     await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
-    await f.page.getByText('实时终端', { exact: true }).waitFor({ timeout: 1500 });
+    await f.page.locator('.answer-placeholder').waitFor({ timeout: 1500 });
   } finally { await f.close(); }
 }
 
@@ -153,7 +152,7 @@ async function retainedReadGuard(browser) {
     await f.page.evaluate(() => window.dispatchEvent(new Event('focus')));
     await f.page.waitForTimeout(350);
     assert.equal(await f.page.locator('.message').count(), 0);
-    assert.match(await f.page.locator('.terminal-segments').innerText(), /SYNTHETIC_TOOL_DETAIL_ONLY_IN_FULL/);
+    assert.equal(await f.page.locator('.terminal-segments').count(), 0);
     assert.equal(f.reads.some(read => read.completed === 't2'), false,
       'Showing retained t1 cannot acknowledge t2 merely because the latest terminal fallback carries t2');
     assert.equal(f.manager.sync.snapshot().read['answer-fixture'].completed, 't1');

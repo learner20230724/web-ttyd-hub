@@ -15,6 +15,8 @@ export function createSessionSync({ sessions, legacyRead, legacyReadRevisions = 
     const saved = JSON.parse(sessionStorage.getItem(pendingKey))
     if (Array.isArray(saved)) pending = saved.slice(0, 1000).filter(op => op && ['read', 'pin', 'move', 'initialize'].includes(op.type))
   } catch {}
+  const identify = op => !['pin', 'move'].includes(op.type) || op.opId ? op : { ...op, opId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`, issuedAt: Date.now() };
+  pending = pending.map(identify);
   const save = () => { try { sessionStorage.setItem(pendingKey, JSON.stringify(pending)) } catch {} }
   function render() {
     const source = shared || preview
@@ -71,7 +73,7 @@ export function createSessionSync({ sessions, legacyRead, legacyReadRevisions = 
     const current = () => !disposed && sending === request && !request.signal.aborted
     try {
       while (pending.length && current()) {
-        const op = pending[0]
+        const op = pending[0] = identify(pending[0]); save()
         const session = op.type === 'read' && sessions().find(value => value.name === op.name && value.createdAt === op.createdAt)
         if (session?.activity?.contentRevision && (session.activity.completed !== op.completed || session.activity.contentRevision !== op.contentRevision)) {
           // An old queue or legacy migration cannot turn an unseen newer
@@ -127,7 +129,7 @@ export function createSessionSync({ sessions, legacyRead, legacyReadRevisions = 
       render(); void flush()
       return true
     },
-    enqueue(op) { pending.push(op); save(); render(); void flush() },
+    enqueue(op) { pending.push(identify(op)); save(); render(); void flush() },
     retry() { sending?.abort(); sending = null; void flush() },
     dispose() { disposed = true; sending?.abort() },
   }

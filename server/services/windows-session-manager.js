@@ -49,7 +49,7 @@ class WindowsSessionManager extends Base {
     const config = { name: session.name, token: this.workerToken(session.name),
       shell: this.shells[0].path, kind: session.shell,
       codexExe: process.env.HUB_CODEX_EXE || 'codex',
-      resumeThreadId: session.resumeThreadId || null,
+      resumeThreadId: session.codexThreadId || session.resumeThreadId || null,
       cwd: session.cwd || process.env.HUB_CWD || process.env.USERPROFILE,
       base: process.env.HUB_BASE_PATH || '', stateFile: this.workerFile(session.name) };
     const child = spawn(process.execPath, [path.join(__dirname, 'windows-worker.js')], {
@@ -117,8 +117,9 @@ class WindowsSessionManager extends Base {
     // Keep the fix in the Hub: already running ConPTY workers can keep their
     // terminals alive across this update, including workers from older versions.
     const session = this.getSession(name);
+    const threadId = session.codexThreadId || session.resumeThreadId;
     const checkSession = () => {
-      if (this.sessions.get(name) !== session) throw new Error('会话已更换，请确认后重新发送');
+      if (this.sessions.get(name) !== session || threadId && threadId !== (session.codexThreadId || session.resumeThreadId)) throw new Error('会话已更换，请确认后重新发送');
     };
     if (key != null && !['Enter', 'Escape', 'Up', 'Down', 'Left', 'Right', 'S-Left', 'Tab', 'C-c'].includes(key)) throw new Error('Unsupported key');
     const previous = this.inputQueues.get(name) || Promise.resolve();

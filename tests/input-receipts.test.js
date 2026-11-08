@@ -31,13 +31,13 @@ test('question tool acknowledgement clears the pending mobile input although cha
 
 test('ordinary, duplicate, delayed and failed sends require their own matching receipt', async () => {
   const { reconcileInputs } = await import('../frontend/src/utils/input-receipts.mjs');
-  let pending = ['a', 'b'].map(id => ({ id, text: '重复文字', before: [], status: 'uncertain' }));
+  let pending = ['a', 'b'].map(id => ({ id, text: '重复文字', before: [], receivedAfter: '2026-11-08T00:00:00Z', status: 'uncertain' }));
   pending = reconcileInputs(pending, { messages: [{ id: 'assistant', role: 'assistant', text: '重复文字' }] });
   assert.equal(pending.length, 2);
-  const first = { id: 'one', role: 'user', text: '重复文字' };
+  const first = { timestamp: '2026-11-08T00:00:01Z', id: 'one', role: 'user', text: '重复文字' };
   pending = reconcileInputs(pending, { messages: [first] }); assert.equal(pending.length, 1);
   pending = reconcileInputs(pending, { messages: [first] }); assert.equal(pending.length, 1);
   pending = reconcileInputs(pending, { messages: [first, { ...first, id: 'two' }] }); assert.equal(pending.length, 0);
-  const none = [{ text: 'not received', before: [], status: 'uncertain' }];
+  const none = [{ text: 'not received', before: [], receivedAfter: '2026-11-08T00:00:00Z', status: 'uncertain' }];
   assert.equal(reconcileInputs(none, { text: 'terminal screen', activity: { busy: false } }).length, 1);
 });

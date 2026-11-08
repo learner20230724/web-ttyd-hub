@@ -22,14 +22,15 @@ export function normalizeMetadata(value) {
     for (const key of ['displayName', 'shell', 'cwd', 'archivedAt', 'expiresAt', 'codexThreadId', 'resumeThreadId']) {
       if (raw[key] === null || text(raw[key])) session[key] = raw[key]
     }
-    if (record(raw.activity)) {
+    for (const field of ['activity', 'lastKnownActivity']) {
+      if (!record(raw[field])) continue
       const activity = {}
-      for (const key of ['available', 'detected', 'busy']) if (typeof raw.activity[key] === 'boolean') activity[key] = raw.activity[key]
+      for (const key of ['available', 'detected', 'busy']) if (typeof raw[field][key] === 'boolean') activity[key] = raw[field][key]
       for (const key of ['phase', 'completed', 'contentRevision', 'source', 'startedAt', 'updatedAt']) {
-        if (raw.activity[key] === null || text(raw.activity[key])) activity[key] = raw.activity[key]
+        if (raw[field][key] === null || text(raw[field][key])) activity[key] = raw[field][key]
       }
-      if (raw.activity.error) activity.error = true
-      session.activity = activity
+      if (raw[field].error) activity.error = true
+      session[field] = activity
     }
     sessions.push(session)
   }

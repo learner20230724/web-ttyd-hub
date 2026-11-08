@@ -114,7 +114,7 @@ const state = () => {
     await phone.goto(f.base);await phone.locator('.session-card').click();
     assert.equal(await phone.locator('.terminal-host').count(),0);
     await phone.locator('.mobile-reading').waitFor();
-    await phone.locator('.reading-control[aria-pressed]').waitFor();
+    await phone.locator('.reading-control[aria-pressed="true"]').waitFor();
     await phone.close();
     const cols=Number(f.tm('display-message','-p','-t',f.target,'#{pane_width}'));
     f.output('\x1b[2J\x1b[H\x1b[31m'+'X'.repeat(cols-2)+'中'+'\x1b[0m');

@@ -15,7 +15,11 @@ export function receiptCandidates(data) {
 export function reconcileInputs(pending, data) {
   const candidates = receiptCandidates(data), matched = new Set();
   return pending.filter(item => {
-    const receipt = candidates.find(r => !matched.has(r.id) && !item.before.includes(r.id) && normalized(r.text) === normalized(item.text) && (!item.images?.length || (r.images?.length === item.images.length)));
+    if (item.threadId && data.threadId !== item.threadId) return true;
+    const boundary = Date.parse(item.receivedAfter);
+    // A send without a trusted baseline/boundary cannot acknowledge old text.
+    if (!Number.isFinite(boundary) && (!item.before?.length || item.sentAt)) return true;
+    const receipt = candidates.find(r => (!Number.isFinite(boundary) || Date.parse(r.timestamp) >= boundary) && !matched.has(r.id) && !item.before.includes(r.id) && normalized(r.text) === normalized(item.text) && (!item.images?.length || (r.images?.length === item.images.length)));
     if (receipt) { matched.add(receipt.id); return false; }
     item.before = [...new Set([...item.before, ...candidates.map(r => r.id)])];
     return true;

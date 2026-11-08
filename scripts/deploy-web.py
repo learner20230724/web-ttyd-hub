@@ -9,7 +9,11 @@ base = os.environ.get('HUB_LOCAL_URL', 'http://127.0.0.1:3000')
 def command(*args):
     return subprocess.check_output(args, text=True).strip()
 def api(path='', data=None, method=None):
-    request = urllib.request.Request(base + '/api/sessions' + path, data=None if data is None else json.dumps(data).encode(), headers={'Content-Type':'application/json'}, method=method)
+    headers = {'Content-Type':'application/json'}
+    if path and method in ('POST', 'PATCH', 'DELETE'):
+        current = next((s for s in api()['sessions'] if s['name'] == path.split('/')[1]), None)
+        if current: headers['X-TTYD-Generation'] = current['createdAt']
+    request = urllib.request.Request(base + '/api/sessions' + path, data=None if data is None else json.dumps(data).encode(), headers=headers, method=method)
     with urllib.request.urlopen(request, timeout=15) as response: return json.load(response)
 
 if command('systemctl', 'show', service, '-p', 'KillMode', '--value') != 'process':

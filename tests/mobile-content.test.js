@@ -64,7 +64,7 @@ for (const [platform, Manager] of [
     assert.equal(polls, 1, 'Full view does not wait on dialogue discovery');
   });
 
-  test(`${platform} keeps the final terminal reply readable when Codex dialogue is unavailable`, async () => {
+  test(`${platform} keeps unavailable dialogue separate from explicit full terminal output`, async () => {
     for (const session of [
       { shell: 'codex', activity: { available: false } },
       { shell: 'bash', activity: { detected: true, available: false } },
@@ -76,13 +76,14 @@ for (const [platform, Manager] of [
         history: async () => { captures++; return { text: 'Terminal command and tool output\nFinal reply remains readable.' }; },
       };
       const answer = await Manager.prototype.mobile.call(manager, 'fixture');
-      assert.equal(answer.messages, undefined);
-      assert.equal(answer.completed, null);
-      assert.match(answer.text, /Final reply remains readable/);
-      assert.equal(captures, 1, 'Missing structured dialogue must not hide available output');
+      assert.deepEqual(answer.messages, []);
+      assert.equal(answer.sourceState, 'unavailable');
+      assert.equal(answer.completed, undefined);
+      assert.equal(answer.text, undefined);
+      assert.equal(captures, 0, 'Answer does not masquerade as full output');
       const full = await Manager.prototype.mobile.call(manager, 'fixture', true);
-      assert.equal(full.text, answer.text);
-      assert.equal(captures, 2);
+      assert.match(full.text, /Final reply remains readable/);
+      assert.equal(captures, 1);
     }
   });
 

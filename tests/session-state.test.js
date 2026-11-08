@@ -19,7 +19,7 @@ test('Real Hub restart restores stable IDs, Unicode names and stopped status wit
  const dir=fs.mkdtempSync('/tmp/hub-restore-');
  const env={...process.env,TMUX_TMPDIR:dir,HUB_STATE_FILE:path.join(dir,'sessions.json'),PORT:'19571',HOST:'127.0.0.1',TTYD_PORT_RANGE_START:'19572',TTYD_PORT_RANGE_END:'19580'};delete env.TMUX;
  let child;
- const api=async(suffix='',body,method)=>{const r=await fetch('http://127.0.0.1:19571/api/sessions'+suffix,{method:method||(body?'POST':'GET'),headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const data=await r.json();assert(r.ok,JSON.stringify(data));return data};
+ const api=async(suffix='',body,method)=>{const selected=suffix && suffix!='/sync' ? (await (await fetch('http://127.0.0.1:19571/api/sessions')).json()).sessions.find(s=>s.name===suffix.split('/')[1]) : null;if(body && ['pin','move'].includes(body.type)) body={...body,opId:require('node:crypto').randomUUID(),issuedAt:Date.now()};const r=await fetch('http://127.0.0.1:19571/api/sessions'+suffix,{method:method||(body?'POST':'GET'),headers:{'Content-Type':'application/json',...(selected?{'X-TTYD-Generation':selected.createdAt}:{})},body:body?JSON.stringify(body):undefined});const data=await r.json();assert(r.ok,JSON.stringify(data));return data};
  const start=async()=>{child=spawn(process.execPath,['server/index.js'],{cwd:path.join(__dirname,'..'),env,stdio:'ignore'});for(let i=0;i<100;i++){try{await api();return}catch{}await new Promise(r=>setTimeout(r,80))}throw Error('server not ready')};
  const stop=async()=>{const exit=once(child,'exit');child.kill('SIGTERM');await exit;child=null};
  try {

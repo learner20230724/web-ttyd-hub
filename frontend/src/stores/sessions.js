@@ -17,6 +17,7 @@ export const useSessionStore = defineStore('sessions', () => {
   const diagnosticView = () => ({ build: typeof __HUB_BUILD__ === 'undefined' ? 'test' : __HUB_BUILD__, epoch: order.epoch, events: diagnostics.slice() })
   window.ttydDiagnostics = diagnosticView
   onScopeDispose(() => { if (window.ttydDiagnostics === diagnosticView) delete window.ttydDiagnostics })
+  const updateAvailable = ref(false)
   const clock = ref(Date.now())
   const checked = new Map()
   const stale = session => cachedSnapshot.value || (checked.has(session.name) && clock.value - checked.get(session.name) > 20000)
@@ -40,7 +41,7 @@ export const useSessionStore = defineStore('sessions', () => {
     if (pageHidden() || !document.hasFocus() || connectionIssue.value) return
     const session = sessions.value.find(s => s.name === current.value)
     if (session && stale(session)) return
-    const state = session && activityState(session)
+    const state = session && classifyActivity(session, read.value, readRevisions.value)
     // Keep old history read on upgrade. Once its current version really reaches
     // the reader, replace the legacy wildcard so a later final can be unread.
     const bindRenderedLegacy = state === 'idle' && session.status === 'running' && session.activity?.available !== false &&
@@ -65,7 +66,8 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
   function activityState(session) {
-    return cachedSnapshot.value ? 'unknown' : classifyActivity(session, read.value, readRevisions.value)
+    const display = session.activity?.available === false && session.lastKnownActivity ? { ...session, activity: session.lastKnownActivity } : session
+    return classifyActivity(display, read.value, readRevisions.value)
   }
   const activityStatus = session => {
     const display = session.activity?.available === false && session.lastKnownActivity ? { ...session, activity: session.lastKnownActivity } : session
@@ -136,7 +138,7 @@ export const useSessionStore = defineStore('sessions', () => {
   const sortedSessions = computed(() => orderedSessions(sessions.value.filter(s => !s.archivedAt), layout.value, activityState))
   const archivedSessions = computed(() => sessions.value.filter(s => s.archivedAt).sort((a,b) => Date.parse(b.archivedAt) - Date.parse(a.archivedAt)))
   const otherSessions = computed(() => sortedSessions.value.filter(s => s.name !== current.value))
-  const countsStale = computed(() => connectionIssue.value || otherSessions.value.some(stale))
+  const countsStale = computed(() => connectionIssue.value || otherSessions.value.some(s => stale(s) || s.activity?.available === false))
   const unreadSessions = computed(() => otherSessions.value.filter(s => activityState(s) === 'unread'))
   const unreadCount = computed(() => unreadSessions.value.length)
   const workingCount = computed(() => otherSessions.value.filter(s => activityState(s) === 'busy').length)
@@ -198,11 +200,13 @@ export const useSessionStore = defineStore('sessions', () => {
     const session = sessions.value.find(s => s.name === value?.name && s.createdAt === value.createdAt)
     if (!session || !value.activity || typeof value.activity !== 'object') return false
     if (!order.accepts(value, session)) { record('state-rejected'); return false }
+    const threadId = Object.hasOwn(value, 'codexThreadId') ? value.codexThreadId : session.codexThreadId
+    const identityChanged = threadId !== session.codexThreadId
     checked.set(value.name, Date.now()); record('state', { revision: value.activityRevision })
-    liveActivity.set(value.name, { sequence: ++activitySequence, createdAt: value.createdAt, activity: value.activity, stateEpoch: value.stateEpoch, activityRevision: value.activityRevision })
+    liveActivity.set(value.name, { sequence: ++activitySequence, createdAt: value.createdAt, codexThreadId: threadId, activity: value.activity, stateEpoch: value.stateEpoch, activityRevision: value.activityRevision })
     // The notification already contains the authoritative state. A second HTTP
     // round trip adds latency and can stall behind an unrelated list request.
-    sessions.value = sessions.value.map(s => s === session ? { ...s, lastKnownActivity: value.activity.available === false ? s.lastKnownActivity || s.activity : value.activity, activity: value.activity, stateEpoch: value.stateEpoch || s.stateEpoch, activityRevision: value.activityRevision ?? s.activityRevision, verifiedAt: value.verifiedAt || Date.now() } : s)
+    sessions.value = sessions.value.map(s => s === session ? { ...s, codexThreadId: threadId, lastKnownActivity: value.activity.available === false ? identityChanged ? null : s.lastKnownActivity || s.activity : value.activity, activity: value.activity, stateEpoch: value.stateEpoch || s.stateEpoch, activityRevision: value.activityRevision ?? s.activityRevision, verifiedAt: value.verifiedAt || Date.now() } : s)
     // One fresh event cannot validate every other session restored from disk.
     if (!cachedSnapshot.value) connectionIssue.value = false
     scheduleMetadata()
@@ -212,11 +216,12 @@ export const useSessionStore = defineStore('sessions', () => {
   window.addEventListener('hub:state', receiveBodyState)
   onScopeDispose(() => window.removeEventListener('hub:state', receiveBodyState))
   function receiveList(data) {
+    if (data.build && data.build !== 'unknown' && typeof __HUB_BUILD__ !== 'undefined') updateAvailable.value = data.build !== __HUB_BUILD__
     const nextEpoch = data.stateEpoch || data.sessions.find(s => s.stateEpoch)?.stateEpoch
     if (!order.confirm(nextEpoch)) { record('retired-snapshot'); return false }
     record('snapshot', { epoch: nextEpoch })
     data.sessions = data.sessions.map(s => {
-      const current = sessions.value.find(x => x.name === s.name && x.createdAt === s.createdAt)
+      const current = sessions.value.find(x => x.name === s.name && x.createdAt === s.createdAt && (x.codexThreadId || x.resumeThreadId || '') === (s.codexThreadId || s.resumeThreadId || ''))
       s = { ...s, lastKnownActivity: s.activity?.available === false ? current?.lastKnownActivity || current?.activity : s.activity }
       return current?.stateEpoch && current.stateEpoch === s.stateEpoch && current.activityRevision > s.activityRevision ? { ...s, activity: current.activity, activityRevision: current.activityRevision } : s
     })
@@ -265,7 +270,7 @@ export const useSessionStore = defineStore('sessions', () => {
       data.sessions = data.sessions.map(session => {
         const event = liveActivity.get(session.name)
         return event && event.sequence > activityAtStart && event.createdAt === session.createdAt && (!event.stateEpoch || event.stateEpoch === session.stateEpoch)
-          ? { ...session, activity: event.activity, stateEpoch: event.stateEpoch || session.stateEpoch, activityRevision: event.activityRevision ?? session.activityRevision } : session
+          ? { ...session, codexThreadId: event.codexThreadId, activity: event.activity, stateEpoch: event.stateEpoch || session.stateEpoch, activityRevision: event.activityRevision ?? session.activityRevision } : session
       })
       for (const [name, event] of liveActivity) if (event.sequence <= activityAtStart ||
         !data.sessions.some(s => s.name === name && s.createdAt === event.createdAt)) liveActivity.delete(name)
@@ -298,69 +303,44 @@ export const useSessionStore = defineStore('sessions', () => {
     scheduleMetadata()
   }
 
+  async function mutation(path, method, body, name) {
+    const selected = name && sessions.value.find(s => s.name === name)
+    if (name && !selected) throw new Error('会话已更换，请重新读取')
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 15000)
+    try {
+      const res = await untilAbort(fetch(hubUrl('/api/sessions' + path), { method, signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', ...(selected ? { 'X-TTYD-Generation': selected.createdAt || '', 'X-TTYD-Thread': selected.codexThreadId || selected.resumeThreadId || '' } : {}) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), controller.signal)
+      const data = await untilAbort(res.json(), controller.signal)
+      if (!res.ok) throw new Error(data.error || '操作失败')
+      return data
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('操作确认超时，请刷新确认结果')
+      throw error
+    } finally { clearTimeout(timer) }
+  }
   async function createSession(name, shell, cwd, resumeThreadId) {
-    const res = await fetch(hubUrl('/api/sessions'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, shell, ...(cwd ? { cwd } : {}), ...(resumeThreadId ? { resumeThreadId } : {}) })
-    })
-    if (!res.ok) {
-      const data = await res.json()
-      throw new Error(data.error)
-    }
-    const session = await res.json()
-    restoreSelection = false
-    current.value = session.name
-    rememberSelection(session)
+    const session = await mutation('', 'POST', { name, shell, ...(cwd ? { cwd } : {}), ...(resumeThreadId ? { resumeThreadId } : {}) })
+    restoreSelection = false; current.value = session.name; rememberSelection(session)
     await fetchSessions()
   }
-
   async function renameSession(name, displayName) {
-    const res = await fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}`), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: displayName })
-    })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error)
-    await fetchSessions()
+    await mutation('/' + encodeURIComponent(name), 'PATCH', { name: displayName }, name); await fetchSessions()
   }
-
   async function stopSession(name) {
-    const res = await fetch(hubUrl(`/api/sessions/${name}/stop`), { method: 'POST' })
-    if (!res.ok) {
-      const data = await res.json()
-      throw new Error(data.error)
-    }
-    await fetchSessions()
+    await mutation('/' + encodeURIComponent(name) + '/stop', 'POST', undefined, name); await fetchSessions()
   }
-
   async function restartSession(name) {
-    const res = await fetch(hubUrl(`/api/sessions/${name}/restart`), { method: 'POST' })
-    if (!res.ok) {
-      const data = await res.json()
-      throw new Error(data.error)
-    }
-    await fetchSessions()
+    await mutation('/' + encodeURIComponent(name) + '/restart', 'POST', undefined, name); await fetchSessions()
   }
-
   async function removeSession(name, permanent = false) {
-    const res = await fetch(hubUrl(`/api/sessions/${name}${permanent ? '/permanent' : ''}`), { method: 'DELETE' })
-    if (!res.ok) {
-      const data = await res.json()
-      throw new Error(data.error)
-    }
-    if (current.value === name) {
-      select(null)
-    }
+    await mutation('/' + encodeURIComponent(name) + (permanent ? '/permanent' : ''), 'DELETE', undefined, name)
+    if (current.value === name) select(null)
     await fetchSessions()
   }
-
   async function restoreSession(name) {
-    const res = await fetch(hubUrl(`/api/sessions/${name}/restore`), { method: 'POST' })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error)
-    await fetchSessions()
+    await mutation('/' + encodeURIComponent(name) + '/restore', 'POST', undefined, name); await fetchSessions()
   }
 
   function select(name) {
@@ -494,6 +474,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   return {
     sessions,
+    updateAvailable,
     readRevisions,
     activityState,
     activityStatus,
