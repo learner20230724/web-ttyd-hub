@@ -125,6 +125,9 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   // Inspect the painted transcript after submitting, as well as the editable draft.
   const submitted = process.env.HUB_WRAP_SAMPLE || paragraph;
   await desktop.keyboard.insertText(submitted);
+  // Codex can absorb Enter into a still-buffered input burst. Submit after
+  // the PTY has actually echoed the complete draft back to the browser.
+  await until(async () => (await screenText()).replace(/\s/g, '').includes(submitted.replace(/\s/g, '')));
   await desktop.keyboard.press('Enter');
   await until(()=>requests>3);
   for (const width of [1100, 930, 1330]) {
