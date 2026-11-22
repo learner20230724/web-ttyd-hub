@@ -377,7 +377,16 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 .terminal-images p { color:#fda4af; font-size:13px; margin-top:6px; }
 .terminal-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction:column; overflow: hidden; background: #000; position: relative; }
 .terminal-host { width: 100%; flex:1; height:0; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow: hidden; }
-.terminal-host :deep(.xterm) { height: 100%; width: 100%; }
+/* xterm measures 32 copies of each glyph, then spaces the displayed text by
+   that measurement. Contextual CJK punctuation spacing makes those copies
+   narrower than punctuation in prose. Use full advances in both places. */
+.terminal-host :deep(.xterm) {
+  height: 100%;
+  width: 100%;
+  text-spacing-trim: space-all;
+  text-autospace: no-autospace;
+  font-feature-settings: "chws" 0, "halt" 0;
+}
 .windows-terminal { width: 100%; flex:1; min-height:0; border: 0; }
 .connection-status { position: absolute; right: 12px; top: 8px; z-index: 1; background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; padding: 6px 10px; font-size: 12px; pointer-events: none; }
 
