@@ -122,6 +122,33 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   assert(!tm('capture-pane','-p','-t','=image-test:').includes('Failed to paste image'),'Ctrl+V must not invoke the server clipboard');
   assert(tm('capture-pane','-p','-t','=image-test:').includes('[Image #1]'),'Desktop paste attaches an image to the actual Codex composer without Enter');
   assert.deepEqual(errors,[]);assert.equal(requests,3,'One image prompt and one tool-result continuation; no extra model calls');
+  // Inspect the painted transcript after submitting, as well as the editable draft.
+  const submitted = process.env.HUB_WRAP_SAMPLE || paragraph;
+  await desktop.keyboard.insertText(submitted);
+  await desktop.keyboard.press('Enter');
+  await until(()=>requests>3);
+  for (const width of [1100, 930, 1330]) {
+    await desktop.setViewportSize({width,height:760});
+    await pause(350);
+    await until(()=>desktop.locator('.terminal-host').evaluate((host, sample)=>{
+      const rows = Array.from(host.querySelectorAll('.xterm-rows > div'));
+      const bounds = host.querySelector('.xterm-screen').getBoundingClientRect();
+      const text = rows.map(row => row.textContent).join('').replace(/\s/g, '');
+      if (!text.includes(sample.replace(/\s/g, ''))) return false;
+      for (const row of rows) {
+        const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+        for(let node; (node=walker.nextNode());) {
+          const end=node.textContent.trimEnd().length;
+          if(!end) continue;
+          const glyph=document.createRange();
+          glyph.setStart(node,end-1); glyph.setEnd(node,end);
+          if(glyph.getBoundingClientRect().right > bounds.right+1) return false;
+        }
+      }
+      return bounds.right <= host.getBoundingClientRect().right && host.scrollLeft === 0;
+    },submitted));
+  }
+  console.log('PASS submitted CJK transcript: complete rendered text and visible rightmost glyphs at three viewport widths');
   console.log('PASS fullscreen wheel + fractional trackpad deltas preserve drafts without model input');
   console.log('PASS actual Codex: PNG upload -> image attachment -> model input_image; real view_image and generated-event previews; reload and desktop/mobile image rendering.');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{
