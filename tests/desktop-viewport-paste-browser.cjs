@@ -31,23 +31,44 @@ const { fixture, pause } = require('./terminal-fixture.cjs');
       return route.fulfill({status:fail?503:200,json:fail?{error:'Synthetic attachment failure'}:{ok:true}});
     });
     await page.goto(f.base); await page.locator('.session-card').click();
-    await page.waitForFunction(()=>document.querySelector('.terminal-host')?.terminal?.cols===300 && !document.querySelector('.terminal-host').terminal.options.disableStdin);
-    const geometry=()=>page.locator('.terminal-host').evaluate(el=>({width:el.clientWidth,scrollWidth:el.scrollWidth,left:el.scrollLeft,screen:el.querySelector('.xterm-screen').getBoundingClientRect().width}));
-    const initial=await geometry(); assert(initial.scrollWidth>initial.width+500);
-    await page.locator('.xterm-screen').hover({position:{x:100,y:60}});
-    await page.mouse.wheel(900,0); await page.waitForFunction(()=>document.querySelector('.terminal-host').scrollLeft>100);
-    await page.locator('.terminal-host').evaluate(el=>{el.scrollLeft=el.scrollWidth});
-    const edge=await page.locator('.terminal-host').evaluate(el=>{
-      const screen=el.querySelector('.xterm-screen').getBoundingClientRect(),host=el.getBoundingClientRect(),t=el.terminal;
-      return {right:screen.right,hostRight:host.right,text:t.buffer.active.getLine(0).translateToString(true)};
-    });
-    assert(edge.right<=edge.hostRight);assert(edge.text.endsWith('RIGHT_EDGE'));
-    await page.mouse.wheel(-900,0); await pause(200); assert((await geometry()).left<initial.scrollWidth-initial.width);
-    assert.equal(f.input().length,0,'Horizontal gestures never become terminal input');
-    await page.setViewportSize({width:1500,height:900});await pause(300);
-    assert((await geometry()).width>initial.width);
-    await page.getByRole('button',{name:'会话列表',exact:true}).click();await pause(300);
-    assert((await geometry()).width>1100);
+    const fits = () => {
+      const host = document.querySelector('.terminal-host'), term = host?.terminal;
+      if (!term || term.options.disableStdin || term.cols >= 300) return false;
+      const screen = host.querySelector('.xterm-screen').getBoundingClientRect();
+      return screen.right <= host.getBoundingClientRect().right && host.scrollWidth <= host.clientWidth &&
+        document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight;
+    };
+    await page.waitForFunction(fits);
+    const columns = () => page.locator('.terminal-host').evaluate(host => host.terminal.cols);
+    const original = await columns();
+    async function checkLastColumn() {
+      const cols = Number(f.tm('display-message', '-p', '-t', f.target, '#{pane_width}'));
+      assert.equal(cols, await columns());
+      f.output(`\x1b[2J\x1b[H\x1b[1;${cols-3}H末列`);
+      await page.waitForFunction(() => {
+        const t = document.querySelector('.terminal-host').terminal;
+        return t.buffer.active.getLine(0).translateToString(true).endsWith('末列') &&
+          t.buffer.active.getLine(0).getCell(t.cols - 2).getChars() === '列';
+      });
+      assert(await page.evaluate(fits));
+    }
+    await checkLastColumn();
+    await page.setViewportSize({width:1500,height:900});
+    await page.waitForFunction(old=>document.querySelector('.terminal-host').terminal.cols>old,original);
+    await checkLastColumn();
+    const beforeSidebar = await columns();
+    await page.getByRole('button',{name:'会话列表',exact:true}).click();
+    await page.waitForFunction(old=>document.querySelector('.terminal-host').terminal.cols>old,beforeSidebar);
+    await checkLastColumn();
+    const wideCols = await columns();
+    const narrow = await browser.newPage({viewport:{width:900,height:760}});
+    await narrow.goto(f.base); await narrow.locator('.session-card').click();
+    await narrow.waitForFunction(fits);
+    await page.waitForFunction(old=>document.querySelector('.terminal-host').terminal.cols<old,wideCols);
+    await checkLastColumn(); assert(await narrow.evaluate(fits));
+    await narrow.close();
+    await page.waitForFunction(cols=>document.querySelector('.terminal-host').terminal.cols===cols,wideCols);
+    await checkLastColumn();
     const paste=()=>page.locator('.terminal-host').evaluate(el=>{
       const data=new DataTransfer();data.items.add(new File([new Uint8Array([137,80,78,71])],'paste.png',{type:'image/png'}));
       el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));
@@ -59,7 +80,6 @@ const { fixture, pause } = require('./terminal-fixture.cjs');
     fail=true;await paste();await page.getByRole('alert').waitFor();await pause(1200);
     assert.equal(writes.length,2,'Failed attachment is not automatically resent');
     assert.equal(await page.getByRole('button',{name:'加入终端输入区',exact:true}).count(),1,'Failure retains explicit recovery');
-    f.tm('set-option', '-w', '-t', f.target, 'window-size', 'latest');
     await page.setViewportSize({width:1200,height:800});
     await page.waitForFunction(()=>document.querySelector('.terminal-host').terminal.cols<200);
     await pause(300);
@@ -67,6 +87,6 @@ const { fixture, pause } = require('./terminal-fixture.cjs');
     assert(fitted.scrollWidth<=fitted.width+1, 'A pane that follows the browser fits without clipping or unnecessary horizontal overflow: '+JSON.stringify(fitted));
     assert(fitted.right<=fitted.hostRight);
     assert.deepEqual(errors,[]);
-    console.log('PASS oversized real tmux pane: right edge reachable with horizontal wheel, resize/sidebar; clipboard image attaches once without click or Enter; failure is not retried');
+    console.log('PASS oversized real tmux pane: last Chinese character visible without scrolling across two viewer sizes, resize/sidebar; clipboard image attaches once without click or Enter; failure is not retried');
   } finally {await browser?.close();await f.cleanup();}
 })().catch(e=>{console.error(e);process.exitCode=1});

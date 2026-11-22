@@ -109,7 +109,10 @@ class TerminalStream {
     this.proc.on('exit', () => this.close(1011, 'Terminal detached'));
     this.proc.stdin.on('error', () => this.close(1011, 'Terminal input closed'));
     this.proc.stdout.on('data', chunk => this.read(chunk));
-    await this.command([`refresh-client -C ${this.size.cols},${this.size.rows}`]);
+    // A PTY has one grid shared by every attached viewer. Let tmux notify the
+    // application of the narrowest client so it redraws at a readable width.
+    await this.command([`refresh-client -C ${this.size.cols},${this.size.rows}`,
+      `set-option -w -t =${this.name}: window-size smallest`]);
     await this.snapshot();
   }
 

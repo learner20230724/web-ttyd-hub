@@ -79,6 +79,25 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await desktop.getByRole('button',{name:'返回终端',exact:true}).click();
   await desktop.waitForFunction(()=>document.querySelector('.terminal-host')?.terminal?.options.disableStdin===false);
   const screenText = () => desktop.evaluate(() => { const t=document.querySelector('.terminal-host').terminal,b=t.buffer.active;return Array.from({length:b.length},(_,i)=>b.getLine(i).translateToString(true)).join('\n'); });
+  const paragraph = '自动换行验证开始' + '桌面终端应根据窗口宽度显示整段中文。'.repeat(5) + '验证结束';
+  await desktop.locator('.xterm-helper-textarea').focus();
+  await desktop.keyboard.insertText(paragraph);
+  for (const width of [1100, 930, 1330]) {
+    await desktop.setViewportSize({width,height:760});
+    await until(async () => {
+      const visible = await desktop.locator('.terminal-host').evaluate(host => {
+        const term=host.terminal, buffer=term.buffer.active;
+        return {
+          rows:Array.from({length:term.rows}, (_,i)=>buffer.getLine(buffer.viewportY+i)?.translateToString(true) || ''),
+          fits:host.querySelector('.xterm-screen').getBoundingClientRect().right <= host.getBoundingClientRect().right
+        };
+      });
+      const text=visible.rows.join('').replace(/\s/g,'');
+      return visible.fits && text.includes(paragraph) && !visible.rows.some(row=>row.includes(paragraph));
+    });
+  }
+  await desktop.keyboard.press('Control+u');
+  await desktop.setViewportSize({width:1100,height:760});
   await desktop.locator('.xterm-helper-textarea').focus();await desktop.keyboard.type('UNSENT_WHEEL_DRAFT');
   const beforeWheel=await screenText();
   await desktop.locator('.xterm-screen').hover();await desktop.mouse.wheel(0,-720);await pause(600);

@@ -187,6 +187,9 @@ watch(nativeKey, async key => {
   element.addEventListener('paste', paste, true);
   const observer = new ResizeObserver(measure);
   observer.observe(element);
+  // Font loading, zoom and display changes can alter the cell size even when
+  // the layout width in CSS pixels stays the same.
+  observer.observe(element.querySelector('.xterm-screen'));
   const renderNext = () => {
     if (rendering || stopped || !renderQueue.length) return;
     const { data, socket, bytes, cached = false, updates = [] } = renderQueue.shift();
@@ -373,8 +376,8 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 .terminal-images > button { color:white; background:#2563eb; padding:8px; border:0; border-radius:6px; margin-top:8px; }
 .terminal-images p { color:#fda4af; font-size:13px; margin-top:6px; }
 .terminal-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction:column; overflow: hidden; background: #000; position: relative; }
-.terminal-host { width: 100%; flex:1; height:0; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
-.terminal-host :deep(.xterm) { height: 100%; width: max-content; min-width: 100%; padding-right: 14px; box-sizing: border-box; }
+.terminal-host { width: 100%; flex:1; height:0; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow: hidden; }
+.terminal-host :deep(.xterm) { height: 100%; width: 100%; }
 .windows-terminal { width: 100%; flex:1; min-height:0; border: 0; }
 .connection-status { position: absolute; right: 12px; top: 8px; z-index: 1; background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; padding: 6px 10px; font-size: 12px; pointer-events: none; }
 
