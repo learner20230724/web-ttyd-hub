@@ -1,13 +1,13 @@
 <script setup>
 import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
 import { ImageAddon } from '@xterm/addon-image';
 import ImageAttachments from './ImageAttachments.vue';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../stores/sessions';
 import { snapshotSequence, pendingWrapSequence, suppressQueryReplies } from '../utils/terminal-snapshot.mjs';
 import { untilAbort } from '../utils/request-deadline.mjs';
+import { draftKey } from '../utils/session-drafts.mjs';
 import { hubUrl } from '../utils/base.mjs';
 import { loadContent, peekContent, saveContent } from '../utils/session-content.mjs';
 import { terminalCache, validSnapshot, applyTerminalDelta, encodeTerminalBytes, decodeTerminalBytes } from '../utils/terminal-cache.mjs';
@@ -24,7 +24,10 @@ const windowsSrc = computed(() => store.platform === 'win32' && runningName.valu
 const host = ref(null);
 const imagePicker = ref(null), attachments = ref([]), imageUploading = ref(false), attaching = ref(false), imageError = ref('');
 const canAttach = computed(() => currentSession.value?.shell === 'codex' || currentSession.value?.activity?.detected);
-watch([() => store.current, () => currentSession.value?.createdAt], () => { attachments.value = []; imageError.value = ''; imageUploading.value = false; });
+watch(() => draftKey(currentSession.value), () => { attachments.value = []; imageError.value = ''; imageUploading.value = false; });
+// Upload completion is the only intermediate step; paste/file selection already
+// expresses the intention to attach. Never auto-retry an uncertain terminal write.
+watch(imageUploading, busy => { if (!busy && attachments.value.length && !imageError.value) void attachImages(); });
 async function attachImages() {
   const selected = currentSession.value, images = attachments.value.slice();
   if (!selected || !images.length || attaching.value) return;
@@ -33,8 +36,8 @@ async function attachImages() {
   try {
     const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(selected.name)}/input`), { method:'POST', headers: { 'Content-Type':'application/json', 'X-TTYD-Generation': selected.createdAt || '', 'X-TTYD-Thread': selected.codexThreadId || selected.resumeThreadId || '' }, body: JSON.stringify({ images: images.map(x => x.id), key:null }), signal: request.signal }), request.signal);
     const data = await untilAbort(res.json(), request.signal); if (!res.ok) throw new Error(data.error);
-    if (currentSession.value?.name === selected.name && currentSession.value?.createdAt === selected.createdAt) { attachments.value = []; host.value?.terminal?.focus(); }
-  } catch (error) { imageError.value = `未确认加入终端，请先查看输入区：${error.message}`; }
+    if (draftKey(currentSession.value) === draftKey(selected)) { attachments.value = []; host.value?.terminal?.focus(); }
+  } catch (error) { if (draftKey(currentSession.value) === draftKey(selected)) imageError.value = `未确认加入终端，请先查看输入区：${error.message}`; }
   finally { clearTimeout(timeout); attaching.value = false; }
 }
 const connection = ref('');
@@ -64,8 +67,6 @@ watch(nativeKey, async key => {
     scrollOnUserInput: true, smoothScrollDuration: 100, disableStdin: true,
     allowProposedApi: true,
   });
-  const fit = new FitAddon();
-  term.loadAddon(fit);
   term.open(element);
   const images = new ImageAddon({ enableSizeReports:false, iipSupport:false, storageLimit:64 });
   term.loadAddon(images);
@@ -109,10 +110,15 @@ watch(nativeKey, async key => {
     return true;
   };
   const measure = () => {
-    const size = fit.proposeDimensions();
-    if (!size) return;
-    const cols = Math.max(2, Math.min(500, size.cols));
-    const rows = Math.max(2, Math.min(300, size.rows));
+    // Measure the visible host, not the potentially wider remote terminal.
+    // client sizes exclude native scrollbars; padding is not usable cell space.
+    const screen = element.querySelector('.xterm-screen')?.getBoundingClientRect();
+    if (!screen?.width || !screen.height) return;
+    const style = getComputedStyle(element);
+    const width = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 14;
+    const height = element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const cols = Math.max(2, Math.min(500, Math.floor(width / (screen.width / term.cols))));
+    const rows = Math.max(2, Math.min(300, Math.floor(height / (screen.height / term.rows))));
     const key = `${cols},${rows}`;
     if (key !== lastSize && send({ type: 'resize', cols, rows, cache: 'splice-v1', generation: createdAt, digest: cacheState?.snapshot.digest })) lastSize = key;
   };
@@ -137,7 +143,7 @@ watch(nativeKey, async key => {
   term.onBinary(data => input('binary', data));
   let wheelRemainder = 0;
   term.attachCustomWheelEventHandler(event => {
-    if (event.ctrlKey) return false;
+    if (event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY) || event.shiftKey) return false;
     // Full-screen programs with mouse support own their scrolling. Never turn a
     // wheel gesture into Up/Down keys in programs without mouse support.
     if (term.buffer.active.type === 'alternate' && term.modes.mouseTrackingMode === 'none') {
@@ -338,8 +344,8 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 <template>
   <div class="terminal-area">
     <div v-if="runningName && canAttach" class="terminal-images">
-      <ImageAttachments ref="imagePicker" :key="JSON.stringify([store.current, currentSession?.createdAt])" v-model="attachments" :session="currentSession" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
-      <button v-if="attachments.length" type="button" :disabled="imageUploading || attaching" @click="attachImages">{{ attaching ? '加入中…' : '加入终端输入区' }}</button>
+      <ImageAttachments ref="imagePicker" :key="draftKey(currentSession)" v-model="attachments" :session="currentSession" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
+      <button v-if="attachments.length && imageError" type="button" :disabled="imageUploading || attaching" @click="attachImages">{{ attaching ? '加入中…' : '加入终端输入区' }}</button>
       <p v-if="imageError" role="alert">{{ imageError }}</p>
     </div>
     <iframe v-if="windowsSrc" :src="windowsSrc" class="windows-terminal" title="交互终端 / Interactive terminal" @load="windowsLoaded"></iframe>
@@ -367,8 +373,8 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 .terminal-images > button { color:white; background:#2563eb; padding:8px; border:0; border-radius:6px; margin-top:8px; }
 .terminal-images p { color:#fda4af; font-size:13px; margin-top:6px; }
 .terminal-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction:column; overflow: hidden; background: #000; position: relative; }
-.terminal-host { width: 100%; flex:1; height:0; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow: hidden; }
-.terminal-host :deep(.xterm) { height: 100%; }
+.terminal-host { width: 100%; flex:1; height:0; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
+.terminal-host :deep(.xterm) { height: 100%; width: max-content; min-width: 100%; padding-right: 14px; box-sizing: border-box; }
 .windows-terminal { width: 100%; flex:1; min-height:0; border: 0; }
 .connection-status { position: absolute; right: 12px; top: 8px; z-index: 1; background: var(--bg-secondary); color: var(--text-secondary); border-radius: 6px; padding: 6px 10px; font-size: 12px; pointer-events: none; }
 
