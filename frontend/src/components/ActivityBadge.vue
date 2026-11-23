@@ -11,12 +11,13 @@ defineProps({ status: { type: Object, required: true }, compact: Boolean })
 .activity-badge { display:inline-flex; align-items:center; gap:7px; min-width:0; color:#a8b6ca; font-size:12px; line-height:1.5; font-weight:500; }
 .activity-dot { width:14px; height:14px; flex:0 0 14px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; background:currentColor; color:inherit; font-size:10px; }
 .activity-dot:empty { width:8px; height:8px; flex-basis:8px; margin:0 3px; }
-.busy { color:#7dd3fc; }.busy .activity-dot { width:14px; height:14px; flex-basis:14px; margin:0; background:transparent; border:2px solid #38546b; border-top-color:currentColor; animation:activity-spin 1s linear infinite; }
+.busy { color:#7dd3fc; }.busy .activity-dot { width:14px; height:14px; flex-basis:14px; margin:0; background:transparent; border:2px solid #38546b; border-top-color:currentColor; }
 .unread { color:#6ee7b7; }.unread .activity-dot { background:#6ee7b7; color:#073728; }
 .waiting { color:#fcd34d; }.waiting .activity-dot { background:#fcd34d; color:#432c00; }
 .error { color:#fda4af; }.error .activity-dot { background:#fda4af; color:#4c1024; }
 .interrupted { color:#c4b5fd; }.unknown { color:#a8b6ca; }
-.stale { opacity:.65; } .stale .activity-dot { animation:none; }
+.stale { opacity:.65; }
+.busy:not(.stale) .activity-dot { animation:activity-spin 1.2s steps(12) infinite; }
 @keyframes activity-spin { to { transform:rotate(360deg); } }
-@media (pointer: fine), (prefers-reduced-motion: reduce) { .busy .activity-dot { animation:none; } }
+@media (prefers-reduced-motion: reduce) { .busy:not(.stale) .activity-dot { animation-duration:4s; animation-timing-function:steps(4); } }
 </style>

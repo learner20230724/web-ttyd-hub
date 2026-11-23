@@ -92,7 +92,7 @@ function handleMobileOverlayClick() {
           <button v-if="store.workingCount > 0" type="button" class="working-shortcut"
             :aria-label="`查看下一个工作中的会话，共 ${store.workingCount} 个，不含当前会话`"
             title="按列表顺序循环查看其他工作中的会话" @click="store.selectNextWorking()">
-            <span class="working-badge" aria-live="polite" aria-atomic="true">{{ store.workingCount }}</span>
+            <span class="working-badge" :class="{ spinning: store.hasLiveWorker }" aria-live="polite" aria-atomic="true">{{ store.workingCount }}</span>
           </button>
         </div>
       </div>
@@ -148,10 +148,10 @@ function handleMobileOverlayClick() {
 .working-shortcut:focus-visible { outline:2px solid #bbc2cc; outline-offset:2px; }
 .unread-badge { display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; width:24px; height:24px; border-radius:50%; background:var(--success); color:#03291e; font-size:11px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1; }
 .working-badge { display:inline-flex; position:relative; align-items:center; justify-content:center; width:24px; height:24px; color:#bbc2cc; font-size:11px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1; }
-.working-badge::before { content:''; position:absolute; inset:0; border:2px solid #bbc2cc40; border-top-color:#bbc2cc; border-radius:50%; animation:working-spin 1s linear infinite; }
-.activity-counters.stale { opacity:.65; } .activity-counters.stale .working-badge::before { animation:none; }
+.working-badge::before { content:''; position:absolute; inset:0; border:2px solid #bbc2cc40; border-top-color:#bbc2cc; border-radius:50%; }
+.activity-counters.stale { opacity:.65; } .working-badge.spinning::before { animation:working-spin 1.2s steps(12) infinite; }
 @keyframes working-spin { to { transform:rotate(360deg); } }
-@media (pointer: fine), (prefers-reduced-motion: reduce) { .working-badge::before { animation:none; } }
+@media (prefers-reduced-motion: reduce) { .working-badge.spinning::before { animation-duration:4s; animation-timing-function:steps(4); } }
 .reading-views { display:flex; border-radius:8px; background:#101c2b; }
 .reading-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }
 .reading-control { min-width:40px; min-height:44px; padding:4px 6px; border:0; border-radius:7px; background:transparent; color:#a8b6ca; font-size:13px; cursor:pointer; }

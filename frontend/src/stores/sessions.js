@@ -141,7 +141,9 @@ export const useSessionStore = defineStore('sessions', () => {
   const countsStale = computed(() => connectionIssue.value || otherSessions.value.some(s => stale(s) || s.activity?.available === false))
   const unreadSessions = computed(() => otherSessions.value.filter(s => activityState(s) === 'unread'))
   const unreadCount = computed(() => unreadSessions.value.length)
-  const workingCount = computed(() => otherSessions.value.filter(s => activityState(s) === 'busy').length)
+  const otherWorkers = computed(() => otherSessions.value.filter(s => activityState(s) === 'busy'))
+  const workingCount = computed(() => otherWorkers.value.length)
+  const hasLiveWorker = computed(() => !connectionIssue.value && otherWorkers.value.some(s => !stale(s) && s.activity?.available !== false))
   const isPinned = name => layout.value.pinned.includes(name)
   function saveLayout(value) {
     layout.value = value
@@ -486,6 +488,7 @@ export const useSessionStore = defineStore('sessions', () => {
     archivedSessions,
     unreadCount,
     countsStale,
+    hasLiveWorker,
     workingCount,
     selectNextUnread,
     selectNextWorking,

@@ -28,6 +28,62 @@ app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../se
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   const output = path.join(__dirname, '../output/playwright'); fs.mkdirSync(output, { recursive: true });
   try {
+    // Observe rendered angles. Checking for a CSS animation name alone misses
+    // a paused ring and a spinner incorrectly disabled by another session.
+    const base = `http://127.0.0.1:${server.address().port}`;
+    for (const mobile of [false, true]) {
+      const context = await browser.newContext({ viewport:{width:mobile ? 412 : 1220,height:860}, isMobile:mobile, hasTouch:mobile });
+      const page = await context.newPage();
+      let dot = '[data-session-id="reader"] .activity-dot';
+      const counter = '.working-badge';
+      async function rotates(selector, pseudo = null) {
+        await page.locator(selector).waitFor();
+        const angle = await page.$eval(selector, (el,p) => getComputedStyle(el,p).transform, pseudo);
+        await page.waitForFunction(({selector,pseudo,angle}) => {
+          const el = document.querySelector(selector);
+          return el && getComputedStyle(el,pseudo).transform !== angle;
+        }, {selector,pseudo,angle}, {timeout:3500});
+      }
+      try {
+        await page.goto(base);
+        await page.locator('[data-session-id="reader"] .busy:not(.stale)').waitFor();
+        await rotates(dot);
+        if (!mobile) {
+          await page.getByRole('button',{name:'会话列表'}).click();
+          await page.locator('.sidebar.collapsed').waitFor();
+          dot = '[data-session-id="reader"] > .activity-badge .activity-dot';
+          await rotates(dot);
+        } else {
+          sessions[1].activity = {available:false,phase:'unknown'};
+          manager.emit('session:activity',sessions[1]);
+          await page.locator('.activity-counters.stale .working-badge').waitFor();
+          await rotates(counter, '::before');
+          assert.equal(await page.$eval(counter, el => getComputedStyle(el).transform), 'none');
+        }
+        await page.emulateMedia({reducedMotion:'reduce'});
+        await rotates(dot);
+        if (mobile) await rotates(counter,'::before');
+        sessions[0].activity = {available:false,phase:'unknown'};
+        manager.emit('session:activity',sessions[0]);
+        await page.locator('[data-session-id="reader"] .unknown.stale:visible').waitFor();
+        assert.equal(await page.$eval(dot, el=>getComputedStyle(el).animationName),'none');
+        if (mobile) assert.equal(await page.$eval(counter, el=>getComputedStyle(el,'::before').animationName),'none');
+        sessions[0].activity = make('reader','','thinking').activity;
+        manager.emit('session:activity',sessions[0]);
+        await rotates(dot);
+        if (mobile) await rotates(counter,'::before');
+        sessions[0].activity = make('reader','','completed').activity;
+        manager.emit('session:activity',sessions[0]);
+        await page.locator('[data-session-id="reader"] .unread:visible').waitFor();
+        assert.equal(await page.$eval(dot, el=>getComputedStyle(el).animationName),'none');
+        if (mobile) await page.locator(counter).waitFor({state:'detached'});
+        console.log('PASS rendered working rings, reduced motion, stale, recovery and completion:', mobile ? 'phone' : 'desktop');
+      } finally {
+        await context.close();
+        sessions[0].activity = make('reader','','executing').activity;
+        sessions[1].activity = make('done','','completed').activity;
+      }
+    }
     for (const width of [320, 412]) {
       sessions.length = 3;
       sessions[0].activity = make('reader', '', 'executing').activity;

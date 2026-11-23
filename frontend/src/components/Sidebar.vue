@@ -250,5 +250,6 @@ onBeforeUnmount(() => finishDrag());
     transform: translateX(-100%);
     width: var(--sidebar-width); /* maintain width when hidden */
   }
+  .sidebar.collapsed :deep(.activity-dot) { animation-play-state: paused; }
 }
 </style>
