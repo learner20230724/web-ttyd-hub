@@ -27,10 +27,37 @@ const path = require('node:path');
    assert.deepEqual(await order(),before);if(width<768){assert.equal(await p.locator('.working-badge').innerText(),'1');assert.equal(await p.locator('.activity-counters.stale').count(),1);}
    await p.locator('.composer textarea').fill('尚未发送的草稿');await p.reload();
    await p.getByText('线程 A 的旧回答',{exact:true}).waitFor();assert.equal(await p.locator('.composer textarea').inputValue(),'尚未发送的草稿');
+   if (width >= 768) {
+     const history = Array.from({length:625}, (_, i) => ({id:'row-'+i, role:'assistant', text:'历史消息 '+i}));
+     await p.route('**/sessions/reader/mobile*', route => {
+       const before = new URL(route.request().url()).searchParams.get('before');
+       const end = before ? history.findIndex(message => message.id === before) : history.length;
+       const start = Math.max(0, end-300);
+       return route.fulfill({json:{messages:history.slice(start,end),hasEarlier:start>0,threadId:'thread-A',completed:'t1',contentRevision:'r1'}});
+     });
+     await p.reload();
+     const pane = p.locator('[data-view="answer"]');
+     await pane.locator('[data-message-id="row-624"]').waitFor();
+     for (const [first, next] of [[325,25],[25,0]]) {
+       const anchor = pane.locator('[data-message-id="row-'+first+'"]');
+       await pane.evaluate(el => { el.scrollTop=20; });
+       await pane.locator('[data-message-id="row-'+next+'"]').waitFor();
+       assert(await anchor.evaluate(el=>Math.abs(el.getBoundingClientRect().top-el.parentElement.getBoundingClientRect().top)<160));
+     }
+     assert.equal(await pane.locator('article.message').count(),625);
+     await p.getByRole('button',{name:'全文',exact:true}).click();
+     await p.locator('.terminal-host').waitFor();
+     await p.getByRole('button',{name:'回答',exact:true}).click();
+     await pane.locator('[data-message-id="row-0"]').waitFor();
+     assert.equal(await pane.locator('article.message').count(),625);
+     await p.unroute('**/sessions/reader/mobile*');
+   }
    reader.codexThreadId='thread-B';reader.activity={available:false,detected:true,busy:false,phase:'unknown'};mode='empty';m.emit('session:activity',reader);await p.waitForTimeout(300);
    assert.equal(await p.getByText('线程 A 的旧回答',{exact:true}).count(),0);assert.equal(await p.locator('.composer textarea').inputValue(),'');
    mode='fallback';await p.getByRole('button',{name:width>=768?'回答':'隐藏执行过程',exact:true}).click();await p.waitForTimeout(200);assert.equal(await p.locator('.mobile-output').count(),0);
-   await p.getByRole('button',{name:width>=768?'全文':'显示执行过程',exact:true}).click();await p.getByText('真实终端输出（合成测试）',{exact:true}).waitFor();
+   await p.getByRole('button',{name:width>=768?'全文':'显示执行过程',exact:true}).click();
+   if (width >= 768) await p.locator('.terminal-host .xterm-screen').waitFor();
+   else await p.getByText('真实终端输出（合成测试）',{exact:true}).waitFor();
    await p.getByRole('button',{name:width>=768?'回答':'隐藏执行过程',exact:true}).click();await p.locator('.answer-placeholder').waitFor();
    if(width<768) await p.getByRole('button',{name:'会话列表',exact:true}).click();
    await p.clock.install();await p.evaluate(()=>{const original=window.fetch.bind(window);window.fetch=(url,opts)=>{if(opts?.method==='PATCH'){window.__patchSignal=Boolean(opts.signal);return new Promise(()=>{})}return original(url,opts)}});

@@ -144,7 +144,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await desktop.goto(base); await desktop.locator('.session-card').click();
   const answerTab = desktop.getByRole('button',{name:'回答',exact:true});
   const fullTab = desktop.getByRole('button',{name:'全文',exact:true});
-  const terminalTab = desktop.getByRole('button',{name:'终端',exact:true});
+  assert.equal(await desktop.getByRole('button',{name:'方向键与回车'}).count(),0);
   const replyImages = desktop.locator('.mobile-reading[data-view="answer"] .message.assistant .image-preview img');
   await replyImages.first().waitFor({timeout:6000});
   assert.equal(await answerTab.getAttribute('aria-pressed'),'true');
@@ -198,6 +198,18 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   const remove = desktop.getByRole('button',{name:'移除图片 桌面粘贴.png'});
   await remove.click(); await remove.waitFor({state:'detached'});
 
+  await desktop.context().grantPermissions(['clipboard-read','clipboard-write']);
+  await input.fill('前替换后');
+  await input.evaluate(el => el.setSelectionRange(1,3));
+  await reader.click({position:{x:6,y:6}});
+  await desktop.evaluate(() => navigator.clipboard.writeText('粘贴中文\nsecond line'));
+  await desktop.keyboard.press('Control+v');
+  assert.equal(await input.inputValue(),'前粘贴中文\nsecond line后');
+  assert(await input.evaluate(el => document.activeElement === el));
+  await reader.click({button:'right',position:{x:24,y:12}});
+  const nativePaste = desktop.getByRole('textbox',{name:'粘贴到消息输入框'});
+  assert(await nativePaste.evaluate(el => el === document.activeElement));
+  await desktop.keyboard.press('Escape');
   await input.fill('保留桌面草稿');
   await input.press('Shift+Enter');
   assert.equal(await input.inputValue(),'保留桌面草稿\n');
@@ -206,7 +218,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await desktop.getByRole('button',{name:'↓ 回到最新'}).waitFor();
   const top = await reader.evaluate(el=>el.scrollTop);
   await fullTab.click();
-  await desktop.locator('[data-view="full"] .mobile-output').first().waitFor();
+  await desktop.waitForFunction(()=>document.querySelector('.terminal-host')?.terminal?.options.disableStdin===false);
   assert.equal(await fullTab.getAttribute('aria-pressed'),'true');
   assert.equal(await replyImages.count(),0);
   await answerTab.click();
@@ -215,7 +227,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await until(()=>reader.evaluate((el,top)=>Math.abs(el.scrollTop-top)<2,top));
   await desktop.getByRole('button',{name:'↓ 回到最新'}).click();
   if(process.env.HUB_IMAGES_SCREENSHOT)await desktop.screenshot({path:process.env.HUB_IMAGES_SCREENSHOT});
-  await terminalTab.click();
+  await fullTab.click();
   await desktop.waitForFunction(()=>document.querySelector('.terminal-host')?.terminal?.options.disableStdin===false);
   assert.equal(await desktop.locator('.terminal-images .image-preview').count(),0);
   await desktop.locator('.xterm-helper-textarea').focus();
@@ -224,7 +236,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await answerTab.click();
   assert.equal(await input.inputValue(),'保留桌面草稿\n');
   await input.fill('');
-  await terminalTab.click();
+  await fullTab.click();
   await desktop.waitForFunction(()=>{
     const t=document.querySelector('.terminal-host')?.terminal, b=t?.buffer.active;
     return t?.options.disableStdin===false && Array.from({length:t.rows},(_,i)=>b.getLine(b.viewportY+i)?.translateToString(true)).some(row=>row?.includes('KEEP_DRAFT'));
@@ -266,12 +278,21 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await desktop.locator('.xterm-screen').hover();await desktop.mouse.wheel(0,-720);await pause(600);
   const afterWheel=await screenText();
   assert.notEqual(afterWheel,beforeWheel,'Fullscreen Codex must scroll its actual transcript when tmux mouse is off');
-  assert(afterWheel.includes('SCROLL_CONTEXT_'),'Wheel exposes earlier conversation');
+  assert((await firstVisibleRow()) < bottomRow,'Wheel exposes earlier conversation');
   assert(afterWheel.includes('UNSENT_WHEEL_DRAFT'),'Wheel preserves the unsent prompt');
   // Small fractional deltas, typical of a Mac trackpad, accumulate into wheel reports.
   await desktop.locator('.xterm-screen').evaluate(el=>{const r=el.getBoundingClientRect();for(let i=0;i<80;i++)el.dispatchEvent(new WheelEvent('wheel',{deltaY:-2.5,clientX:r.left+r.width/2,clientY:r.top+r.height/2,bubbles:true,cancelable:true}));});
   await pause(500);assert.notEqual(await screenText(),afterWheel,'Trackpad-sized deltas scroll too');
-  await desktop.mouse.wheel(0,20000);await pause(700);
+  for (let attempt=0; attempt<8 && (await firstVisibleRow())!==0; attempt++) {
+    await desktop.mouse.wheel(0,-2400);
+    await pause(120);
+  }
+  assert.equal(await firstVisibleRow(),0,'The first of 160 context lines is reachable from the most recent screen');
+  for (let attempt=0; attempt<8 && (await firstVisibleRow())!==bottomRow; attempt++) {
+    await desktop.mouse.wheel(0,2400);
+    await pause(120);
+  }
+  assert.equal(await firstVisibleRow(),bottomRow);
   await desktop.keyboard.press('Control+u');
   await desktop.context().grantPermissions(['clipboard-read','clipboard-write']);
   await desktop.evaluate(async bytes=>navigator.clipboard.write([new ClipboardItem({'image/png':new Blob([new Uint8Array(bytes)],{type:'image/png'})})]),[...png]);

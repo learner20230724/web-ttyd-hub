@@ -39,7 +39,7 @@ const { until, pause } = require('./terminal-fixture.cjs');
     const url = `http://127.0.0.1:${server.address().port}`;
     let page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
     await page.goto(url);
-    await page.getByRole('button',{name:'终端',exact:true}).click();
+    await page.getByRole('button',{name:'全文',exact:true}).click();
     await page.waitForFunction(() => document.querySelector('.terminal-host')?.terminal?.options.disableStdin === false);
     await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
     await page.waitForFunction(() => new Promise(resolve => {
@@ -54,7 +54,7 @@ const { until, pause } = require('./terminal-fixture.cjs');
     holdChunk = true; holdTerminal = true;
     page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
     await page.goto(url);
-    await page.getByRole('button',{name:'终端',exact:true}).click();
+    await page.getByRole('button',{name:'全文',exact:true}).click();
     await until(() => chunks.length > 0);
     await page.locator('[data-session-id="reader"][data-activity-state="unread"]').first().waitFor();
     await pause(150);

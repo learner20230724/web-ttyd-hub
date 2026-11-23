@@ -62,13 +62,37 @@ const attachmentKey = computed(() => draftKey(session.value))
 const attachments = computed({ get: () => imageDrafts.value[attachmentKey.value] || [], set: value => { imageDrafts.value[attachmentKey.value] = value } })
 watch(attachmentKey, () => { imageUploading.value = false })
 const canAttach = computed(() => session.value?.shell === 'codex' || session.value?.activity?.detected)
-// A newly opened desktop conversation still has focus on the session list.
-function pasteDesktopImage(event) {
-  if (!canAttach.value || event.defaultPrevented || store.cachedSnapshot || sending.value ||
-      event.target?.closest?.('input, textarea, [contenteditable], dialog')) return
-  imagePicker.value?.paste(event)
+const menuInput = ref(null)
+function preparePasteMenu(event) {
+  const target = menuInput.value
+  if (!target || !composerInput.value || store.cachedSnapshot || sending.value ||
+      window.getSelection()?.toString() || event.target.closest('button, a, img, input, textarea, [contenteditable]')) return
+  // The browser offers its native Paste menu only over an editable hit target.
+  target.style.left = Math.max(0, Math.min(event.clientX - 5, document.documentElement.clientWidth - 10)) + 'px'
+  target.style.top = Math.max(0, Math.min(event.clientY - 5, document.documentElement.clientHeight - 10)) + 'px'
+  target.hidden = false
+  target.focus({ preventScroll: true })
 }
-if (props.desktop) window.addEventListener('paste', pasteDesktopImage)
+function insertDraftText(text) {
+  const input = composerInput.value
+  if (!input) return
+  input.setRangeText(text.replace(/\r\n?/g, '\n'), input.selectionStart, input.selectionEnd, 'end')
+  draft.value = input.value
+  input.focus({ preventScroll: true })
+}
+// Native paste also arrives on the document when focus stays on a reply or the sidebar.
+function pasteDesktop(event) {
+  const input = composerInput.value
+  if (!input || event.defaultPrevented || store.cachedSnapshot || sending.value ||
+      (event.target !== menuInput.value && event.target?.closest?.('input, textarea, [contenteditable], dialog, [role="dialog"]')) ||
+      document.querySelector('dialog[open], .modal-overlay, [role="dialog"][aria-modal="true"]')) return
+  if (imagePicker.value?.paste(event)) { input.focus({ preventScroll: true }); return }
+  const text = event.clipboardData?.getData('text/plain')
+  if (!text) return
+  event.preventDefault()
+  insertDraftText(text)
+}
+if (props.desktop) window.addEventListener('paste', pasteDesktop)
 const drafts = loadDrafts()
 let activeDraftKey = ''
 function saveDraft() {
@@ -137,11 +161,15 @@ async function loadEarlier() {
     if (!res.ok) throw new Error(data.error)
     if (key !== visibleKey || token !== epoch) return
     const height = pane.value?.scrollHeight || 0, top = pane.value?.scrollTop || 0
-    follow.value = false
+    const stayAtLatest = follow.value && atLatest() && top > 64
+    follow.value = stayAtLatest
     earlierMessages.value = [...data.messages, ...earlierMessages.value]
     earlierAvailable.value = data.hasEarlier
     await nextTick()
-    if (pane.value) pane.value.scrollTop = top + pane.value.scrollHeight - height
+    if (token === epoch && pane.value) {
+      pane.value.scrollTop = stayAtLatest ? pane.value.scrollHeight : top + pane.value.scrollHeight - height
+      savePosition()
+    }
   } catch (e) { if (key === visibleKey && token === epoch) error.value = e.message }
   finally { clearTimeout(timeout); loadingEarlier.value = false }
 }
@@ -195,6 +223,16 @@ const releaseReadGuard = store.setReadGuard(selected => props.readingVisible && 
   (codexAnswer.value ? answerData.value?.completed : content.value.completed) === selected.activity?.completed &&
   !contentBehind(codexAnswer.value ? answerData.value : content.value, selected.activity))
 watch(() => props.readingVisible, () => store.markRead(), { flush: 'post' })
+function nearHistoryStart() {
+  if (props.desktop && !switching && !props.showExecution && pane.value?.scrollTop <= 64 &&
+      (earlierAvailable.value ?? answerData.value?.hasEarlier)) void loadEarlier()
+}
+function savePosition() {
+  if (!visibleKey || !pane.value) return
+  props.positions.set(visibleKey, { top: pane.value.scrollTop, follow: follow.value,
+    history: props.desktop && !follow.value && earlierMessages.value.length ? earlierMessages.value : undefined,
+    hasEarlier: earlierAvailable.value })
+}
 function scrolled() {
   const p = pane.value
   if (!p || switching) return
@@ -204,13 +242,23 @@ function scrolled() {
   // latest reply. Keep deliberate history reading separate from layout shifts.
   if (resized && follow.value) { alignReading(); return }
   follow.value = Boolean(atLatest())
-  if (visibleKey) props.positions.set(visibleKey, { top:p.scrollTop, follow:follow.value })
+  savePosition()
+  if (!follow.value) nearHistoryStart()
   if (follow.value) store.markRead()
 }
 async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight; store.markRead() }
 async function display(entry, first = false) {
   if (!entry || entry.key !== visibleKey) return
   if (entry.data === content.value) return
+  // When the server's recent window advances, keep its displaced rows under a reader
+  // who has scrolled up. The older-page cursor must stay contiguous with the live tail.
+  const previous = answerData.value?.messages
+  if (props.desktop && previous?.length && entry.data.messages?.length &&
+      (!follow.value || earlierMessages.value.length)) {
+    const overlap = previous.findIndex(message => message.id === entry.data.messages[0].id)
+    if (overlap > 0 && !follow.value) earlierMessages.value = [...earlierMessages.value, ...previous.slice(0, overlap)]
+    if (overlap < 0 || (overlap > 0 && follow.value)) { earlierMessages.value = []; earlierAvailable.value = null }
+  }
   content.value = markRaw(entry.data)
   const key = visibleKey
   await nextTick()
@@ -276,12 +324,16 @@ watch(() => [store.current, session.value?.activity?.phase, session.value?.activ
   if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, Boolean(value[3] && value[3] !== previous[3]))
 })
 watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot, () => props.refreshTrigger, () => session.value?.codexThreadId || session.value?.resumeThreadId], async ([name, full]) => {
-  if (visibleKey && pane.value) props.positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
+  savePosition()
   const token = ++epoch, selected = session.value
   clearTimeout(timer); readingInFlight = false; nextReadAt = Date.now(); error.value = ''; answerStartedAt.value = Date.now(); switching = true
   const view = full ? 'full' : 'answer'
   const nextKey = selected ? contentKey(selected, view) : null
-  if (visibleKey !== nextKey) { earlierMessages.value = []; earlierAvailable.value = null }
+  if (visibleKey !== nextKey) {
+    const saved = props.positions.get(nextKey)
+    earlierMessages.value = saved?.history || []
+    earlierAvailable.value = saved?.history ? saved.hasEarlier : null
+  }
   visibleKey = nextKey
   follow.value = props.positions.get(visibleKey)?.follow ?? true
   const cached = selected ? peekContent(selected, view) : null
@@ -328,7 +380,7 @@ async function send(key = 'Enter', withText = true) {
     await bottom()
   }
   if (disposed || !sameSession()) { sending.value = false; return }
-  if (text && kind === 'command') emit('show-execution', true)
+  if (!props.desktop && text && kind === 'command') emit('show-execution', true)
   const request = new AbortController()
   inputRequest = request
   let timedOut = false
@@ -351,7 +403,10 @@ async function send(key = 'Enter', withText = true) {
         if (composerInput.value?.value === text) composerInput.value.value = ''
       }
     }
-    if (store.current === name) { await bottom(); refresh() }
+    if (store.current === name) {
+      if (props.desktop && text && kind === 'command') emit('show-execution', true)
+      else { await bottom(); refresh() }
+    }
   } catch (e) {
     if (disposed || !sameSession()) return
     const item = pending && pendingBySession.value[name]?.find(item => item.id === pending.id)
@@ -368,8 +423,8 @@ async function send(key = 'Enter', withText = true) {
   }
 }
 onBeforeUnmount(() => {
-  if (props.desktop) window.removeEventListener('paste', pasteDesktopImage)
-  if (visibleKey && pane.value) props.positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
+  if (props.desktop) window.removeEventListener('paste', pasteDesktop)
+  savePosition()
   saveDraft(); window.removeEventListener('pagehide', saveDraft)
   disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
   readingResize?.disconnect()
@@ -379,7 +434,7 @@ onBeforeUnmount(() => {
 })
 </script>
 <template>
-  <section class="mobile-terminal" :style="{ '--reading-size': `${fontSize}px` }">
+  <section class="mobile-terminal" :class="{ 'desktop-reader': desktop }" :style="{ '--reading-size': `${fontSize}px` }">
     <div v-if="navigationOpen" id="mobile-navigation" class="mobile-navigation" role="group" aria-label="终端方向键、回车、组合键和 ESC">
       <button v-for="key in ['Up', 'Down', 'Left', 'Right', 'Enter', 'S-Left', 'Escape']" :key="key" type="button" :class="{ 'wide-key': ['Enter', 'S-Left', 'Escape'].includes(key) }"
         :aria-label="{Up:'方向键上', Down:'方向键下', Left:'方向键左', Right:'方向键右', Enter:'终端回车', 'S-Left':'Shift 加左方向键', Escape:'终端 ESC'}[key]"
@@ -399,7 +454,11 @@ onBeforeUnmount(() => {
           <button v-if="!showExecution" type="button" @click="emit('show-execution', status.state === 'waiting')">查看全文 <span aria-hidden="true">↗</span></button>
         </div>
       </div>
-      <div ref="pane" :data-view="showExecution ? 'full' : 'answer'" class="mobile-reading" @scroll.passive="scrolled"
+      <textarea v-if="desktop && !showExecution && session.status === 'running'" ref="menuInput" hidden
+        class="native-paste-target" tabindex="-1" aria-label="粘贴到消息输入框"
+        @blur="$event.target.hidden = true" @keydown.esc.prevent="composerInput?.focus({preventScroll:true})"
+        @input="insertDraftText($event.target.value); $event.target.value = ''"></textarea>
+      <div ref="pane" @mousedown.right="preparePasteMenu" @contextmenu="preparePasteMenu" :data-view="showExecution ? 'full' : 'answer'" class="mobile-reading" @scroll.passive="scrolled" @wheel.passive="$event.deltaY < 0 && nearHistoryStart()"
         :data-content-revision="(codexAnswer ? answerData : content)?.contentRevision || null"
         :data-content-completed="(codexAnswer ? answerData : content)?.completed || null">
         <template v-if="!showExecution && messages.length">
@@ -439,7 +498,7 @@ onBeforeUnmount(() => {
         <div class="mobile-image-drafts"></div>
         <p v-if="inputNotice" class="input-notice" role="status">{{ inputNotice }}</p>
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || !draft" @click="send(null)">仅输入</button></div>
-        <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
+        <div class="compose-row"><button v-if="!desktop" type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
           <textarea ref="composerInput" v-model="draft" @keydown.enter="composerEnter" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
           <button class="send" :disabled="sending || imageUploading || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft || attachments.some(image => !image.inTerminal) ? '发送' : '回车' }}</button></div>
       </form>
@@ -449,6 +508,14 @@ onBeforeUnmount(() => {
 </template>
 <style scoped>
 .mobile-terminal { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; position:relative; background:#0e1420; color:#e5eaf2 }
+.native-paste-target { position:fixed; width:10px; height:10px; padding:0; border:0; opacity:0; z-index:2; }
+.desktop-reader .mobile-reading, .desktop-reader .composer {
+  padding-inline: max(24px, calc((100% - 92ch) / 2));
+}
+.desktop-reader .mobile-reading { padding-block:24px; scrollbar-gutter:stable both-edges; }
+.desktop-reader .mobile-session-header { padding:8px 20px; }
+.desktop-reader .composer { padding-block:12px; }
+.desktop-reader .compose-row { align-items:stretch; }
 .mobile-navigation { display:flex; gap:4px; padding:8px; border-bottom:1px solid #263143; flex-shrink:0; background:#131c2a; }
 .mobile-navigation button { flex:1; min-width:0; padding:6px 4px; font-size:20px; }
 .mobile-navigation button.wide-key { flex:1.6; font-size:13px; white-space:nowrap; }
