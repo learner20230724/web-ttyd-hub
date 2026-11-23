@@ -510,9 +510,9 @@ onBeforeUnmount(() => {
 .mobile-terminal { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; position:relative; background:#0e1420; color:#e5eaf2 }
 .native-paste-target { position:fixed; width:10px; height:10px; padding:0; border:0; opacity:0; z-index:2; }
 .desktop-reader .mobile-reading, .desktop-reader .composer {
-  padding-inline: max(24px, calc((100% - 92ch) / 2));
+  padding-inline: 16px;
 }
-.desktop-reader .mobile-reading { padding-block:24px; scrollbar-gutter:stable both-edges; }
+.desktop-reader .mobile-reading { padding-block:24px; }
 .desktop-reader .mobile-session-header { padding:8px 20px; }
 .desktop-reader .composer { padding-block:12px; }
 .desktop-reader .compose-row { align-items:stretch; }
@@ -556,6 +556,10 @@ onBeforeUnmount(() => {
 .markdown :deep(h1), .markdown :deep(h2), .markdown :deep(h3) { font-size:calc(var(--reading-size) * 1.125); margin:18px 0 10px }
 .markdown :deep(table) { display:block; max-width:100%; overflow-x:auto; border-collapse:collapse; touch-action:pan-x pan-y; margin:12px 0; }
 .markdown :deep(td), .markdown :deep(th) { padding:8px 10px; border:1px solid #344259; min-width:5em; white-space:nowrap }
+.desktop-reader .markdown :deep(table) { display:table; width:100%; overflow:visible; }
+.desktop-reader .markdown :deep(th), .desktop-reader .markdown :deep(td) {
+  min-width:0; white-space:normal; overflow-wrap:anywhere;
+}
 .terminal-table { max-width:100%; overflow-x:auto; margin:12px 0; touch-action:pan-x pan-y; font-size:var(--reading-size); }
 .terminal-table table { border-collapse:collapse; min-width:100%; }
 .terminal-table td { padding:8px 10px; border:1px solid #344259; white-space:nowrap; line-height:1.6; }
