@@ -6,34 +6,50 @@ import { hubUrl } from '../utils/base.mjs'
 const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, previewTarget: String })
 const emit = defineEmits(['update:modelValue', 'busy', 'error'])
 const picker = ref(null), uploading = ref(false)
+const pendingPreviews = ref([])
+function clearPreviews() {
+  for (const preview of pendingPreviews.value) URL.revokeObjectURL(preview.url)
+  pendingPreviews.value = []
+}
 let disposed = false
 let request = new AbortController()
-onBeforeUnmount(() => { disposed = true; request.abort() })
+onBeforeUnmount(() => { disposed = true; request.abort(); clearPreviews() })
 async function addFiles(files) {
-  if (props.disabled || uploading.value) return
-  const selected = Array.from(files || []).filter(f => f.type.startsWith('image/'))
+  const selected = Array.from(files || [])
+  if (picker.value) picker.value.value = ''
   if (!selected.length) return
+  if (props.disabled || uploading.value) { emit('error', '当前无法添加图片，请稍后重选'); return }
   if (selected.length + props.modelValue.length > 8) { emit('error', '一次最多添加 8 张图片'); return }
   const session = props.session, items = [...props.modelValue]
   request = new AbortController()
   const timeout = setTimeout(() => request.abort(), 60000)
   uploading.value = true; emit('busy', true); emit('error', '')
   try {
+    if (selected.some(file => file.size > 20 * 1024 * 1024)) throw new Error('每张图片最大 20 MB')
+    if (selected.some(file => !file.size)) throw new Error('无法读取空图片，请重新选择')
+    if (props.compact) pendingPreviews.value = selected.map(file => ({ url: URL.createObjectURL(file), name: file.name || '图片' }))
     for (const file of selected) {
-      if (file.size > 20 * 1024 * 1024) throw new Error('每张图片最大 20 MB')
       const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images`), {
-        method: 'POST', headers: { 'Content-Type': file.type, 'X-TTYD-Generation': session.createdAt || '', 'X-TTYD-Thread': session.codexThreadId || session.resumeThreadId || '' }, body: file, signal: request.signal,
+        method: 'POST', headers: { 'Content-Type': file.type.startsWith('image/') ? file.type : 'application/octet-stream', 'X-TTYD-Generation': session.createdAt || '', 'X-TTYD-Thread': session.codexThreadId || session.resumeThreadId || '' }, body: file, signal: request.signal,
       }), request.signal)
       const data = await untilAbort(res.json(), request.signal)
       if (!res.ok) throw new Error(data.error || '图片上传失败')
       if (disposed || draftKey(props.session) !== draftKey(session)) return
-      if (!items.some(item => item.id === data.id)) items.push({ id: data.id, name: file.name || '截图' }); emit('update:modelValue', [...items])
+      if (!items.some(item => item.id === data.id)) {
+        items.push({ id: data.id, name: file.name || '截图' })
+        emit('update:modelValue', [...items])
+      }
+      const preview = pendingPreviews.value.shift()
+      if (preview) URL.revokeObjectURL(preview.url)
     }
-  } catch (error) { if (!disposed) emit('error', error.message) }
-  finally { clearTimeout(timeout); uploading.value = false; if (!disposed) emit('busy', false); if (picker.value) picker.value.value = '' }
+  } catch (error) { if (!disposed) emit('error', request.signal.aborted ? '添加图片超时，请重新选择' : error.message) }
+  finally { clearTimeout(timeout); clearPreviews(); uploading.value = false; if (!disposed) emit('busy', false) }
 }
 function paste(event) {
-  const files = Array.from(event.clipboardData?.files || []).filter(f => f.type.startsWith('image/'))
+  const clipboard = event.clipboardData
+  let files = Array.from(clipboard?.files || [])
+  if (!files.length) files = Array.from(clipboard?.items || []).map(item => item.getAsFile()).filter(Boolean)
+  files = files.filter(file => file.type.startsWith('image/') || !file.type || file.type === 'application/octet-stream')
   if (!files.length) return false
   event.preventDefault(); event.stopImmediatePropagation(); void addFiles(files); return true
 }
@@ -44,6 +60,9 @@ defineExpose({ addFiles, paste })
     <input ref="picker" class="image-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple @change="addFiles($event.target.files)">
     <button type="button" class="image-pick" :class="{ compact }" aria-label="添加图片" :title="uploading ? '上传中…' : '添加图片'" :disabled="disabled || uploading" @click="picker.click()"><span v-if="compact && uploading" aria-hidden="true">…</span><svg v-else-if="compact" aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 3-3 6 6"/></svg><span v-else>{{ uploading ? '上传中…' : '添加图片' }}</span></button>
     <Teleport :to="previewTarget || 'body'" :disabled="!previewTarget" defer>
+    <div v-for="preview in pendingPreviews" :key="preview.url" class="attachment pending-attachment" aria-busy="true">
+      <img :src="preview.url" :alt="preview.name">
+    </div>
     <div v-for="(item, index) in modelValue" :key="`${item.id}:${index}`" class="attachment">
       <img :src="hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images/${item.id}`)" :alt="item.name">
       <button type="button" :disabled="disabled || uploading" :aria-label="`移除图片 ${item.name}`" @click="emit('update:modelValue', modelValue.filter((_, i) => i !== index))">×</button>

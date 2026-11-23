@@ -21,7 +21,7 @@ module.exports = function (sessionManager) {
     contentScope(req, 'mutation');
   };
   const images = sessionManager.activity?.images || new (require('../services/session-images').SessionImages)();
-  router.post('/:name/images', express.raw({ type: 'image/*', limit: '20mb' }), async (req, res) => {
+  router.post('/:name/images', express.raw({ type: ['image/*', 'application/octet-stream'], limit: '20mb' }), async (req, res) => {
     try {
       contentScope(req, 'images');
       const session = sessionManager.getSession(req.params.name);

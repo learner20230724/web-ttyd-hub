@@ -55,8 +55,31 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   page.on('pageerror',e=>errors.push(e.message));await page.goto(base);await page.locator('.session-card').click();await page.locator('.message').first().waitFor();
   const png=Buffer.from(await page.evaluate(()=>{const c=document.createElement('canvas');c.width=320;c.height=160;const x=c.getContext('2d');x.fillStyle='#f35d60';x.fillRect(0,0,160,160);x.fillStyle='#38a9ed';x.fillRect(160,0,160,160);return c.toDataURL('image/png').split(',')[1];}),'base64');
   await fs.writeFile(viewed,png);
-  await page.locator('input[type=file]').setInputFiles({name:'截图.png',mimeType:'image/png',buffer:png});
-  await page.locator('.attachment img').waitFor();
+  // Android document providers can return a real image with a generic MIME.
+  // Hold the HTTP transfer to check the visible draft before any server reply.
+  let releaseTransfer;
+  const transfer = new Promise(resolve => { releaseTransfer = resolve; });
+  await page.route('**/image-test/images', async route => { await transfer; await route.continue(); });
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: '添加图片' }).click();
+  await (await chooser).setFiles({name:'相册图片',mimeType:'application/octet-stream',buffer:png});
+  try {
+    await page.waitForFunction(() => document.querySelector('.mobile-image-drafts img[src^="blob:"]')?.naturalWidth > 0);
+    assert(await page.locator('button.send').isDisabled());
+    assert.equal(requests, 1, 'Picking alone must not send a message');
+  } finally { releaseTransfer(); }
+  await page.waitForFunction(() => document.querySelector('.mobile-image-drafts img[src*="/images/"]')?.naturalWidth > 0);
+  // A keyboard clipboard may expose a File only via its items list.
+  const pastedImage = page.waitForResponse(r => r.url().endsWith('/image-test/images') && r.request().method() === 'POST');
+  await page.locator('textarea').evaluate((el, bytes) => {
+    const event = new Event('paste', { bubbles:true, cancelable:true });
+    const file = new File([new Uint8Array(bytes)], '粘贴图片', {type:''});
+    Object.defineProperty(event, 'clipboardData', {value:{files:[],items:[{getAsFile:()=>file}]}});
+    el.dispatchEvent(event);
+  }, [...png]);
+  assert.equal((await pastedImage).status(), 200);
+  await page.waitForFunction(() => !document.querySelector('button.send').disabled);
+  assert.equal(await page.locator('.mobile-image-drafts .attachment').count(), 1, 'Pasting the same bytes deduplicates the attachment');
   assert.equal(await page.locator('.composer .image-pick').count(),0);
   const pick=await page.locator('.mobile-session-header .image-pick').boundingBox(), title=await page.locator('.mobile-title-row').boundingBox();
   assert(pick && pick.y >= title.y && pick.y + pick.height <= title.y + title.height + 1, 'Image picker belongs in title row');

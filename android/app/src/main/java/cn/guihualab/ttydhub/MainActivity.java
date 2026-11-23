@@ -3,6 +3,7 @@ package cn.guihualab.ttydhub;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
@@ -33,6 +34,9 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 public class MainActivity extends Activity {
     private LinearLayout root;
     private WebView web;
@@ -43,7 +47,8 @@ public class MainActivity extends Activity {
     private AlertDialog loginDialog;
     private boolean pageFailed;
     private boolean activityVisible;
-    private static final int PICK_IMAGES = 42;
+    private int pickerRequest = 42;
+    private int interruptedPicker = -1;
     private ValueCallback<Uri[]> imageCallback;
     private LoginVault loginVault;
     private SavedServers savedServers;
@@ -51,6 +56,10 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            interruptedPicker = savedInstanceState.getInt("pendingImagePicker", -1);
+            if (interruptedPicker >= 0) pickerRequest = interruptedPicker;
+        }
         loginVault = new LoginVault(this);
         httpAuth = new HttpAuthSession(loginVault, this::promptLogin);
         preferences = getSharedPreferences("connection", MODE_PRIVATE);
@@ -205,10 +214,13 @@ public class MainActivity extends Activity {
                 if (view != web || !canControl()) return false;
                 finishImagePicker(null);
                 imageCallback = callback;
-                Intent intent = params.createIntent();
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
                 intent.setType("image/*");
                 intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/png", "image/jpeg", "image/webp", "image/gif"});
-                try { startActivityForResult(intent, PICK_IMAGES); }
+                pickerRequest = pickerRequest >= 65535 ? 42 : pickerRequest + 1;
+                try { startActivityForResult(intent, pickerRequest); }
                 catch (android.content.ActivityNotFoundException error) {
                     finishImagePicker(null);
                     Toast.makeText(MainActivity.this, "没有可用的系统选图器", Toast.LENGTH_SHORT).show();
@@ -335,6 +347,10 @@ public class MainActivity extends Activity {
             if (!"true".equals(value)) connectionMenu();
         });
     }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putInt("pendingImagePicker", imageCallback == null ? interruptedPicker : pickerRequest);
+    }
     private void finishImagePicker(Uri[] images) {
         ValueCallback<Uri[]> callback = imageCallback;
         imageCallback = null;
@@ -342,13 +358,30 @@ public class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != PICK_IMAGES) return;
-        Uri[] images = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
-        // Only the user-selected content-provider grants are passed to WebView.
-        if (images != null) for (Uri uri : images) {
-            if (!"content".equals(uri.getScheme())) { images = null; break; }
+        if (requestCode == interruptedPicker) {
+            interruptedPicker = -1;
+            if (resultCode == RESULT_OK) Toast.makeText(this, "页面已重新打开，请再选一次图片", Toast.LENGTH_SHORT).show();
+            return;
         }
-        finishImagePicker(canControl() ? images : null);
+        if (requestCode != pickerRequest || imageCallback == null) return;
+        if (resultCode != RESULT_OK || !canControl()) { finishImagePicker(null); return; }
+        Uri[] images = selectedImages(data);
+        if (images == null) Toast.makeText(this, "未能读取所选图片，请重新选择", Toast.LENGTH_SHORT).show();
+        finishImagePicker(images);
+    }
+    static Uri[] selectedImages(Intent data) {
+        Set<Uri> selected = new LinkedHashSet<>();
+        if (data != null) {
+            addSelectedImage(selected, data.getData());
+            ClipData clip = data.getClipData();
+            if (clip != null) for (int i = 0; i < clip.getItemCount(); i++) {
+                addSelectedImage(selected, clip.getItemAt(i).getUri());
+            }
+        }
+        return selected.isEmpty() ? null : selected.toArray(new Uri[0]);
+    }
+    private static void addSelectedImage(Set<Uri> selected, Uri uri) {
+        if (uri != null && "content".equals(uri.getScheme()) && uri.getAuthority() != null) selected.add(uri);
     }
     private void notifyPageVisibility() {
         if (canControl()) web.evaluateJavascript("window.dispatchEvent(new CustomEvent('hub:visibility',{detail:{visible:" + activityVisible + "}}))", null);
