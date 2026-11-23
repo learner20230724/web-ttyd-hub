@@ -32,7 +32,7 @@ async function fixture(browser, scenario) {
   app.get('/api/sessions/codex-usage', (_req, res) => {
     usageGets++;
     res.json({ available: true, stale: false, fetchedAt: new Date().toISOString(), message: '',
-      windows: [{ id: 'primary', name: 'Codex', period: '合成额度', remainingPercent: 72, resetsAt: null }] });
+      windows: [{ id: 'codex:primary', name: 'Codex', period: '每周额度', remainingPercent: 72, resetsAt: null }] });
   });
   app.post('/api/sessions/:name/questions/:id/respond', (req, res) => {
     submissions.push({ name: req.params.name, id: req.params.id, body: req.body });
@@ -116,16 +116,16 @@ async function usageRecovers(browser) {
   const f = await fixture(browser, 'usage-body');
   try {
     await f.page.getByRole('button', { name: '会话列表', exact: true }).tap();
-    await f.page.getByRole('button', { name: '账号额度', exact: true }).tap();
-    const dialog = f.page.getByRole('dialog', { name: '账号剩余额度' });
-    await dialog.getByText('读取超时，请稍后刷新', { exact: true }).waitFor({ timeout: 1500 });
-    const refresh = dialog.getByRole('button', { name: '刷新额度', exact: true });
-    assert.equal(await refresh.isDisabled(), false, 'An unresponsive JSON reader cannot keep quota refresh locked');
+    const toggle = f.page.getByRole('button', { name: '账号额度', exact: true });
+    const card = f.page.locator('.usage-card');
+    await toggle.tap();
+    await card.getByText('查询超时', { exact: true }).waitFor({ timeout: 1500 });
     assert.equal(f.usageGets, 1);
-    await refresh.tap();
-    await dialog.locator('progress[value="72"]').waitFor({ timeout: 1500 });
+    await toggle.tap();
+    await toggle.tap();
+    await card.getByText('72%', { exact: true }).waitFor({ timeout: 1500 });
     assert.equal(f.usageGets, 2);
-    assert.equal(await dialog.getByText('读取超时，请稍后刷新', { exact: true }).count(), 0);
+    assert.equal(await card.getByText('查询超时', { exact: true }).count(), 0);
     assert.equal(f.submissions.length, 0);
   } finally { await f.close(); }
 }

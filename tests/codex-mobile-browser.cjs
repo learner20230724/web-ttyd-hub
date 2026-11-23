@@ -13,7 +13,15 @@ const makeQuestion = (id = 'one') => ({ id, isBlocking: true, questions: [{ id: 
 let requests = [], posts = [], offline = false, delayPost = false, stale = false, unavailable = false;
 app.get('/api/sessions', (_req, res) => res.json({ sessions }));
 app.get('/api/sessions/shells', (_req, res) => res.json({ platform: 'linux', shells: [{ id: 'codex', name: 'Codex' }] }));
-app.get('/api/sessions/codex-usage', (_req, res) => res.json({ available: !unavailable, stale, fetchedAt: unavailable ? null : new Date().toISOString(), message: unavailable ? '当前账号未提供额度数据，请在 Codex 中确认登录方式。' : stale ? '暂时无法读取账号额度，请稍后刷新。' : '', windows: unavailable ? [] : [{ id: 'primary', name: 'Codex', period: '5 小时额度', remainingPercent: 82, resetsAt: new Date(Date.now() + 7200000).toISOString() }, { id: 'secondary', name: 'Codex', period: '每周额度', remainingPercent: 61, resetsAt: new Date(Date.now() + 4 * 86400000).toISOString() }] }));
+app.get('/api/sessions/codex-usage', (_req, res) => {
+  const resetsAt = new Date(Date.now() + 4 * 86400000).toISOString();
+  const windows = [
+    { id: 'other:primary', name: 'Other', period: '每周额度', remainingPercent: 95, resetsAt },
+    { id: 'codex:primary', name: 'Codex', period: '5 小时额度', remainingPercent: 82, resetsAt },
+  ];
+  if (!unavailable) windows.push({ id: 'codex:secondary', name: 'Codex', period: '每周额度', remainingPercent: 61, resetsAt });
+  res.json({ available: true, stale, fetchedAt: new Date().toISOString(), windows });
+});
 app.get('/api/sessions/:name/mobile', (req, res) => res.json(req.query.view === 'full' ? { text: 'Synthetic Codex terminal' } : { messages: [{ id: 'hello', role: 'assistant', text: '正在调整手机界面。请确认下面的问题，或直接跳过，让任务继续。' }] }));
 app.get('/api/sessions/:name/questions', (req, res) => offline ? res.status(503).json({ error: 'offline' }) : res.json({ supported: true, requests: req.params.name === 'reader' ? requests : [] }));
 app.post('/api/sessions/:name/questions/:id/respond', async (req, res) => {
@@ -22,11 +30,52 @@ app.post('/api/sessions/:name/questions/:id/respond', async (req, res) => {
   requests = requests.filter(q => q.id !== req.params.id); res.json({ ok: true });
 });
 app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
+async function desktopQuota(browser, url, output) {
+  const page = await browser.newPage({ viewport: { width: 1040, height: 585 } });
+  try {
+    const quota = page.getByRole('button', { name: '账号额度', exact: true });
+    let pending;
+    await page.route('**/api/sessions/codex-usage*', route => { pending = route; });
+    await page.goto(url);
+    await quota.waitFor();
+    assert.equal(pending, undefined);
+    const anchor = await quota.boundingBox();
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    await quota.click();
+    const card = page.locator('.usage-card');
+    await card.getByText('正在查询额度…').waitFor();
+    await page.clock.fastForward(12000);
+    await pending.fulfill({ json: { available: true, fetchedAt: '2026-10-14T01:20:00Z',
+      windows: [{ id: 'codex:primary', name: 'Codex', period: '每周额度', remainingPercent: 0, resetsAt: null }] } });
+    await card.getByText('0%', { exact: true }).waitFor();
+    await card.getByText('暂未提供', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('dialog').count(), 0);
+    // The lookup took 12s. The full minute belongs to the displayed result.
+    await page.clock.fastForward(59999);
+    assert.equal(await quota.getAttribute('aria-expanded'), 'true');
+    assert(Math.abs((await quota.boundingBox()).y - anchor.y) < 1, 'Opening upwards keeps the button in place');
+    await page.clock.fastForward(1);
+    assert.equal(await quota.getAttribute('aria-expanded'), 'false');
+    await page.clock.resume();
+    await page.unroute('**/api/sessions/codex-usage*');
+    await quota.click();
+    await card.getByText('61%', { exact: true }).waitFor();
+    await page.locator('[data-session-id="reader"]').click();
+    await page.getByRole('textbox', { name: '消息输入', exact: true }).fill('会话草稿');
+    assert.equal(await quota.getAttribute('aria-expanded'), 'true', 'The open card leaves the conversation interactive');
+    await page.screenshot({ path: path.join(output, 'codex-usage-desktop.png'), animations: 'disabled' });
+    await quota.press('Escape');
+    assert.equal(await quota.getAttribute('aria-expanded'), 'false');
+  } finally { await page.close(); }
+}
+
 (async () => {
   const server = app.listen(0, '127.0.0.1'); const wss = setupWebSocket(server, manager); await once(server, 'listening');
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   const output = path.join(__dirname, '../output/playwright'); fs.mkdirSync(output, { recursive: true });
   try {
+    await desktopQuota(browser, `http://127.0.0.1:${server.address().port}`, output);
     for (const width of [320, 412]) {
       requests = [makeQuestion()]; posts = []; offline = false; stale = false; unavailable = false;
       const context = await browser.newContext({ viewport: { width, height: 915 }, isMobile: true, hasTouch: true });
@@ -70,17 +119,25 @@ app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../se
       requests = []; await page.getByRole('dialog').waitFor({ state: 'hidden' });
       assert.equal(posts.length, 2, 'Other-device resolution closes without sending');
       await page.getByRole('button', { name: '会话列表', exact: true }).tap();
-      await page.getByRole('button', { name: '账号额度', exact: true }).tap();
-      await page.getByRole('dialog', { name: '账号剩余额度' }).waitFor();
-      await page.locator('progress').nth(1).waitFor();
-      assert.equal(await page.locator('progress').count(), 2);
-      await page.screenshot({ path: path.join(output, `codex-usage-${width}.png`) });
-      stale = true; await page.getByRole('button', { name: '刷新额度', exact: true }).tap();
-      await page.getByText(/上次成功读取/).waitFor(); assert.equal(await page.locator('progress').count(), 2);
-      unavailable = true; await page.getByRole('button', { name: '刷新额度', exact: true }).tap();
-      await page.getByText('当前账号未提供额度数据，请在 Codex 中确认登录方式。').waitFor(); assert.equal(await page.locator('progress').count(), 0);
-      await page.getByRole('button', { name: '关闭账号额度', exact: true }).tap();
-      assert.equal(await page.getByRole('button', { name: '会话列表', exact: true }).getAttribute('aria-expanded'), 'false');
+      const quota = page.getByRole('button', { name: '账号额度', exact: true });
+      await quota.tap();
+      const card = page.locator('.usage-card');
+      await card.getByText('61%', { exact: true }).waitFor();
+      assert.doesNotMatch(await card.innerText(), /82%|95%|5 小时/);
+      assert.equal(await page.getByRole('dialog').count(), 0);
+      assert.equal(await page.getByRole('button', { name: '会话列表', exact: true }).getAttribute('aria-expanded'), 'true');
+      await page.screenshot({ path: path.join(output, `codex-usage-${width}.png`), animations: 'disabled' });
+      stale = true;
+      await quota.tap(); await quota.tap();
+      await card.getByText('上次成功更新', { exact: true }).waitFor();
+      assert(await card.getByText('61%').isVisible());
+      unavailable = true; stale = false;
+      await quota.tap(); await quota.tap();
+      await card.getByText('暂无 Codex 每周额度数据').waitFor();
+      assert.doesNotMatch(await card.innerText(), /%/);
+      await quota.tap();
+      assert.equal(await quota.getAttribute('aria-expanded'), 'false');
+      await page.locator('[data-session-id="reader"]').tap();
       requests = [makeQuestion('keyboard')]; await page.getByRole('button', { name: '回答追问', exact: true }).tap();
       await page.setViewportSize({ width, height: 450 });
       await page.getByLabel('你的回答', { exact: true }).fill('软键盘打开时仍能输入');
@@ -88,6 +145,6 @@ app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../se
       await page.getByRole('dialog').waitFor({ state: 'hidden' });
       assert.deepEqual(errors, []); await context.close();
     }
-    console.log('320/412px: quota, question choices/text, skip, drafts, switching, offline/resolved state and keyboard-sized viewport passed.');
+    console.log('Desktop quota stays anchored and interactive for 60s after the result. 320/412px: inline quota, questions, drafts, switching and keyboard-sized viewport passed.');
   } finally { await browser.close(); for (const socket of wss.clients) socket.terminate(); wss.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(err => { console.error(err); process.exitCode = 1; });

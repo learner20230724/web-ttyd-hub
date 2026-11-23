@@ -4,14 +4,12 @@ import Sidebar from "./components/Sidebar.vue";
 import MobileTerminal from "./components/MobileTerminal.vue";
 const TerminalView = defineAsyncComponent(() => import("./components/TerminalView.vue"));
 import CreateDialog from "./components/CreateDialog.vue";
-import CodexUsageDialog from "./components/CodexUsageDialog.vue";
 import Toast from "./components/Toast.vue";
 import { useSessionStore } from "./stores/sessions";
 
 const store = useSessionStore();
 const sidebarCollapsed = ref(window.innerWidth <= 768);
 const showCreateDialog = ref(false);
-const showUsageDialog = ref(false);
 const toastRef = ref(null);
 const readingKey = 'web-ttyd-hub.mobile-reading.v1';
 let savedReading = {};
@@ -143,7 +141,6 @@ function handleMobileOverlayClick() {
       <Sidebar
         :collapsed="sidebarCollapsed"
         @create="showCreateDialog = true"
-        @usage="showUsageDialog = true; if (isMobile) sidebarCollapsed = true"
         @select="closeOverlayAfterSelection"
       />
 
@@ -153,7 +150,6 @@ function handleMobileOverlayClick() {
     </div>
 
     <CreateDialog v-if="showCreateDialog" @close="showCreateDialog = false" />
-    <CodexUsageDialog v-if="showUsageDialog" @close="showUsageDialog = false" />
     <Toast ref="toastRef" />
   </div>
 </template>
