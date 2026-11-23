@@ -4,7 +4,7 @@ import { untilAbort } from '../utils/request-deadline.mjs'
 import { insertTerminalImages } from '../utils/terminal-images.mjs'
 import { draftKey } from '../utils/session-drafts.mjs'
 import { hubUrl } from '../utils/base.mjs'
-const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, insertIntoTerminal: Boolean, previewTarget: String })
+const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, insertIntoTerminal: Boolean, attachUploaded: Function, previewTarget: String })
 const emit = defineEmits(['update:modelValue', 'busy', 'error'])
 const picker = ref(null), uploading = ref(false)
 const pendingPreviews = ref([])
@@ -14,6 +14,14 @@ function clearPreviews() {
 }
 let disposed = false
 let request = new AbortController()
+let addition = null
+// Only a successful batch can release its one pending Enter. Other terminal
+// input can clear it, and removal or a later upload never inherits it.
+function deferEnter(submit) {
+  if (!addition) return false
+  addition.submit = submit
+  return true
+}
 onBeforeUnmount(() => { disposed = true; request.abort(); clearPreviews() })
 async function addFiles(files) {
   const selected = Array.from(files || [])
@@ -22,6 +30,9 @@ async function addFiles(files) {
   if (props.disabled || uploading.value) { emit('error', '当前无法添加图片，请稍后重选'); return }
   if (selected.length + props.modelValue.length > 8) { emit('error', '一次最多添加 8 张图片'); return }
   const session = props.session
+  const identity = draftKey(session)
+  const batch = { submit: null }
+  addition = batch
   request = new AbortController()
   const timeout = setTimeout(() => request.abort(), 60000)
   uploading.value = true; emit('busy', true); emit('error', '')
@@ -35,7 +46,7 @@ async function addFiles(files) {
       }), request.signal)
       const data = await untilAbort(res.json(), request.signal)
       if (!res.ok) throw new Error(data.error || '图片上传失败')
-      if (disposed || draftKey(props.session) !== draftKey(session)) return
+      if (disposed || draftKey(props.session) !== identity) return
       if (!props.modelValue.some(item => item.id === data.id)) {
         const item = { id: data.id, name: file.name || '截图' }
         if (props.insertIntoTerminal) {
@@ -50,15 +61,25 @@ async function addFiles(files) {
             if (!disposed) emit('error', '未确认图片已加入终端，请先查看全文')
             return
           }
-          if (disposed || draftKey(props.session) !== draftKey(session)) return
+          if (disposed || draftKey(props.session) !== identity) return
         }
         emit('update:modelValue', [...props.modelValue, item])
       }
       const preview = pendingPreviews.value.shift()
       if (preview) URL.revokeObjectURL(preview.url)
     }
-  } catch (error) { if (!disposed) emit('error', request.signal.aborted ? '添加图片超时，请重新选择' : error.message) }
-  finally { clearTimeout(timeout); clearPreviews(); uploading.value = false; if (!disposed) emit('busy', false) }
+    if (props.attachUploaded && !(await props.attachUploaded())) return
+  } catch (error) {
+    if (!disposed) emit('error', request.signal.aborted ? '添加图片超时，请重新选择' : error.message)
+    return
+  } finally {
+    addition = null
+    clearTimeout(timeout)
+    clearPreviews()
+    uploading.value = false
+    if (!disposed) emit('busy', false)
+  }
+  if (!disposed && draftKey(props.session) === identity) batch.submit?.()
 }
 async function remove(item) {
   if (uploading.value || props.disabled) return
@@ -100,7 +121,7 @@ function paste(event) {
   if (!files.length) return false
   event.preventDefault(); event.stopImmediatePropagation(); void addFiles(files); return true
 }
-defineExpose({ addFiles, paste })
+defineExpose({ addFiles, paste, deferEnter })
 </script>
 <template>
   <div class="image-attachments">

@@ -16,12 +16,13 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-image-codex-'));
   const home=path.join(root,'codex'), project=path.join(root,'project');
   await fs.mkdir(home);await fs.mkdir(project);
-  let requests=0, sawImage=false, submittedImages=[];
+  let requests=0, sawImage=false, submittedImages=[], lastUserInput=[];
   const viewed=path.join(project,'截图.png');
   model=http.createServer(async(req,res)=>{
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
     if(req.url!='/v1/responses'){res.writeHead(200,{'Content-Type':'application/json'});res.end('{}');return;}
     const body=JSON.parse(Buffer.concat(chunks).toString()); requests++;
+    lastUserInput = (body.input || []).filter(item => item.role === 'user').at(-1)?.content || [];
     if (requests === 2) submittedImages = (body.input || []).filter(m => m.role === 'user')
       .flatMap(m => m.content || []).filter(c => c.type === 'input_image').map(c => c.image_url);
     sawImage ||= (body.input || []).some(item=>item.role==='user' && item.content?.some(c=>c.type==='input_image' && c.image_url?.startsWith('data:image/')));
@@ -264,6 +265,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await desktop.keyboard.press('Control+u');
   await desktop.setViewportSize({width:1100,height:760});
   await desktop.locator('.xterm-helper-textarea').focus();await desktop.keyboard.type('UNSENT_WHEEL_DRAFT');
+  await until(async () => (await screenText()).includes('UNSENT_WHEEL_DRAFT'));
   const firstVisibleRow = async () => Number((await screenText()).match(/SCROLL_CONTEXT_(\d+)/)?.[1]);
   const bottomRow = await firstVisibleRow();
   const smallDiagonal = deltaY => desktop.locator('.xterm-screen').evaluate((el, deltaY) => {
@@ -334,6 +336,43 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
       }
       return bounds.right <= host.getBoundingClientRect().right && host.scrollLeft === 0;
     },submitted));
+  }
+  // A screenshot and an immediate Enter must reach Codex as one image turn,
+  // even with the clipboard focus on the toolbar and the upload held in flight.
+  for (const tab of [answerTab, fullTab]) {
+    await tab.click();
+    if (tab === answerTab) await input.fill('');
+    else await desktop.waitForFunction(() => document.querySelector('.terminal-host')?.terminal?.options.disableStdin === false);
+    await desktop.locator('.toolbar-title').click();
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    await desktop.route('**/image-test/images', async route => { await held; await route.continue(); }, {times:1});
+    const before = requests;
+    const upload = desktop.waitForRequest(r => r.url().endsWith('/image-test/images') && r.method() === 'POST');
+    try {
+      await desktop.keyboard.press('Control+v');
+      await upload;
+      await desktop.keyboard.press('Enter');
+      assert.equal(requests, before);
+    } finally { release(); }
+    await until(() => requests > before);
+    assert.equal(requests, before + 1);
+    assert.equal(lastUserInput.filter(item => item.type === 'input_image').length, 1);
+  }
+  console.log('PASS actual Codex receives one image turn after page-level paste and immediate Enter in Answer and Full');
+  for (const tab of [answerTab, fullTab]) {
+    const text = tab === answerTab ? '回答页粘贴第一行\n保留第二行' : '全文页粘贴第一行\n保留第二行';
+    await tab.click();
+    if (tab === answerTab) await input.waitFor();
+    else await desktop.waitForFunction(() => document.querySelector('.terminal-host')?.terminal?.options.disableStdin === false);
+    await desktop.locator('.toolbar-title').click();
+    await desktop.evaluate(value => navigator.clipboard.writeText(value), text);
+    const before = requests;
+    await desktop.keyboard.press('Control+v');
+    await desktop.keyboard.press('Enter');
+    await until(() => requests > before);
+    assert(lastUserInput.some(item => item.type === 'input_text' && item.text === text));
+    assert.equal(requests, before + 1);
   }
   console.log('PASS mobile removal: restored legacy and single attachments, first of two, phone and terminal text retained, only the intended image delivered');
   console.log('PASS submitted CJK transcript: complete rendered text and visible rightmost glyphs at three viewport widths');

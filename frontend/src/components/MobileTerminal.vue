@@ -1,5 +1,6 @@
 <script setup>
 import { pageHidden, receiveVisibility } from '../utils/page-visibility.mjs'
+import { pageOwnsPaste } from '../utils/page-paste.mjs'
 import { draftKey, loadDrafts, persistDrafts } from '../utils/session-drafts.mjs'
 import { hubUrl } from '../utils/base.mjs'
 
@@ -81,18 +82,18 @@ function insertDraftText(text) {
   input.focus({ preventScroll: true })
 }
 // Native paste also arrives on the document when focus stays on a reply or the sidebar.
-function pasteDesktop(event) {
+function pasteIntoComposer(event) {
   const input = composerInput.value
-  if (!input || event.defaultPrevented || store.cachedSnapshot || sending.value ||
-      (event.target !== menuInput.value && event.target?.closest?.('input, textarea, [contenteditable], dialog, [role="dialog"]')) ||
-      document.querySelector('dialog[open], .modal-overlay, [role="dialog"][aria-modal="true"]')) return
+  if (!input || !props.readingVisible || store.cachedSnapshot || sending.value ||
+      !pageOwnsPaste(event, input, menuInput.value)) return
   if (imagePicker.value?.paste(event)) { input.focus({ preventScroll: true }); return }
+  if (event.target === input) return // Let the browser insert text at the caret, with native undo.
   const text = event.clipboardData?.getData('text/plain')
   if (!text) return
   event.preventDefault()
   insertDraftText(text)
 }
-if (props.desktop) window.addEventListener('paste', pasteDesktop)
+window.addEventListener('paste', pasteIntoComposer)
 const drafts = loadDrafts()
 let activeDraftKey = ''
 function saveDraft() {
@@ -371,9 +372,17 @@ watch([() => store.current, () => props.showExecution, () => session.value?.crea
 }, { immediate: true })
 watch(() => props.fontSize, async () => { if (follow.value) await bottom() })
 function composerEnter(event) {
-  if (!props.desktop || event.shiftKey || event.isComposing || event.keyCode === 229) return
+  if (event.shiftKey || event.isComposing || event.target.composing || event.keyCode === 229) return
+  // Touchscreen laptops and phones with a keyboard also report a physical Enter key.
+  if (!props.desktop && event.code !== 'Enter' && event.code !== 'NumpadEnter') return
   event.preventDefault()
-  if (!event.repeat && !imageUploading.value) void send()
+  if (event.repeat) return
+  const input = event.target, text = input.value, view = props.showExecution, identity = attachmentKey.value
+  if (imagePicker.value?.deferEnter(() => {
+    if (input === composerInput.value && input.value === text && attachmentKey.value === identity &&
+        props.showExecution === view && props.readingVisible && session.value?.status === 'running') void send()
+  })) return
+  void send()
 }
 async function send(key = 'Enter', withText = true) {
   if (sending.value || imageUploading.value || !session.value || store.cachedSnapshot) return
@@ -438,7 +447,7 @@ async function send(key = 'Enter', withText = true) {
   }
 }
 onBeforeUnmount(() => {
-  if (props.desktop) window.removeEventListener('paste', pasteDesktop)
+  window.removeEventListener('paste', pasteIntoComposer)
   savePosition()
   saveDraft(); window.removeEventListener('pagehide', saveDraft)
   disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
@@ -509,7 +518,7 @@ onBeforeUnmount(() => {
       <button v-if="!follow" class="latest" @click="bottom">↓ 回到最新</button>
       <p v-if="inputError || (error && !answerUnavailable)" class="mobile-error" role="alert">{{ inputError || error }}</p>
       <CodexQuestions v-if="!store.cachedSnapshot && session.status === 'running' && session.activity?.detected" :session-name="session.name" @handled="refresh()" @pending="questionPending = $event" @support="questionSupport = $event" />
-      <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()" @paste.capture="canAttach && imagePicker?.paste($event)">
+      <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
         <div class="mobile-image-drafts"></div>
         <p v-if="inputNotice" class="input-notice" role="status">{{ inputNotice }}</p>
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || !draft" @click="send(null)">仅输入</button></div>

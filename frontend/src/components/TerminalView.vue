@@ -10,6 +10,7 @@ import { snapshotSequence, pendingWrapSequence, suppressQueryReplies } from '../
 import { insertTerminalImages } from '../utils/terminal-images.mjs';
 import { draftKey } from '../utils/session-drafts.mjs';
 import { hubUrl } from '../utils/base.mjs';
+import { pageOwnsPaste } from '../utils/page-paste.mjs';
 import { loadContent, peekContent, saveContent } from '../utils/session-content.mjs';
 import { terminalCache, validSnapshot, applyTerminalDelta, encodeTerminalBytes, decodeTerminalBytes } from '../utils/terminal-cache.mjs';
 
@@ -28,16 +29,20 @@ const canAttach = computed(() => currentSession.value?.shell === 'codex' || curr
 watch(() => draftKey(currentSession.value), () => { attachments.value = []; imageError.value = ''; imageUploading.value = false; });
 // Upload completion is the only intermediate step; paste/file selection already
 // expresses the intention to attach. Never auto-retry an uncertain terminal write.
-watch(imageUploading, busy => { if (!busy && attachments.value.length && !imageError.value) void attachImages(); });
 async function attachImages() {
   const selected = currentSession.value, images = attachments.value.slice();
-  if (!selected || !images.length || attaching.value) return;
+  if (!selected || !images.length || attaching.value) return false;
+  const identity = draftKey(selected);
   attaching.value = true; imageError.value = '';
   const request = new AbortController(), timeout = setTimeout(() => request.abort(), 15000);
   try {
     await insertTerminalImages(selected, images, request.signal);
-    if (draftKey(currentSession.value) === draftKey(selected)) { attachments.value = []; host.value?.terminal?.focus(); }
-  } catch (error) { if (draftKey(currentSession.value) === draftKey(selected)) imageError.value = `未确认加入终端，请先查看输入区：${error.message}`; }
+    if (draftKey(currentSession.value) !== identity) return false;
+    attachments.value = []; host.value?.terminal?.focus(); return true;
+  } catch (error) {
+    if (draftKey(currentSession.value) === identity) imageError.value = `未确认加入终端，请先查看输入区：${error.message}`;
+    return false;
+  }
   finally { clearTimeout(timeout); attaching.value = false; }
 }
 const connection = ref('');
@@ -144,7 +149,15 @@ watch(nativeKey, async key => {
     resetWheel();
     if (send({ type, data })) term.scrollToBottom();
   };
-  term.onData(data => input('input', data));
+  term.onData(data => {
+    if (data === '\r') {
+      const socket = ws;
+      if (imagePicker.value?.deferEnter(() => {
+        if (!stopped && ready && ws === socket && confirmedSession()) input('input', data);
+      })) return;
+    } else imagePicker.value?.deferEnter(null);
+    input('input', data);
+  });
   term.onBinary(data => input('binary', data));
   // tmux can suppress the mouse mode request of the fullscreen Codex UI.
   // It still expects SGR wheel reports. Normal scrollback stays local to xterm.
@@ -205,13 +218,19 @@ watch(nativeKey, async key => {
     return true;
   });
   const paste = event => {
-    if (canAttach.value && imagePicker.value?.paste(event)) return;
+    if (!ready || !confirmedSession()) return;
+    if (canAttach.value && imagePicker.value?.paste(event)) { term.focus(); return; }
     const text = event.clipboardData?.getData('text/plain');
     if (text === undefined) return;
     event.preventDefault(); event.stopImmediatePropagation();
+    imagePicker.value?.deferEnter(null);
     input('paste', text); term.focus();
   };
+  const pasteFromPage = event => {
+    if (!element.contains(event.target) && canAttach.value && pageOwnsPaste(event)) paste(event);
+  };
   element.addEventListener('paste', paste, true);
+  window.addEventListener('paste', pasteFromPage);
   const observer = new ResizeObserver(measure);
   observer.observe(element);
   // Font loading, zoom and display changes can alter the cell size even when
@@ -365,6 +384,7 @@ watch(nativeKey, async key => {
     resetWheel(); stopped = true; clearTimeout(timer); clearTimeout(initialTimer); observer.disconnect();
     element.removeEventListener('wheel', codexWheel, true);
     element.removeEventListener('paste', paste, true);
+    window.removeEventListener('paste', pasteFromPage);
     ws?.close(); term.dispose(); delete element.terminal; delete element.imageAddon;
   };
 }, { immediate: true });
@@ -374,7 +394,7 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 <template>
   <div class="terminal-area">
     <div v-if="runningName && canAttach" class="terminal-images">
-      <ImageAttachments ref="imagePicker" :key="draftKey(currentSession)" v-model="attachments" :session="currentSession" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
+      <ImageAttachments ref="imagePicker" :key="draftKey(currentSession)" v-model="attachments" :session="currentSession" :attach-uploaded="attachImages" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
       <button v-if="attachments.length && imageError" type="button" :disabled="imageUploading || attaching" @click="attachImages">{{ attaching ? '加入中…' : '加入终端输入区' }}</button>
       <p v-if="imageError" role="alert">{{ imageError }}</p>
     </div>

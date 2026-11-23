@@ -89,6 +89,21 @@ app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../se
       assert.equal(writes.at(-1).key, 'Enter');
       await input.evaluate(el => el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })));
       assert.equal(await input.inputValue(), '');
+      await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+      await page.locator('.mobile-reading').click({ position: { x: 12, y: 12 } });
+      await page.evaluate(() => navigator.clipboard.writeText('第一行\n第二行'));
+      const beforePaste = writes.length;
+      await page.keyboard.press('Control+v');
+      assert(await input.evaluate(el => document.activeElement === el));
+      await page.keyboard.press('Shift+Enter');
+      assert.equal(await input.inputValue(), '第一行\n第二行\n');
+      await input.evaluate(el => {
+        el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', isComposing: true }));
+      });
+      assert.equal(writes.length, beforePaste);
+      await page.keyboard.press(full ? 'NumpadEnter' : 'Enter');
+      await page.waitForFunction(() => document.querySelector('.composer textarea').value === '');
+      assert.deepEqual(writes.slice(beforePaste), [{ text: '第一行\n第二行\n', key: 'Enter' }]);
       // Local commands never enter the transcript. Delivery must not leave a
       // permanent model-receipt card, and menus need the terminal controls.
       confirm = false;

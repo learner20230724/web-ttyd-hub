@@ -39,6 +39,8 @@ jobs:
       - if: runner.os == 'Linux'
         run: node tests/images-codex-integration.cjs
       - if: runner.os == 'Linux'
+        run: node tests/desktop-viewport-paste-browser.cjs
+      - if: runner.os == 'Linux'
         run: node tests/images-terminal-browser.cjs
       - run: node tests/codex-picker-browser.cjs
       - run: node tests/mobile-input-browser.cjs

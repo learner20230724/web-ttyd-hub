@@ -2,7 +2,7 @@
 
 ## Desktop
 
-Click inside the terminal before pasting. Select text and use the browser Copy action. Common shortcuts: Ctrl+Shift+C / Ctrl+Shift+V (Windows/Linux), Cmd+C / Cmd+V (macOS). Browser and OS shortcuts differ. Ctrl+C without a selection normally interrupts the running program. This fork has no custom copy button or clipboard synchronization service.
+In a Codex session, paste text or a screenshot from the page and press Enter to send. If the image is still uploading, Enter submits once it has been attached. In the Answer input, Shift+Enter inserts a new line. For an ordinary shell, click inside the terminal before pasting. Select text and use the browser Copy action. Common shortcuts: Ctrl+Shift+C / Ctrl+Shift+V (Windows/Linux), Cmd+C / Cmd+V (macOS). Browser and OS shortcuts differ. Ctrl+C without a selection normally interrupts the running program. This fork has no custom copy button or clipboard synchronization service.
 
 ## tmux 鼠标抢占
 

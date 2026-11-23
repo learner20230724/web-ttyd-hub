@@ -13,10 +13,11 @@ const { fixture, pause } = require('./terminal-fixture.cjs');
     page.setDefaultTimeout(8000);
     const errors=[]; page.on('pageerror', e=>errors.push(e.message));
     // The upload/attach API is a controlled test double; the terminal below is real tmux.
-    const writes=[];let uploads=0, fail=false;
+    const writes=[];let uploads=0, fail=false, includeSecond=false;
     await page.route('**/api/sessions', async route=>{
       const response=await route.fetch(); const data=await response.json();
       data.sessions=data.sessions.map(s=>({...s,shell:'codex',activity:{...s.activity,detected:true}}));
+      if (includeSecond) data.sessions.push({...data.sessions[0], name:'second-reader',displayName:'Second reader'});
       await route.fulfill({response,json:data});
     });
     await page.route('**/api/sessions/*/images', async route=>{
@@ -87,6 +88,45 @@ const { fixture, pause } = require('./terminal-fixture.cjs');
     const fitted=await page.locator('.terminal-host').evaluate(el=>({width:el.clientWidth,scrollWidth:el.scrollWidth,right:el.querySelector('.xterm-screen').getBoundingClientRect().right,hostRight:el.getBoundingClientRect().right}));
     assert(fitted.scrollWidth<=fitted.width+1, 'A pane that follows the browser fits without clipping or unnecessary horizontal overflow: '+JSON.stringify(fitted));
     assert(fitted.right<=fitted.hostRight);
+    // An early Enter belongs to this image, draft and session. Finishing an
+    // unsuccessful or abandoned attachment must never submit a different draft.
+    includeSecond = true;
+    await page.reload();
+    await page.getByRole('button',{name:'回答',exact:true}).click();
+    await page.context().grantPermissions(['clipboard-read','clipboard-write']);
+    await page.evaluate(async () => {
+      const png = await new Promise(resolve => document.createElement('canvas').toBlob(resolve));
+      await navigator.clipboard.write([new ClipboardItem({'image/png':png})]);
+    });
+    const composer = page.getByRole('textbox',{name:'消息输入'});
+    for (const scenario of ['failure','edit','switch']) {
+      const firstWrite = writes.length;
+      let release;
+      const held = new Promise(resolve => { release = resolve; });
+      await page.route('**/api/sessions/*/input', async route => {
+        writes.push(route.request().postDataJSON());
+        await held;
+        await route.fulfill({status:scenario === 'failure' ? 503 : 200, json:{ok:scenario !== 'failure'}});
+      }, {times:1});
+      await page.locator('.toolbar-title').click();
+      const insert = page.waitForRequest(r => r.url().endsWith('/input'));
+      try {
+        await page.keyboard.press('Control+v');
+        await insert;
+        await page.keyboard.press('Enter');
+        if (scenario === 'edit') await page.keyboard.type('revised');
+        if (scenario === 'switch') {
+          const other = page.locator('[data-session-id="second-reader"]');
+          if (!await other.isVisible()) await page.getByRole('button',{name:'会话列表',exact:true}).click();
+          await other.click();
+          await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === '');
+        }
+      } finally { release(); }
+      if (scenario === 'failure') await page.getByRole('alert').filter({hasText:'未确认图片'}).waitFor();
+      await page.waitForFunction(() => !document.querySelector('.composer .send')?.disabled);
+      if (scenario === 'edit') assert.equal(await composer.inputValue(),'revised');
+      assert.deepEqual(writes.slice(firstWrite).map(w => w.key), [null]);
+    }
     assert.deepEqual(errors,[]);
     console.log('PASS oversized real tmux pane: last Chinese character visible without scrolling across two viewer sizes, resize/sidebar; clipboard image attaches once without click or Enter; failure is not retried');
   } finally {await browser?.close();await f.cleanup();}
