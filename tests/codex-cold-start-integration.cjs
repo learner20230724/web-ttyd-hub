@@ -24,7 +24,10 @@ const previousTmux = Object.fromEntries(['TMUX', 'TMUX_PANE', 'TMUX_TMPDIR'].map
   assert.equal(process.platform, 'linux', 'This integration checks Linux /proc and tmux discovery');
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-cold-codex-'));
   const home = path.join(directory, 'codex'), project = path.join(directory, 'project');
-  await Promise.all([fs.mkdir(home), fs.mkdir(project)]);
+  const storage = path.join(directory, 'storage'), sqliteHome = path.join(storage, 'db');
+  const sessions = path.join(storage, 'sessions');
+  await Promise.all([fs.mkdir(home), fs.mkdir(project), fs.mkdir(sessions, { recursive: true }), fs.mkdir(sqliteHome, { recursive: true })]);
+  await fs.symlink(sessions, path.join(home, 'sessions'));
   server = http.createServer(async (req, res) => {
     for await (const _chunk of req) { /* Drain synthetic request, never retain account data. */ }
     if (req.url !== '/v1/responses') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); return; }
@@ -39,7 +42,7 @@ const previousTmux = Object.fromEntries(['TMUX', 'TMUX_PANE', 'TMUX_TMPDIR'].map
     res.end();
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  await fs.writeFile(path.join(home, 'config.toml'), `model = "fixture-model"\nmodel_provider = "fixture"\ncheck_for_update_on_startup = false\n[features]\nplugins = false\nin_app_updates = false\n[model_providers.fixture]\nname = "Fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`);
+  await fs.writeFile(path.join(home, 'config.toml'), `model = "fixture-model"\nmodel_provider = "fixture"\nsqlite_home = ${JSON.stringify(sqliteHome)}\ncheck_for_update_on_startup = false\n[features]\nplugins = false\nin_app_updates = false\n[model_providers.fixture]\nname = "Fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`);
   const env = { ...process.env, CODEX_HOME: home, TMUX_TMPDIR: directory, XDG_RUNTIME_DIR: directory };
   delete env.TMUX; delete env.TMUX_PANE;
   delete env.OPENAI_API_KEY; delete env.CODEX_API_KEY; delete env.OPENAI_BASE_URL;
@@ -54,9 +57,9 @@ const previousTmux = Object.fromEntries(['TMUX', 'TMUX_PANE', 'TMUX_TMPDIR'].map
   await until(() => events.find(message => message.method === 'turn/completed' && message.params.threadId === thread.id));
   assert.equal(requests, 1);
   const { resolveLoadedRollout } = require('../server/services/codex-observer');
-  const databases = (await fs.readdir(home)).filter(x => /^state_\d+\.sqlite$/.test(x)).map(x => path.join(home, x));
-  // Hide the rollout FD: passive discovery must locate completed history.
-  assert(await resolveLoadedRollout(databases, 'Cold resume fixture | project', client));
+  assert((await fs.readdir(sqliteHome)).some(x => /^state_\d+\.sqlite$/.test(x)));
+  // Passive discovery must find the relocated history without the rollout FD.
+  assert((await resolveLoadedRollout('Cold resume fixture | project', client)).startsWith(sessions + path.sep));
   assert.equal(requests, 1, 'Metadata discovery cannot invoke the model');
   client.close(); initial.kill();
   if (initial.exitCode === null && initial.signalCode === null) await once(initial, 'exit');

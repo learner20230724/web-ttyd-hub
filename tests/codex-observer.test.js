@@ -165,27 +165,37 @@ test('idle loaded thread resolves its closed rollout without new input; unrelate
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-closed-rollout-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const id = '01a1b635-0ac0-7652-9d31-5db8d1234567', cwd = path.join(dir, 'project');
-  const file = path.join(dir, 'sessions', 'today', 'rollout-' + id + '.jsonl');
-  await fs.mkdir(path.dirname(file), { recursive: true }); await fs.mkdir(cwd);
+  const home = path.join(dir, 'codex'), data = path.join(dir, 'data');
+  const file = path.join(data, 'sessions', 'today', 'rollout-' + id + '.jsonl');
+  const link = path.join(home, 'sessions', 'today', path.basename(file));
+  await fs.mkdir(path.dirname(file), { recursive: true }); await fs.mkdir(cwd); await fs.mkdir(home);
+  await fs.symlink(path.join(data, 'sessions'), path.join(home, 'sessions'), 'junction');
   await fs.writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id, cwd, source: 'cli' } }) + '\n');
-  let threads = [{ id, cwd, path: file, name: 'Idle saved reply', source: 'cli' }];
+  const threads = [{ id, cwd, path: link, name: 'Idle saved reply', source: 'cli' }];
   const calls = [];
-  const rpc = { async call(method, params) {
+  const rpc = { codexHome: home, async call(method, params) {
     calls.push(method);
     if (method === 'thread/loaded/list') return { data: threads.map(x => x.id) };
     assert.equal(method, 'thread/read'); assert.equal(params.includeTurns, false);
     return { thread: threads.find(x => x.id === params.threadId) };
   } };
-  const opened = [path.join(dir, 'state_5.sqlite')]; // No open rollout descriptor.
+  const opened = [path.join(data, 'db', 'state_5.sqlite')]; // No open rollout descriptor.
   assert.equal(await resolveRollout(opened, 'Idle saved reply | project', true), null, 'Old FD-only discovery misses the saved reply');
-  assert.equal(await resolveLoadedRollout(opened, 'Idle saved reply | project', rpc), file);
-  assert.equal(await resolveLoadedRollout(opened, id.slice(0, 29) + '...', rpc), file);
-  assert.equal(await resolveLoadedRollout(opened, 'Other | project', rpc), null);
+  const canonical = await fs.realpath(file);
+  assert.equal(await resolveLoadedRollout('Idle saved reply | project', rpc), canonical);
+  assert.equal(await resolveLoadedRollout(id.slice(0, 29) + '...', rpc), canonical);
+  assert.equal(await resolveLoadedRollout('Other | project', rpc), null);
   threads.push({ ...threads[0], id: 'other' });
-  assert.equal(await resolveLoadedRollout(opened, 'Idle saved reply | project', rpc), null);
+  assert.equal(await resolveLoadedRollout('Idle saved reply | project', rpc), null);
   threads.pop();
-  assert.equal(await resolveLoadedRollout([path.join(dir, 'other', 'state_5.sqlite')], id, rpc), null);
+  assert.equal(await resolveLoadedRollout(id, { ...rpc, codexHome: 'relative' }), null);
+  const other = path.join(dir, 'other', 'sessions', 'today', path.basename(file));
+  await fs.mkdir(path.dirname(other), { recursive: true });
+  await fs.copyFile(file, other);
+  threads[0].path = other;
+  assert.equal(await resolveLoadedRollout(id, rpc), null);
+  threads[0].path = link;
   await fs.writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id: 'wrong', cwd, source: 'cli' } }) + '\n');
-  assert.equal(await resolveLoadedRollout(opened, id, rpc), null);
+  assert.equal(await resolveLoadedRollout(id, rpc), null);
   assert(calls.every(x => ['thread/read', 'thread/loaded/list'].includes(x)), 'Discovery cannot resume a thread or submit input');
 });

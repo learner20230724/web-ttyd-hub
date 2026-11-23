@@ -140,7 +140,8 @@ async function resolveRollout(files, title, shared = false) {
 
 // A resumed idle thread need not keep its rollout FD open. Resolve only among
 // threads loaded in the daemon to which this pane's client is actually connected.
-async function resolveLoadedRollout(files, title, rpc) {
+async function resolveLoadedRollout(title, rpc) {
+  if (typeof rpc.codexHome !== 'string' || !path.isAbsolute(rpc.codexHome)) return null;
   const ids = new Set(); let cursor;
   do {
     const page = await rpc.call('thread/loaded/list', { limit: 100, ...(cursor ? { cursor } : {}) }, 3000);
@@ -158,15 +159,12 @@ async function resolveLoadedRollout(files, title, rpc) {
   }
   const selected = selectRollout(candidates, title, true);
   if (!selected || !rolloutPattern.test(selected.path)) return null;
-  // The daemon metadata is not permission to read arbitrary files or symlinks.
-  const roots = files.filter(file => /[/\\]state_\d+\.sqlite$/.test(file)).map(file => path.join(path.dirname(file), 'sessions'));
-  const filename = await fs.realpath(selected.path);
-  let allowed = false;
-  for (const root of roots) {
-    const canonical = await fs.realpath(root).catch(() => null);
-    if (canonical && filename.startsWith(canonical + path.sep)) allowed = true;
-  }
-  if (!allowed) return null;
+  // The connected daemon reports its Codex home independently of sqlite_home.
+  const [root, filename] = await Promise.all([
+    fs.realpath(path.join(rpc.codexHome, 'sessions')).catch(() => null),
+    fs.realpath(selected.path).catch(() => null),
+  ]);
+  if (!root || !filename || !filename.startsWith(root + path.sep)) return null;
   const meta = await metadata(filename);
   return meta?.id === selected.meta.id && meta.cwd === selected.meta.cwd &&
     !JSON.stringify(meta.source || '').includes('subagent') ? filename : null;
@@ -201,7 +199,7 @@ class LinuxCodexObserver {
       if (!this.loaded.has(key)) this.loaded.set(key, (async () => {
         const rpc = new (require('./codex-rpc').CodexRpc)();
         const deadline = setTimeout(() => rpc.close(), 3500);
-        try { await rpc.connect(connection.socket); return await resolveLoadedRollout(files, title, rpc); }
+        try { await rpc.connect(connection.socket); return await resolveLoadedRollout(title, rpc); }
         catch { return null; }
         finally { clearTimeout(deadline); rpc.close(); }
       })());

@@ -29,7 +29,8 @@ class CodexRpc extends EventEmitter {
       this.lines = createInterface({ input: this.child.stdout });
       this.lines.on('line', line => this.receive(line));
     }
-    await this.call('initialize', { clientInfo: { name: 'ttyd_hub', title: 'TTYD Hub', version: '1.0.0' }, capabilities: { experimentalApi: true, explicitGatewayOauth: true } });
+    const initialization = await this.call('initialize', { clientInfo: { name: 'ttyd_hub', title: 'TTYD Hub', version: '1.0.0' }, capabilities: { experimentalApi: true, explicitGatewayOauth: true } });
+    this.codexHome = initialization?.codexHome;
     this.send({ method: 'initialized', params: {} });
     return this;
   }
