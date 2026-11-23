@@ -103,7 +103,14 @@ const inputNotice = computed(() => {
 })
 function reconcilePending(name, data) {
   pendingBySession.value[name] = reconcileInputs(pendingBySession.value[name] || [], data)
-  transcriptIds.set(name, receiptCandidates(data).map(m => m.id))
+  const receipts = receiptCandidates(data)
+  transcriptIds.set(name, receipts.map(m => m.id))
+  // A second device may have submitted this shared terminal draft.
+  if (session.value?.name === name && attachments.value.some(item => item.inTerminal)) {
+    const remaining = attachments.value.filter(item => !item.inTerminal || !receipts.some(message =>
+      Date.parse(message.timestamp) >= Date.parse(item.insertedAt) && message.images?.some(image => image.id === item.id)))
+    if (remaining.length !== attachments.value.length) attachments.value = remaining
+  }
 }
 function dismissPending(id) { pendingBySession.value[store.current] = pendingMessages.value.filter(item => item.id !== id) }
 const renderedMessages = new Map(), renderedOutput = new WeakMap()
@@ -294,6 +301,7 @@ async function send(key = 'Enter', withText = true) {
   const name = session.value.name, text = withText ? (composerInput.value?.value ?? draft.value) : ''
   const generation = session.value.createdAt || '', identity = draftKey(session.value), threadId = session.value.codexThreadId || session.value.resumeThreadId || null
   const sentImages = withText ? attachments.value.slice() : [], imageKey = attachmentKey.value
+  const uninserted = sentImages.filter(image => !image.inTerminal)
   const sameSession = () => inputGenerations.get(name) === identity
   const kind = inputKind(text, session.value)
   if (withText) draft.value = text
@@ -313,7 +321,7 @@ async function send(key = 'Enter', withText = true) {
   let timedOut = false
   const confirmationTimeout = setTimeout(() => { timedOut = true; request.abort() }, 10000)
   try {
-    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TTYD-Generation': generation, 'X-TTYD-Thread': threadId || '' }, body: JSON.stringify({ text, key, ...(sentImages.length ? { images: sentImages.map(image => image.id) } : {}) }), signal: request.signal }), request.signal)
+    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TTYD-Generation': generation, 'X-TTYD-Thread': threadId || '' }, body: JSON.stringify({ text, key, ...(uninserted.length ? { images: uninserted.map(image => image.id) } : {}) }), signal: request.signal }), request.signal)
     const data = await untilAbort(res.json(), request.signal); if (!res.ok) throw new Error(data.error)
     if (disposed || !sameSession()) return
     if (pending) {
@@ -368,7 +376,7 @@ onBeforeUnmount(() => {
           <div class="mobile-session-title" :title="session.displayName || session.name">{{ session.displayName || session.name }}</div>
           <ActivityBadge  class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
           <span v-if="elapsed" class="elapsed">已运行 {{ elapsed }}</span>
-          <ImageAttachments v-if="canAttach && session.status === 'running'" compact preview-target=".mobile-image-drafts" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
+          <ImageAttachments v-if="canAttach && session.status === 'running'" compact insert-into-terminal preview-target=".mobile-image-drafts" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
         </div>
         <!-- Unavailable status stays in the title row; it needs no separate action or reading space. -->
         <div v-if="['waiting', 'error', 'interrupted'].includes(status.state) && !(status.state === 'waiting' && questionPending)" class="status-guidance" :class="status.state">
@@ -418,7 +426,7 @@ onBeforeUnmount(() => {
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
           <textarea ref="composerInput" v-model="draft" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
-          <button class="send" :disabled="sending || imageUploading || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft || attachments.length ? '发送' : '回车' }}</button></div>
+          <button class="send" :disabled="sending || imageUploading || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft || attachments.some(image => !image.inTerminal) ? '发送' : '回车' }}</button></div>
       </form>
     </template>
     <div v-else class="mobile-empty">从左上角选择会话，继续你的工作。</div>

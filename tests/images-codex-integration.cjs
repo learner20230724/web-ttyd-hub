@@ -69,6 +69,9 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
     assert.equal(requests, 1, 'Picking alone must not send a message');
   } finally { releaseTransfer(); }
   await page.waitForFunction(() => document.querySelector('.mobile-image-drafts img[src*="/images/"]')?.naturalWidth > 0);
+  await until(() => tm('capture-pane','-p','-t','=image-test:').includes('[Image #1]'));
+  assert.equal(requests, 1, 'Mobile selection inserts into Codex without sending Enter');
+  assert.equal(await page.getByRole('button', { name:'发送', exact:true }).count(), 0);
   // A keyboard clipboard may expose a File only via its items list.
   const pastedImage = page.waitForResponse(r => r.url().endsWith('/image-test/images') && r.request().method() === 'POST');
   await page.locator('textarea').evaluate((el, bytes) => {
@@ -83,7 +86,10 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   assert.equal(await page.locator('.composer .image-pick').count(),0);
   const pick=await page.locator('.mobile-session-header .image-pick').boundingBox(), title=await page.locator('.mobile-title-row').boundingBox();
   assert(pick && pick.y >= title.y && pick.y + pick.height <= title.y + title.height + 1, 'Image picker belongs in title row');
+  assert(!tm('capture-pane','-p','-t','=image-test:').includes('[Image #2]'));
+  const submit = page.waitForRequest(r => r.url().endsWith('/image-test/input') && r.postDataJSON().key === 'Enter');
   await page.getByRole('textbox',{name:'消息输入'}).fill('请分析这张截图');await page.getByRole('button',{name:'发送',exact:true}).click();
+  assert.equal((await submit).postDataJSON().images, undefined, 'Submitting text does not insert an attached image twice');
   await until(()=>sawImage);await page.locator('.message.assistant').filter({hasText:'图片已作为视觉输入收到'}).waitFor({timeout:20000});
   await page.waitForFunction(()=>Array.from(document.querySelectorAll('.message.user .image-preview img')).some(i=>i.complete&&i.naturalWidth>0));
   assert.equal(await page.locator('.attachment').count(),0);

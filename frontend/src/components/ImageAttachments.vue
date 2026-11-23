@@ -1,9 +1,10 @@
 <script setup>
 import { ref, onBeforeUnmount } from 'vue'
 import { untilAbort } from '../utils/request-deadline.mjs'
+import { insertTerminalImages } from '../utils/terminal-images.mjs'
 import { draftKey } from '../utils/session-drafts.mjs'
 import { hubUrl } from '../utils/base.mjs'
-const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, previewTarget: String })
+const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, insertIntoTerminal: Boolean, previewTarget: String })
 const emit = defineEmits(['update:modelValue', 'busy', 'error'])
 const picker = ref(null), uploading = ref(false)
 const pendingPreviews = ref([])
@@ -20,7 +21,7 @@ async function addFiles(files) {
   if (!selected.length) return
   if (props.disabled || uploading.value) { emit('error', '当前无法添加图片，请稍后重选'); return }
   if (selected.length + props.modelValue.length > 8) { emit('error', '一次最多添加 8 张图片'); return }
-  const session = props.session, items = [...props.modelValue]
+  const session = props.session
   request = new AbortController()
   const timeout = setTimeout(() => request.abort(), 60000)
   uploading.value = true; emit('busy', true); emit('error', '')
@@ -35,9 +36,20 @@ async function addFiles(files) {
       const data = await untilAbort(res.json(), request.signal)
       if (!res.ok) throw new Error(data.error || '图片上传失败')
       if (disposed || draftKey(props.session) !== draftKey(session)) return
-      if (!items.some(item => item.id === data.id)) {
-        items.push({ id: data.id, name: file.name || '截图' })
-        emit('update:modelValue', [...items])
+      if (!props.modelValue.some(item => item.id === data.id)) {
+        const item = { id: data.id, name: file.name || '截图' }
+        if (props.insertIntoTerminal) {
+          try {
+            const receipt = await insertTerminalImages(session, [item], request.signal)
+            item.inTerminal = true
+            item.insertedAt = receipt.receivedAfter
+          } catch {
+            if (!disposed) emit('error', '未确认图片已加入终端，请先查看全文')
+            return
+          }
+          if (disposed || draftKey(props.session) !== draftKey(session)) return
+        }
+        emit('update:modelValue', [...props.modelValue, item])
       }
       const preview = pendingPreviews.value.shift()
       if (preview) URL.revokeObjectURL(preview.url)
@@ -65,7 +77,7 @@ defineExpose({ addFiles, paste })
     </div>
     <div v-for="(item, index) in modelValue" :key="`${item.id}:${index}`" class="attachment">
       <img :src="hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images/${item.id}`)" :alt="item.name">
-      <button type="button" :disabled="disabled || uploading" :aria-label="`移除图片 ${item.name}`" @click="emit('update:modelValue', modelValue.filter((_, i) => i !== index))">×</button>
+      <button v-if="!item.inTerminal" type="button" :disabled="disabled || uploading" :aria-label="`移除图片 ${item.name}`" @click="emit('update:modelValue', modelValue.filter((_, i) => i !== index))">×</button>
     </div>
     </Teleport>
   </div>

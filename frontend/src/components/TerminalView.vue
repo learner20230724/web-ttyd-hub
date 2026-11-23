@@ -6,7 +6,7 @@ import ImageAttachments from './ImageAttachments.vue';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../stores/sessions';
 import { snapshotSequence, pendingWrapSequence, suppressQueryReplies } from '../utils/terminal-snapshot.mjs';
-import { untilAbort } from '../utils/request-deadline.mjs';
+import { insertTerminalImages } from '../utils/terminal-images.mjs';
 import { draftKey } from '../utils/session-drafts.mjs';
 import { hubUrl } from '../utils/base.mjs';
 import { loadContent, peekContent, saveContent } from '../utils/session-content.mjs';
@@ -34,8 +34,7 @@ async function attachImages() {
   attaching.value = true; imageError.value = '';
   const request = new AbortController(), timeout = setTimeout(() => request.abort(), 15000);
   try {
-    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(selected.name)}/input`), { method:'POST', headers: { 'Content-Type':'application/json', 'X-TTYD-Generation': selected.createdAt || '', 'X-TTYD-Thread': selected.codexThreadId || selected.resumeThreadId || '' }, body: JSON.stringify({ images: images.map(x => x.id), key:null }), signal: request.signal }), request.signal);
-    const data = await untilAbort(res.json(), request.signal); if (!res.ok) throw new Error(data.error);
+    await insertTerminalImages(selected, images, request.signal);
     if (draftKey(currentSession.value) === draftKey(selected)) { attachments.value = []; host.value?.terminal?.focus(); }
   } catch (error) { if (draftKey(currentSession.value) === draftKey(selected)) imageError.value = `未确认加入终端，请先查看输入区：${error.message}`; }
   finally { clearTimeout(timeout); attaching.value = false; }
