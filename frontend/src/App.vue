@@ -1,5 +1,5 @@
 <script setup>
-import { ref, provide, watch, defineAsyncComponent } from "vue";
+import { computed, ref, provide, watch, defineAsyncComponent } from "vue";
 import Sidebar from "./components/Sidebar.vue";
 import MobileTerminal from "./components/MobileTerminal.vue";
 const TerminalView = defineAsyncComponent(() => import("./components/TerminalView.vue"));
@@ -17,16 +17,26 @@ const readingKey = 'web-ttyd-hub.mobile-reading.v1';
 let savedReading = {};
 try { savedReading = JSON.parse(localStorage.getItem(readingKey)) || {}; } catch {}
 const navigationOpen = ref(false);
-const desktopReading = ref(false);
+const isMobile = window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768;
+const selected = computed(() => store.sessions.find(s => s.name === store.current));
+const codexSelected = computed(() => selected.value?.shell === 'codex' || selected.value?.activity?.detected);
+const desktopChoice = ref(null);
+watch([() => store.current, () => selected.value?.createdAt], () => { desktopChoice.value = null; });
+const readingPositions = new Map();
 const readingRefresh = ref(0);
-const showExecution = ref(savedReading.showExecution === true);
+const mobileFull = ref(savedReading.showExecution === true);
+const view = computed(() => isMobile ? (mobileFull.value ? 'full' : 'answer')
+  : desktopChoice.value || (codexSelected.value ? 'answer' : 'terminal'));
+function selectView(next) {
+  if (isMobile) mobileFull.value = next === 'full';
+  else desktopChoice.value = next;
+  if (next !== 'terminal') readingRefresh.value++;
+}
 const readingSize = ref(Number.isFinite(savedReading.fontSize) ? Math.max(4, Math.min(24, savedReading.fontSize)) : 16);
-watch([showExecution, readingSize], () => {
-  try { localStorage.setItem(readingKey, JSON.stringify({ showExecution: showExecution.value, fontSize: readingSize.value })); } catch {}
+watch([mobileFull, readingSize], () => {
+  try { localStorage.setItem(readingKey, JSON.stringify({ showExecution: mobileFull.value, fontSize: readingSize.value })); } catch {}
 });
 
-// Keep a phone in reading mode across rotation and keyboard resizing.
-const isMobile = window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 768;
 if (isMobile) sidebarCollapsed.value = true;
 watch([() => store.current, () => store.loaded], ([name, loaded]) => {
   if (isMobile && loaded) sidebarCollapsed.value = Boolean(name);
@@ -97,21 +107,24 @@ function handleMobileOverlayClick() {
         </div>
       </div>
 
-      <button v-if="!isMobile" type="button" class="reading-control" :aria-pressed="desktopReading" @click="desktopReading = !desktopReading">{{ desktopReading ? '返回终端' : '聊天记录' }}</button>
-      <div v-if="isMobile || desktopReading" class="reading-controls" aria-label="手机阅读设置">
-        <button type="button" class="reading-control navigation-toggle" :class="{ selected: navigationOpen }"
+      <div v-if="isMobile || selected" class="reading-controls" aria-label="会话视图">
+        <button v-if="view !== 'terminal'" type="button" class="reading-control navigation-toggle" :class="{ selected: navigationOpen }"
           aria-label="方向键与回车" :aria-expanded="navigationOpen" aria-controls="mobile-navigation"
           @click="navigationOpen = !navigationOpen">✥</button>
         <div class="reading-views" role="group" aria-label="阅读视图">
-          <button type="button" class="reading-control" :class="{ selected: !showExecution }"
-            :aria-pressed="!showExecution" aria-label="隐藏执行过程" title="回答"
-            @click="showExecution = false; readingRefresh++">回答</button>
-          <button type="button" class="reading-control" :class="{ selected: showExecution }"
-            :aria-pressed="showExecution" aria-label="显示执行过程" title="全文"
-            @click="showExecution = true; readingRefresh++">全文</button>
+          <button v-if="isMobile || codexSelected" type="button" class="reading-control" :class="{ selected: view === 'answer' }"
+            :aria-pressed="view === 'answer'" :aria-label="isMobile ? '隐藏执行过程' : '回答'" title="回答"
+            @click="selectView('answer')">回答</button>
+          <button type="button" class="reading-control" :class="{ selected: view === 'full' }"
+            :aria-pressed="view === 'full'" :aria-label="isMobile ? '显示执行过程' : '全文'" title="全文"
+            @click="selectView('full')">全文</button>
         </div>
-        <button type="button" class="reading-control" aria-label="缩小字体" :disabled="readingSize <= 4" @click="readingSize = Math.max(4, readingSize - 1)">A−</button>
-        <button type="button" class="reading-control" aria-label="放大字体" :disabled="readingSize >= 24" @click="readingSize = Math.min(24, readingSize + 1)">A+</button>
+        <template v-if="view !== 'terminal'">
+          <button type="button" class="reading-control" aria-label="缩小字体" :disabled="readingSize <= 4" @click="readingSize = Math.max(4, readingSize - 1)">A−</button>
+          <button type="button" class="reading-control" aria-label="放大字体" :disabled="readingSize >= 24" @click="readingSize = Math.min(24, readingSize + 1)">A+</button>
+        </template>
+        <button v-if="!isMobile && selected.status === 'running'" type="button" class="reading-control"
+          :class="{ selected: view === 'terminal' }" :aria-pressed="view === 'terminal'" @click="selectView('terminal')">终端</button>
       </div>
     </header>
 
@@ -130,8 +143,8 @@ function handleMobileOverlayClick() {
         @select="isMobile && (sidebarCollapsed = true)"
       />
 
-      <MobileTerminal v-if="isMobile || desktopReading" :show-execution="showExecution" :refresh-trigger="readingRefresh" :font-size="readingSize" :navigation-open="navigationOpen" :reading-visible="!isMobile || sidebarCollapsed"
-        @show-execution="showExecution = true; navigationOpen ||= $event" />
+      <MobileTerminal v-if="view !== 'terminal'" :positions="readingPositions" :desktop="!isMobile" :show-execution="view === 'full'" :refresh-trigger="readingRefresh" :font-size="readingSize" :navigation-open="navigationOpen" :reading-visible="!isMobile || sidebarCollapsed"
+        @show-execution="selectView('full'); navigationOpen ||= $event" />
       <TerminalView v-else @create="showCreateDialog = true" />
     </div>
 

@@ -17,7 +17,7 @@ import CodexQuestions from './CodexQuestions.vue'
 import ImageAttachments from './ImageAttachments.vue'
 import MessageImages from './MessageImages.vue'
 const emit = defineEmits(['show-execution'])
-const props = defineProps({ navigationOpen: Boolean, showExecution: Boolean, refreshTrigger: Number, readingVisible: { type: Boolean, default: true }, fontSize: { type: Number, default: 16 } })
+const props = defineProps({ desktop: Boolean, positions: { type: Map, required: true }, navigationOpen: Boolean, showExecution: Boolean, refreshTrigger: Number, readingVisible: { type: Boolean, default: true }, fontSize: { type: Number, default: 16 } })
 const store = useSessionStore()
 const session = computed(() => store.sessions.find(s => s.name === store.current))
 const status = computed(() => session.value ? store.activityStatus(session.value) : null)
@@ -62,6 +62,13 @@ const attachmentKey = computed(() => draftKey(session.value))
 const attachments = computed({ get: () => imageDrafts.value[attachmentKey.value] || [], set: value => { imageDrafts.value[attachmentKey.value] = value } })
 watch(attachmentKey, () => { imageUploading.value = false })
 const canAttach = computed(() => session.value?.shell === 'codex' || session.value?.activity?.detected)
+// A newly opened desktop conversation still has focus on the session list.
+function pasteDesktopImage(event) {
+  if (!canAttach.value || event.defaultPrevented || store.cachedSnapshot || sending.value ||
+      event.target?.closest?.('input, textarea, [contenteditable], dialog')) return
+  imagePicker.value?.paste(event)
+}
+if (props.desktop) window.addEventListener('paste', pasteDesktopImage)
 const drafts = loadDrafts()
 let activeDraftKey = ''
 function saveDraft() {
@@ -152,7 +159,6 @@ const outputSegments = computed(() => {
   if (!renderedOutput.has(data)) renderedOutput.set(data, markRaw(terminalSegments(data.ansi || data.text || '').map(s => s.type === 'text' ? { ...s, runs: ansiToRuns(s.text) } : s)))
   return renderedOutput.get(data)
 })
-const positions = new Map()
 let readingInFlight = false, nextReadAt = Infinity
 let timer, disposed = false, epoch = 0, refreshSequence = 0, visibleKey = null, switching = false, quickRefreshUntil = 0
 let measuredPane = null, measuredWidth = 0, measuredHeight = 0
@@ -198,7 +204,7 @@ function scrolled() {
   // latest reply. Keep deliberate history reading separate from layout shifts.
   if (resized && follow.value) { alignReading(); return }
   follow.value = Boolean(atLatest())
-  if (visibleKey) positions.set(visibleKey, { top:p.scrollTop, follow:follow.value })
+  if (visibleKey) props.positions.set(visibleKey, { top:p.scrollTop, follow:follow.value })
   if (follow.value) store.markRead()
 }
 async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight; store.markRead() }
@@ -209,7 +215,7 @@ async function display(entry, first = false) {
   const key = visibleKey
   await nextTick()
   if (key !== visibleKey || !pane.value) return
-  const position = positions.get(key)
+  const position = props.positions.get(key)
   if (first && position && !position.follow) pane.value.scrollTop = position.top
   else if (follow.value && !window.getSelection()?.toString()) pane.value.scrollTop = pane.value.scrollHeight
   store.markRead()
@@ -270,14 +276,14 @@ watch(() => [store.current, session.value?.activity?.phase, session.value?.activ
   if (value[0] === previous?.[0] && value.slice(1).some((item, index) => item !== previous[index + 1])) void refresh(epoch, Boolean(value[3] && value[3] !== previous[3]))
 })
 watch([() => store.current, () => props.showExecution, () => session.value?.createdAt, () => store.cachedSnapshot, () => props.refreshTrigger, () => session.value?.codexThreadId || session.value?.resumeThreadId], async ([name, full]) => {
-  if (visibleKey && pane.value) positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
+  if (visibleKey && pane.value) props.positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
   const token = ++epoch, selected = session.value
   clearTimeout(timer); readingInFlight = false; nextReadAt = Date.now(); error.value = ''; answerStartedAt.value = Date.now(); switching = true
   const view = full ? 'full' : 'answer'
   const nextKey = selected ? contentKey(selected, view) : null
   if (visibleKey !== nextKey) { earlierMessages.value = []; earlierAvailable.value = null }
   visibleKey = nextKey
-  follow.value = positions.get(visibleKey)?.follow ?? true
+  follow.value = props.positions.get(visibleKey)?.follow ?? true
   const cached = selected ? peekContent(selected, view) : null
   content.value = {} // A different session must never display the previous session's text.
   if (cached) await display(cached, true)
@@ -297,6 +303,11 @@ watch([() => store.current, () => props.showExecution, () => session.value?.crea
   if (token === epoch) { await nextTick(); switching = false }
 }, { immediate: true })
 watch(() => props.fontSize, async () => { if (follow.value) await bottom() })
+function composerEnter(event) {
+  if (!props.desktop || event.shiftKey || event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  if (!event.repeat && !imageUploading.value) void send()
+}
 async function send(key = 'Enter', withText = true) {
   if (sending.value || imageUploading.value || !session.value || store.cachedSnapshot) return
   // Vue postpones v-model updates during IME composition; send the visible text.
@@ -357,6 +368,8 @@ async function send(key = 'Enter', withText = true) {
   }
 }
 onBeforeUnmount(() => {
+  if (props.desktop) window.removeEventListener('paste', pasteDesktopImage)
+  if (visibleKey && pane.value) props.positions.set(visibleKey, { top:pane.value.scrollTop, follow:follow.value })
   saveDraft(); window.removeEventListener('pagehide', saveDraft)
   disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
   readingResize?.disconnect()
@@ -427,7 +440,7 @@ onBeforeUnmount(() => {
         <p v-if="inputNotice" class="input-notice" role="status">{{ inputNotice }}</p>
         <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || !draft" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
-          <textarea ref="composerInput" v-model="draft" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
+          <textarea ref="composerInput" v-model="draft" @keydown.enter="composerEnter" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
           <button class="send" :disabled="sending || imageUploading || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft || attachments.some(image => !image.inTerminal) ? '发送' : '回车' }}</button></div>
       </form>
     </template>

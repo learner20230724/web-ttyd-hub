@@ -4,7 +4,6 @@ import { accelerateTerminal } from '../utils/terminal-renderer.mjs';
 import { Terminal } from '@xterm/xterm';
 import { ImageAddon } from '@xterm/addon-image';
 import ImageAttachments from './ImageAttachments.vue';
-import MessageImages from './MessageImages.vue';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../stores/sessions';
 import { snapshotSequence, pendingWrapSequence, suppressQueryReplies } from '../utils/terminal-snapshot.mjs';
@@ -26,11 +25,6 @@ const windowsSrc = computed(() => store.platform === 'win32' && runningName.valu
 const host = ref(null);
 const imagePicker = ref(null), attachments = ref([]), imageUploading = ref(false), attaching = ref(false), imageError = ref('');
 const canAttach = computed(() => currentSession.value?.shell === 'codex' || currentSession.value?.activity?.detected);
-const replyImages = computed(() => {
-  const session = currentSession.value;
-  const activity = session?.activity?.available === false ? session.lastKnownActivity : session?.activity;
-  return activity?.replyImages || [];
-});
 watch(() => draftKey(currentSession.value), () => { attachments.value = []; imageError.value = ''; imageUploading.value = false; });
 // Upload completion is the only intermediate step; paste/file selection already
 // expresses the intention to attach. Never auto-retry an uncertain terminal write.
@@ -380,8 +374,6 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 <template>
   <div class="terminal-area">
     <div v-if="runningName && canAttach" class="terminal-images">
-      <MessageImages v-if="replyImages.length" :key="draftKey(currentSession) + ':replies'" compact
-        aria-label="最近回复图片" :images="replyImages" :session-name="currentSession.name" :generation="currentSession.createdAt" />
       <ImageAttachments ref="imagePicker" :key="draftKey(currentSession)" v-model="attachments" :session="currentSession" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
       <button v-if="attachments.length && imageError" type="button" :disabled="imageUploading || attaching" @click="attachImages">{{ attaching ? '加入中…' : '加入终端输入区' }}</button>
       <p v-if="imageError" role="alert">{{ imageError }}</p>

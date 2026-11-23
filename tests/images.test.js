@@ -48,17 +48,3 @@ test('Rollout image inputs, viewed images and generated results survive projecti
     await store.project(session, remote); assert.equal(remote.payload.hubImages, undefined);
   } finally { await fs.rm(root, { recursive:true, force:true }); }
 });
-
-test('Desktop reply previews keep the newest assistant images in reply order and exclude user attachments', () => {
-  const state = {};
-  const image = n => ({id:n.toString(16).padStart(64,'0')+'.png'});
-  const append = (role,...images) => applyEvent(state,{type:'response_item',payload:{type:'message',role,content:[],hubImages:images}});
-  append('user',image(99));
-  assert.equal(state.replyImages,undefined);
-  for (let i=1;i<=9;i++) append('assistant',image(i));
-  const previous = state.replyImages;
-  append('assistant',image(6),image(10));
-  append('user',image(11));
-  assert.deepEqual(state.replyImages,[6,10,9,8,7,5,4,3].map(image));
-  assert.deepEqual(previous,[9,8,7,6,5,4,3,2].map(image));
-});

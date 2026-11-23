@@ -142,10 +142,15 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   const desktop=await browser.newPage({viewport:{width:1100,height:760}});
   desktop.on('pageerror',e=>errors.push(e.message));
   await desktop.goto(base); await desktop.locator('.session-card').click();
-  const terminalPreviews = desktop.locator('.terminal-images .image-preview img');
-  await terminalPreviews.first().waitFor({timeout:6000});
-  await until(() => terminalPreviews.first().evaluate(img=>img.naturalWidth===320));
-  // A distinct generated result must appear live while the terminal stays open.
+  const answerTab = desktop.getByRole('button',{name:'回答',exact:true});
+  const fullTab = desktop.getByRole('button',{name:'全文',exact:true});
+  const terminalTab = desktop.getByRole('button',{name:'终端',exact:true});
+  const replyImages = desktop.locator('.mobile-reading[data-view="answer"] .message.assistant .image-preview img');
+  await replyImages.first().waitFor({timeout:6000});
+  assert.equal(await answerTab.getAttribute('aria-pressed'),'true');
+  assert.equal(await desktop.locator('.terminal-host').count(),0);
+  await until(() => replyImages.first().evaluate(img=>img.naturalWidth===320));
+  // A distinct generated result must appear live in its own conversation row.
   const generated = await page.evaluate(() => {
     const c=document.createElement('canvas'); c.width=73; c.height=41;
     const ctx=c.getContext('2d');ctx.fillStyle='#23a95d';ctx.fillRect(0,0,73,41);
@@ -158,20 +163,20 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   const photo=page.locator('.message .image-preview img').last();
   const source=await photo.getAttribute('src');
   const checkLatest = async () => {
-    await until(()=>terminalPreviews.count().then(n=>n===2));
-    await until(()=>terminalPreviews.first().evaluate(img=>img.complete && img.naturalWidth===73 && img.naturalHeight===41));
-    assert.equal(await terminalPreviews.first().getAttribute('src'),source);
+    await until(()=>replyImages.count().then(n=>n===2));
+    await until(()=>replyImages.last().evaluate(img=>img.complete && img.naturalWidth===73 && img.naturalHeight===41));
+    assert.equal(await replyImages.last().getAttribute('src'),source);
   };
   await checkLatest();
   const wrongGeneration = new URL(source,base); wrongGeneration.searchParams.set('generation','replaced');
   const miss = await desktop.request.get(wrongGeneration.href);
   assert.equal(miss.status(),404); assert.equal(miss.headers()['cache-control'],'no-store');
-  // A failed transfer can be retried in the terminal without a new message.
+  // A failed inline transfer can be retried without sending a message.
   await desktop.route(new URL(source,base).href,route=>route.abort(),{times:1});
   await desktop.reload(); await desktop.getByRole('button',{name:'重新加载图片'}).click();
-  await until(()=>terminalPreviews.first().evaluate(img=>img.naturalWidth===73));
+  await until(()=>replyImages.last().evaluate(img=>img.naturalWidth===73));
   await desktop.reload(); await checkLatest();
-  await terminalPreviews.first().click();
+  await replyImages.last().click();
   const enlarged=desktop.locator('.image-viewer[open] img');
   await enlarged.waitFor();
   assert.deepEqual(await enlarged.evaluate(async img=>{
@@ -181,17 +186,51 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await desktop.keyboard.press('Escape');await enlarged.waitFor({state:'detached'});
   await photo.click();await page.locator('.image-viewer[open] img').waitFor();await page.getByRole('button',{name:'关闭图片 ×'}).last().click();
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  await desktop.getByRole('button',{name:'聊天记录',exact:true}).click();
-  await desktop.waitForFunction(()=>document.querySelectorAll('.message .image-preview img').length===3);
-  assert.equal(await desktop.locator('.message .image-preview img').last().getAttribute('src'),source);
   const reader = desktop.locator('.mobile-reading');
+  const input = desktop.getByRole('textbox',{name:'消息输入'});
+  // Pasting with focus still on the conversation (outside the textarea)
+  // attaches once, and removing it must leave the next model request untouched.
+  await desktop.evaluate(bytes=>{
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([new Uint8Array(bytes)],'桌面粘贴.png',{type:'image/png'}));
+    document.body.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}));
+  },[...png]);
+  const remove = desktop.getByRole('button',{name:'移除图片 桌面粘贴.png'});
+  await remove.click(); await remove.waitFor({state:'detached'});
+
+  await input.fill('保留桌面草稿');
+  await input.press('Shift+Enter');
+  assert.equal(await input.inputValue(),'保留桌面草稿\n');
   await reader.evaluate(el => { el.scrollTop = el.scrollHeight; });
-  await reader.hover(); await desktop.mouse.wheel(0,-12);
+  await reader.hover(); await desktop.mouse.wheel(0,-120);
   await desktop.getByRole('button',{name:'↓ 回到最新'}).waitFor();
+  const top = await reader.evaluate(el=>el.scrollTop);
+  await fullTab.click();
+  await desktop.locator('[data-view="full"] .mobile-output').first().waitFor();
+  assert.equal(await fullTab.getAttribute('aria-pressed'),'true');
+  assert.equal(await replyImages.count(),0);
+  await answerTab.click();
+  await checkLatest();
+  assert.equal(await input.inputValue(),'保留桌面草稿\n');
+  await until(()=>reader.evaluate((el,top)=>Math.abs(el.scrollTop-top)<2,top));
   await desktop.getByRole('button',{name:'↓ 回到最新'}).click();
   if(process.env.HUB_IMAGES_SCREENSHOT)await desktop.screenshot({path:process.env.HUB_IMAGES_SCREENSHOT});
-  await desktop.getByRole('button',{name:'返回终端',exact:true}).click();
+  await terminalTab.click();
   await desktop.waitForFunction(()=>document.querySelector('.terminal-host')?.terminal?.options.disableStdin===false);
+  assert.equal(await desktop.locator('.terminal-images .image-preview').count(),0);
+  await desktop.locator('.xterm-helper-textarea').focus();
+  await desktop.keyboard.type('KEEP_DRAFT');
+  await until(()=>tm('capture-pane','-p','-t','=image-test:').includes('KEEP_DRAFT'));
+  await answerTab.click();
+  assert.equal(await input.inputValue(),'保留桌面草稿\n');
+  await input.fill('');
+  await terminalTab.click();
+  await desktop.waitForFunction(()=>{
+    const t=document.querySelector('.terminal-host')?.terminal, b=t?.buffer.active;
+    return t?.options.disableStdin===false && Array.from({length:t.rows},(_,i)=>b.getLine(b.viewportY+i)?.translateToString(true)).some(row=>row?.includes('KEEP_DRAFT'));
+  });
+  await desktop.locator('.xterm-helper-textarea').focus();
+  await desktop.keyboard.press('Control+u');
   const screenText = () => desktop.evaluate(() => { const t=document.querySelector('.terminal-host').terminal,b=t.buffer.active;return Array.from({length:b.length},(_,i)=>b.getLine(i).translateToString(true)).join('\n'); });
   const paragraph = '自动换行验证开始' + '桌面终端应根据窗口宽度显示整段中文。'.repeat(5) + '验证结束';
   await desktop.locator('.xterm-helper-textarea').focus();
@@ -278,7 +317,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   console.log('PASS mobile removal: restored legacy and single attachments, first of two, phone and terminal text retained, only the intended image delivered');
   console.log('PASS submitted CJK transcript: complete rendered text and visible rightmost glyphs at three viewport widths');
   console.log('PASS fullscreen wheel + fractional trackpad deltas preserve drafts without model input');
-  console.log('PASS desktop reply images: latest live result, same source and pixels as phone, reload, retry and enlarged view');
+  console.log('PASS desktop Answer and Full: inline reply pixels match phone, reload and retry, chronological messages, draft and scroll restoration, interactive terminal');
   console.log('PASS actual Codex: PNG upload -> image attachment -> model input_image; real view_image and generated-event previews; reload and desktop/mobile image rendering.');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{
   await browser?.close();streams?.close();wss?.clients.forEach(c=>c.terminate());wss?.close();manager?.cleanup();

@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { hubUrl } from '../utils/base.mjs'
-const props = defineProps({ images: Array, sessionName: String, generation: String, compact: Boolean })
+const props = defineProps({ images: Array, sessionName: String, generation: String })
 const emit = defineEmits(['loaded'])
 const expanded = ref(null), viewer = ref(null)
 const failures = ref({}), attempts = ref({})
@@ -23,8 +23,7 @@ function open(id) {
 }
 </script>
 <template>
-  <div class="message-images" :class="{ compact }" :role="compact ? 'group' : undefined">
-    <span v-if="compact" class="image-label">回复图片</span>
+  <div class="message-images">
     <button v-for="image in images" :key="image.id" type="button" class="image-preview"
       :aria-label="failures[image.id] ? '重新加载图片' : '放大图片'" @click="open(image.id)">
       <span v-if="failures[image.id]">重试图片</span>
@@ -40,10 +39,6 @@ function open(id) {
 .message-images { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; }
 .image-preview { display:block; max-width:100%; padding:0; border:1px solid #40516b; border-radius:10px; overflow:hidden; background:#101827; cursor:zoom-in; }
 .image-preview img { display:block; max-width:100%; max-height:420px; min-height:48px; object-fit:contain; }
-.message-images.compact { flex:1 1 0; min-width:0; flex-wrap:nowrap; align-items:center; gap:6px; margin:0; overflow-x:auto; }
-.image-label { flex:none; color:#aab8ca; font-size:12px; }
-.compact .image-preview { flex:none; }
-.compact .image-preview img { max-width:100px; height:54px; min-height:0; }
 .image-preview > span { display:block; color:#ced8e6; padding:6px; }
 .image-viewer[open] { position:fixed; inset:0; margin:0; width:100%; height:100%; max-width:none; max-height:none; box-sizing:border-box; z-index:100; background:#080d16f5; border:0; padding:64px 12px 20px; overflow:auto; }
 .image-viewer img { display:block; max-width:100%; height:auto; margin:auto; touch-action:pan-x pan-y pinch-zoom; }

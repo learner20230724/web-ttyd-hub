@@ -31,6 +31,7 @@ const { fixture, pause } = require('./terminal-fixture.cjs');
       return route.fulfill({status:fail?503:200,json:fail?{error:'Synthetic attachment failure'}:{ok:true}});
     });
     await page.goto(f.base); await page.locator('.session-card').click();
+    await page.getByRole('button',{name:'终端',exact:true}).click();
     const fits = () => {
       const host = document.querySelector('.terminal-host'), term = host?.terminal;
       if (!term || term.options.disableStdin || term.cols >= 300) return false;

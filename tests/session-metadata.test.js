@@ -11,8 +11,6 @@ test('metadata round trip preserves reopen state while excluding credentials, qu
   let saved;
   const storage = { setItem: (_key, json) => { saved = json; }, getItem: () => saved };
   const data = snapshot();
-  const imageId = 'a'.repeat(64) + '.png';
-  data.sessions[0].activity.replyImages = [{id:imageId,path:'PRIVATE_PATH'}, {id:'PRIVATE_URL'}];
   data.apiKey = 'PRIVATE_KEY'; data.quota = { remaining: 42 };
   Object.assign(data.sessions[0], { pid: 123, port: 456, credential: 'PRIVATE_CREDENTIAL' });
   data.shells[0].path = '/private/shell-path';
@@ -24,7 +22,6 @@ test('metadata round trip preserves reopen state while excluding credentials, qu
   assert.deepEqual(restored.layout, data.layout);
   assert.equal(restored.read.reader, 'answer-one');
   assert.equal(restored.sessions[0].activity.error, true);
-  assert.deepEqual(restored.sessions[0].activity.replyImages, [{id:imageId}]);
   assert.equal(restored.sessions[0].activity.contentRevision, 'answer-version-one');
   assert.equal(restored.platform, 'linux');
 });
