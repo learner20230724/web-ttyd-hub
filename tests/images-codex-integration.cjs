@@ -16,12 +16,14 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-image-codex-'));
   const home=path.join(root,'codex'), project=path.join(root,'project');
   await fs.mkdir(home);await fs.mkdir(project);
-  let requests=0, sawImage=false;
+  let requests=0, sawImage=false, submittedImages=[];
   const viewed=path.join(project,'截图.png');
   model=http.createServer(async(req,res)=>{
     const chunks=[];for await(const chunk of req)chunks.push(chunk);
     if(req.url!='/v1/responses'){res.writeHead(200,{'Content-Type':'application/json'});res.end('{}');return;}
     const body=JSON.parse(Buffer.concat(chunks).toString()); requests++;
+    if (requests === 2) submittedImages = (body.input || []).filter(m => m.role === 'user')
+      .flatMap(m => m.content || []).filter(c => c.type === 'input_image').map(c => c.image_url);
     sawImage ||= (body.input || []).some(item=>item.role==='user' && item.content?.some(c=>c.type==='input_image' && c.image_url?.startsWith('data:image/')));
     const item=requests===2 ? {type:'function_call',name:'view_image',call_id:'actual-view',id:'view-item',arguments:JSON.stringify({path:viewed})} : {type:'message',role:'assistant',id:`reply-${requests}`,content:[{type:'output_text',text:sawImage?'图片已作为视觉输入收到。红色方块在左，蓝色方块在右。':'图片测试准备完成。\n'+Array.from({length:160},(_,i)=>`SCROLL_CONTEXT_${String(i).padStart(3, '0')} 合成上下文`).join('\n'),annotations:[]}]};
     res.writeHead(200,{'Content-Type':'text/event-stream'});
@@ -55,6 +57,28 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   page.on('pageerror',e=>errors.push(e.message));await page.goto(base);await page.locator('.session-card').click();await page.locator('.message').first().waitFor();
   const png=Buffer.from(await page.evaluate(()=>{const c=document.createElement('canvas');c.width=320;c.height=160;const x=c.getContext('2d');x.fillStyle='#f35d60';x.fillRect(0,0,160,160);x.fillStyle='#38a9ed';x.fillRect(160,0,160,160);return c.toDataURL('image/png').split(',')[1];}),'base64');
   await fs.writeFile(viewed,png);
+  const discarded = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=', 'base64');
+  const addDiscarded = () => page.locator('input[type=file]').setInputFiles({ name:'删除这张.png', mimeType:'image/png', buffer:discarded });
+  const removeDiscarded = page.getByRole('button',{name:'移除图片 删除这张.png'});
+  await addDiscarded();
+  await removeDiscarded.waitFor();
+  // Upgrade a cached draft from the previous release, which only knew the
+  // input order. Opening it again must expose a working remove button.
+  await page.addInitScript(() => {
+    const key = Object.keys(localStorage).find(k => k.includes('web-ttyd-hub.drafts.v1'));
+    if (!key) return;
+    const drafts = JSON.parse(localStorage.getItem(key));
+    for (const [, draft] of drafts) for (const image of draft.images) {
+      delete image.slot; delete image.count; delete image.handle;
+    }
+    localStorage.setItem(key, JSON.stringify(drafts));
+  });
+  await page.reload();
+  await removeDiscarded.click();
+  await removeDiscarded.waitFor({state:'detached'});
+  assert(!tm('capture-pane','-p','-t','=image-test:').includes('[Image #1]'), 'Single attachment is removed from live composer');
+  await addDiscarded();
+  await removeDiscarded.waitFor();
   // Android document providers can return a real image with a generic MIME.
   // Hold the HTTP transfer to check the visible draft before any server reply.
   let releaseTransfer;
@@ -72,6 +96,18 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   await until(() => tm('capture-pane','-p','-t','=image-test:').includes('[Image #1]'));
   assert.equal(requests, 1, 'Mobile selection inserts into Codex without sending Enter');
   assert.equal(await page.getByRole('button', { name:'发送', exact:true }).count(), 0);
+  await until(() => tm('capture-pane','-p','-t','=image-test:').includes('[Image #2]'));
+  await page.getByRole('textbox',{name:'消息输入'}).fill('手机草稿保留');
+  tm('send-keys', '-t', '=image-test:', '-l', 'KEEP');
+  await until(() => tm('capture-pane','-p','-t','=image-test:').includes('KEEP'));
+  await removeDiscarded.click();
+  await removeDiscarded.waitFor({state:'detached'});
+  const afterRemoval = tm('capture-pane','-p','-t','=image-test:');
+  assert(afterRemoval.includes('[Image #1]') && !afterRemoval.includes('[Image #2]') && afterRemoval.includes('KEEP'));
+  assert.equal(await page.getByRole('textbox',{name:'消息输入'}).inputValue(), '手机草稿保留');
+  assert.equal(requests, 1);
+  tm('send-keys', '-t', '=image-test:', 'End', 'C-w');
+  await until(() => !tm('capture-pane','-p','-t','=image-test:').split('\n').some(line => line.startsWith('›') && /K/.test(line)));
   // A keyboard clipboard may expose a File only via its items list.
   const pastedImage = page.waitForResponse(r => r.url().endsWith('/image-test/images') && r.request().method() === 'POST');
   await page.locator('textarea').evaluate((el, bytes) => {
@@ -90,7 +126,13 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   const submit = page.waitForRequest(r => r.url().endsWith('/image-test/input') && r.postDataJSON().key === 'Enter');
   await page.getByRole('textbox',{name:'消息输入'}).fill('请分析这张截图');await page.getByRole('button',{name:'发送',exact:true}).click();
   assert.equal((await submit).postDataJSON().images, undefined, 'Submitting text does not insert an attached image twice');
-  await until(()=>sawImage);await page.locator('.message.assistant').filter({hasText:'图片已作为视觉输入收到'}).waitFor({timeout:20000});
+  await until(()=>sawImage);
+  assert.equal(submittedImages.length, 1);
+  assert(await page.evaluate(async url => {
+    const img = new Image(); img.src = url; await img.decode();
+    return img.naturalWidth > 1 && img.naturalWidth === img.naturalHeight * 2;
+  }, submittedImages[0]), 'Only the selected 320×160 image remains in the actual model request');
+  await page.locator('.message.assistant').filter({hasText:'图片已作为视觉输入收到'}).waitFor({timeout:20000});
   await page.waitForFunction(()=>Array.from(document.querySelectorAll('.message.user .image-preview img')).some(i=>i.complete&&i.naturalWidth>0));
   assert.equal(await page.locator('.attachment').count(),0);
   assert.equal(await page.locator('.pending-message').count(),0, 'Accepted image prompt clears the pending receipt');
@@ -180,6 +222,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
       return bounds.right <= host.getBoundingClientRect().right && host.scrollLeft === 0;
     },submitted));
   }
+  console.log('PASS mobile removal: restored legacy and single attachments, first of two, phone and terminal text retained, only the intended image delivered');
   console.log('PASS submitted CJK transcript: complete rendered text and visible rightmost glyphs at three viewport widths');
   console.log('PASS fullscreen wheel + fractional trackpad deltas preserve drafts without model input');
   console.log('PASS actual Codex: PNG upload -> image attachment -> model input_image; real view_image and generated-event previews; reload and desktop/mobile image rendering.');

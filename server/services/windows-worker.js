@@ -38,6 +38,22 @@ function start(config) {
   app.use(express.json({ limit: '128kb' }));
   app.get('/health', (_req, res) => res.json({ name: config.name, pid: shell.pid, alive }));
   const flush = () => new Promise(resolve => term.write('', resolve));
+  app.post('/image-editor', async (req, res) => {
+    await flush();
+    const b = term.buffer.active, { action, x, y } = req.body;
+    if (action === 'read') return res.json({ active: alive && b.type === 'alternate',
+      x: b.cursorX, y: b.cursorY, lines: Array.from({ length: term.rows }, (_, i) => b.getLine(b.baseY+i)?.translateToString(true) || '') });
+    if (!alive || b.type !== 'alternate') return res.status(409).json({ error: '终端草稿已变化' });
+    if (action === 'right') shell.write('\x1b[C');
+    else if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= term.cols || y < 0 || y >= term.rows)
+      return res.status(400).json({ error: '草稿位置无效' });
+    else if (action === 'click') {
+      const point = `\x1b[<0;${x+1};${y+1}`;
+      shell.write(point+'M'+point+'m');
+    } else if (action === 'backspace' && x === b.cursorX && y === b.cursorY) shell.write('\x7f');
+    else return res.status(409).json({ error: '终端草稿已变化' });
+    res.json({ ok: true });
+  });
   app.get('/history', async (_req, res) => {
     await flush();
     const buffer = term.buffer.active, lines = [];

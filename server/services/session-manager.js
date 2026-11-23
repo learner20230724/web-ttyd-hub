@@ -7,6 +7,7 @@ const path = require('node:path');
 const EventEmitter = require('events');
 const PortManager = require('./port-manager');
 const { CodexActivity } = require('./codex-activity');
+const composerImages = require('./composer-images');
 const { waitAfterPaste } = require('./paste-timing');
 
 const SESSION_NAME_RE = /^[a-zA-Z0-9_-]+$/;
@@ -403,7 +404,31 @@ class SessionManager extends EventEmitter {
     return { ...await this.history(name), inputReceipts, completed, contentRevision, activity };
   }
 
-  input(name, { text, key, images = [] }) {
+  imageEditor(session, checkSession) {
+    const target = `=${session.name}:`;
+    const tm = async (...args) => {
+      checkSession();
+      return (await runFile('tmux', args, { timeout: 2000, maxBuffer: 4 * 1024 * 1024 })).stdout;
+    };
+    return {
+      read: async () => {
+        const raw = await tm('display-message', '-p', '-t', target,
+          '#{cursor_x} #{cursor_y} #{cursor_flag} #{pane_in_mode} #{pane_current_command}', ';', 'capture-pane', '-p', '-t', target);
+        const [meta, ...lines] = raw.trimEnd().split('\n');
+        const [x, y, visible, inMode, command] = meta.split(' ');
+        return { x: Number(x), y: Number(y), active: visible === '1' && inMode === '0' && /codex/i.test(command), lines };
+      },
+      click: (x, y) => {
+        const point = `\x1b[<0;${x+1};${y+1}`;
+        return tm('send-keys', '-t', target, '-l', point+'M'+point+'m');
+      },
+      right: () => tm('send-keys', '-t', target, 'Right'),
+      backspace: (x, y) => tm('if-shell', '-F', '-t', target,
+        `#{&&:#{==:#{cursor_x},${x}},#{==:#{cursor_y},${y}}}`, `send-keys -t ${target} BSpace`),
+    };
+  }
+
+  input(name, { text, key, images = [], removeImage }) {
     const session = this.getSession(name);
     const threadId = session.codexThreadId || session.resumeThreadId;
     const checkSession = () => {
@@ -416,6 +441,7 @@ class SessionManager extends EventEmitter {
       checkSession();
       await this.ensurePane(name);
       checkSession();
+      if (removeImage) return this.removeComposerImage(session, removeImage, checkSession);
       for (const pasted of [...images, text].filter(Boolean)) {
         const buffer = `hub-${randomUUID()}`;
         // stdin + named tmux buffer avoids shell interpolation and preserves multiline paste.
@@ -429,12 +455,47 @@ class SessionManager extends EventEmitter {
         finally { await runFile('tmux', ['delete-buffer', '-b', buffer]).catch(() => {}); }
         await waitAfterPaste(key || (images.length ? 'Enter' : null));
       }
+      if (!key && !text && images.length === 1) {
+        try { return await this.trackInsertedImage(session, images[0], checkSession); }
+        catch { return { ok: true }; } // The paste already succeeded.
+      }
       if (key) { checkSession(); await runFile('tmux', ['send-keys', '-t', `=${name}:`, key]); }
       return { ok: true };
     });
     this.inputQueues.set(name, task);
     task.finally(() => { if (this.inputQueues.get(name) === task) this.inputQueues.delete(name); }).catch(() => {});
     return task;
+  }
+
+  async trackInsertedImage(session, filename, checkSession) {
+    const position = composerImages.insertedImage(await this.imageEditor(session, checkSession).read());
+    if (!position) return { ok: true };
+    this.composerSlots ||= new WeakMap();
+    const slots = this.composerSlots.get(session) || new Map();
+    for (const slot of slots.keys()) if (slot >= position.count) slots.delete(slot);
+    const handle = randomUUID();
+    slots.set(position.slot, { id: path.basename(filename), handle });
+    this.composerSlots.set(session, slots);
+    return { ok: true, imagePosition: { ...position, handle } };
+  }
+
+  async removeComposerImage(session, target, checkSession) {
+    const receipt = JSON.stringify([target.id, target.insertedAt, session.codexThreadId || session.resumeThreadId]);
+    this.removedImages ||= new WeakMap();
+    const removed = this.removedImages.get(session) || new Set();
+    if (removed.has(receipt)) return { ok: true };
+    if (this.activity.messages(session.name)?.some(message => message.role === 'user' &&
+        Date.parse(message.timestamp) >= Date.parse(target.insertedAt))) throw composerImages.conflict();
+    const slots = this.composerSlots?.get(session);
+    const tracked = slots?.get(target.slot);
+    if (tracked && (tracked.id !== target.id || target.handle && target.handle !== tracked.handle)) throw composerImages.conflict();
+    await composerImages.removeImage(this.imageEditor(session, checkSession), target);
+    if (slots) this.composerSlots.set(session, new Map([...slots].filter(([n]) => n !== target.slot)
+      .map(([n, value]) => [n > target.slot ? n-1 : n, value])));
+    removed.add(receipt);
+    if (removed.size > 64) removed.delete(removed.values().next().value);
+    this.removedImages.set(session, removed);
+    return { ok: true };
   }
 
   async history(name) {

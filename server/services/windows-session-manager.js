@@ -113,7 +113,23 @@ class WindowsSessionManager extends Base {
     if (this.getSession(name).status !== 'running') throw new Error('会话已停止');
   }
   async history(name) { return this.call(this.getSession(name), '/history'); }
-  input(name, { text, key, images = [] }) {
+  imageEditor(session, checkSession) {
+    const call = async body => {
+      checkSession();
+      try { return await this.call(session, '/image-editor', body); }
+      catch (error) {
+        if (error instanceof SyntaxError) throw new Error('此 Windows 终端进程尚不支持移除图片，请在电脑终端中移除');
+        throw error;
+      }
+    };
+    return {
+      read: () => call({ action: 'read' }),
+      click: (x, y) => call({ action: 'click', x, y }),
+      right: () => call({ action: 'right' }),
+      backspace: (x, y) => call({ action: 'backspace', x, y }),
+    };
+  }
+  input(name, { text, key, images = [], removeImage }) {
     // Keep the fix in the Hub: already running ConPTY workers can keep their
     // terminals alive across this update, including workers from older versions.
     const session = this.getSession(name);
@@ -127,10 +143,15 @@ class WindowsSessionManager extends Base {
       checkSession();
       await this.ensurePane(name);
       checkSession();
+      if (removeImage) return this.removeComposerImage(session, removeImage, checkSession);
       for (const image of images) {
         checkSession();
         await this.call(session, '/input', { text: image });
         await waitAfterPaste('Enter');
+      }
+      if (!key && !text && images.length === 1) {
+        try { return await this.trackInsertedImage(session, images[0], checkSession); }
+        catch { return { ok: true }; }
       }
       if (text && key) {
         await this.call(session, '/input', { text });

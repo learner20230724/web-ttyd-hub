@@ -43,6 +43,9 @@ async function addFiles(files) {
             const receipt = await insertTerminalImages(session, [item], request.signal)
             item.inTerminal = true
             item.insertedAt = receipt.receivedAfter
+            item.slot = receipt.imagePosition?.slot
+            item.count = receipt.imagePosition?.count
+            item.handle = receipt.imagePosition?.handle
           } catch {
             if (!disposed) emit('error', '未确认图片已加入终端，请先查看全文')
             return
@@ -56,6 +59,38 @@ async function addFiles(files) {
     }
   } catch (error) { if (!disposed) emit('error', request.signal.aborted ? '添加图片超时，请重新选择' : error.message) }
   finally { clearTimeout(timeout); clearPreviews(); uploading.value = false; if (!disposed) emit('busy', false) }
+}
+async function remove(item) {
+  if (uploading.value || props.disabled) return
+  if (!item.inTerminal) {
+    emit('update:modelValue', props.modelValue.filter(image => image.id !== item.id))
+    return
+  }
+  const session = props.session
+  const attached = props.modelValue.filter(image => image.inTerminal)
+  // Older mobile drafts only stored insertion order.
+  const slot = item.slot ?? attached.indexOf(item) + 1
+  const count = attached.at(-1)?.count ?? attached.length
+  request = new AbortController()
+  const timeout = setTimeout(() => request.abort(), 10000)
+  uploading.value = true; emit('busy', true); emit('error', '')
+  try {
+    const response = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images/${item.id}/remove-from-input`), {
+      method: 'POST', signal: request.signal, headers: {
+        'Content-Type': 'application/json', 'X-TTYD-Generation': session.createdAt || '',
+        'X-TTYD-Thread': session.codexThreadId || session.resumeThreadId || '',
+      }, body: JSON.stringify({ slot, count, insertedAt: item.insertedAt, handle: item.handle }),
+    }), request.signal)
+    const data = await untilAbort(response.json(), request.signal)
+    if (!response.ok) throw new Error(data.error || '图片移除失败')
+    if (disposed || draftKey(props.session) !== draftKey(session)) return
+    emit('update:modelValue', props.modelValue.filter(image => image.id !== item.id).map(image => {
+      if (!image.inTerminal) return image
+      const previous = image.slot ?? attached.indexOf(image) + 1
+      return { ...image, slot: previous > slot ? previous-1 : previous, count: count-1 }
+    }))
+  } catch (error) { if (!disposed) emit('error', request.signal.aborted ? '未确认移除，请查看全文' : error.message) }
+  finally { clearTimeout(timeout); uploading.value = false; if (!disposed) emit('busy', false) }
 }
 function paste(event) {
   const clipboard = event.clipboardData
@@ -77,7 +112,7 @@ defineExpose({ addFiles, paste })
     </div>
     <div v-for="(item, index) in modelValue" :key="`${item.id}:${index}`" class="attachment">
       <img :src="hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images/${item.id}`)" :alt="item.name">
-      <button v-if="!item.inTerminal" type="button" :disabled="disabled || uploading" :aria-label="`移除图片 ${item.name}`" @click="emit('update:modelValue', modelValue.filter((_, i) => i !== index))">×</button>
+      <button type="button" :disabled="disabled || uploading" :aria-label="`移除图片 ${item.name}`" @click="remove(item)">×</button>
     </div>
     </Teleport>
   </div>
@@ -90,5 +125,5 @@ button:disabled { opacity:.55; cursor:default; }
 .image-pick.compact { min-height:36px; min-width:36px; font-size:23px; padding:0 6px; background:transparent; border:0; }
 .attachment { display:inline-block; margin:0 8px 8px 0; position:relative; width:64px; height:56px; }
 .attachment img { width:100%; height:100%; object-fit:cover; border-radius:6px; }
-.attachment button { position:absolute; top:-5px; right:-5px; min-height:24px; width:24px; padding:0; border-radius:50%; background:#131c2a; }
+.attachment button { position:absolute; top:-5px; right:-5px; min-height:30px; width:30px; padding:0; border-radius:50%; background:#131c2a; }
 </style>

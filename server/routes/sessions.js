@@ -36,6 +36,18 @@ module.exports = function (sessionManager) {
       res.sendFile(filename, error => { if (error && !res.headersSent) res.status(404).end(); });
     } catch { res.status(404).end(); }
   });
+  router.post('/:name/images/:id/remove-from-input', async (req, res) => {
+    try {
+      requireIdentity(req);
+      const session = sessionManager.getSession(req.params.name);
+      if (session.status !== 'running' || !(session.shell === 'codex' || session.activity?.detected)) throw replacedSession();
+      images.filename(session, req.params.id);
+      const { slot, count, insertedAt, handle } = req.body;
+      if (!Number.isSafeInteger(slot) || !Number.isSafeInteger(count) || slot < 1 || count < slot ||
+          !Number.isFinite(Date.parse(insertedAt))) throw new Error('图片草稿位置无效');
+      res.json(await sessionManager.input(session.name, { removeImage: { id: req.params.id, slot, count, insertedAt, handle } }));
+    } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
+  });
   const resumeLocks = new Map();
   router.get('/codex-usage', async (req, res) => {
     res.set('Cache-Control', 'no-store');
