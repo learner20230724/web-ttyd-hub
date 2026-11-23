@@ -139,13 +139,51 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   // Persisted tool events use the same image formats as Codex 0.166; no extra model request.
   const state=manager.activity.states.get(session.name);assert(state.path);
   
-  await fs.appendFile(state.path,[{type:'event_msg',payload:{type:'image_generation_end',call_id:'fixture-generate',status:'completed',saved_path:viewed}}].map(e=>JSON.stringify({...e,timestamp:new Date().toISOString()})).join('\n')+'\n');
+  const desktop=await browser.newPage({viewport:{width:1100,height:760}});
+  desktop.on('pageerror',e=>errors.push(e.message));
+  await desktop.goto(base); await desktop.locator('.session-card').click();
+  const terminalPreviews = desktop.locator('.terminal-images .image-preview img');
+  await terminalPreviews.first().waitFor({timeout:6000});
+  await until(() => terminalPreviews.first().evaluate(img=>img.naturalWidth===320));
+  // A distinct generated result must appear live while the terminal stays open.
+  const generated = await page.evaluate(() => {
+    const c=document.createElement('canvas'); c.width=73; c.height=41;
+    const ctx=c.getContext('2d');ctx.fillStyle='#23a95d';ctx.fillRect(0,0,73,41);
+    return c.toDataURL('image/png').split(',')[1];
+  });
+  await fs.appendFile(state.path,JSON.stringify({timestamp:new Date().toISOString(),type:'event_msg',payload:{type:'image_generation_end',call_id:'fixture-generate',status:'completed',result:generated}})+'\n');
   await until(()=>manager.activity.messages(session.name).filter(m=>m.phase==='image').length===2);
   await page.waitForFunction(()=>document.querySelectorAll('.message .image-preview img').length===3);
   await page.reload();await page.waitForFunction(()=>Array.from(document.querySelectorAll('.message .image-preview img')).filter(i=>i.complete&&i.naturalWidth>0).length===3);
-  await page.locator('.image-preview').last().click();await page.locator('.image-viewer[open] img').waitFor();await page.getByRole('button',{name:'关闭图片 ×'}).last().click();
+  const photo=page.locator('.message .image-preview img').last();
+  const source=await photo.getAttribute('src');
+  const checkLatest = async () => {
+    await until(()=>terminalPreviews.count().then(n=>n===2));
+    await until(()=>terminalPreviews.first().evaluate(img=>img.complete && img.naturalWidth===73 && img.naturalHeight===41));
+    assert.equal(await terminalPreviews.first().getAttribute('src'),source);
+  };
+  await checkLatest();
+  const wrongGeneration = new URL(source,base); wrongGeneration.searchParams.set('generation','replaced');
+  const miss = await desktop.request.get(wrongGeneration.href);
+  assert.equal(miss.status(),404); assert.equal(miss.headers()['cache-control'],'no-store');
+  // A failed transfer can be retried in the terminal without a new message.
+  await desktop.route(new URL(source,base).href,route=>route.abort(),{times:1});
+  await desktop.reload(); await desktop.getByRole('button',{name:'重新加载图片'}).click();
+  await until(()=>terminalPreviews.first().evaluate(img=>img.naturalWidth===73));
+  await desktop.reload(); await checkLatest();
+  await terminalPreviews.first().click();
+  const enlarged=desktop.locator('.image-viewer[open] img');
+  await enlarged.waitFor();
+  assert.deepEqual(await enlarged.evaluate(async img=>{
+    await img.decode();const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');
+    ctx.drawImage(img,0,0);return [...ctx.getImageData(1,1,1,1).data];
+  }),[35,169,93,255]);
+  await desktop.keyboard.press('Escape');await enlarged.waitFor({state:'detached'});
+  await photo.click();await page.locator('.image-viewer[open] img').waitFor();await page.getByRole('button',{name:'关闭图片 ×'}).last().click();
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  const desktop=await browser.newPage({viewport:{width:1100,height:760}});desktop.on('pageerror',e=>errors.push(e.message));await desktop.goto(base);await desktop.locator('.session-card').click();await desktop.getByRole('button',{name:'聊天记录',exact:true}).click();await desktop.waitForFunction(()=>document.querySelectorAll('.message .image-preview img').length===3);
+  await desktop.getByRole('button',{name:'聊天记录',exact:true}).click();
+  await desktop.waitForFunction(()=>document.querySelectorAll('.message .image-preview img').length===3);
+  assert.equal(await desktop.locator('.message .image-preview img').last().getAttribute('src'),source);
   const reader = desktop.locator('.mobile-reading');
   await reader.evaluate(el => { el.scrollTop = el.scrollHeight; });
   await reader.hover(); await desktop.mouse.wheel(0,-12);
@@ -240,6 +278,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
   console.log('PASS mobile removal: restored legacy and single attachments, first of two, phone and terminal text retained, only the intended image delivered');
   console.log('PASS submitted CJK transcript: complete rendered text and visible rightmost glyphs at three viewport widths');
   console.log('PASS fullscreen wheel + fractional trackpad deltas preserve drafts without model input');
+  console.log('PASS desktop reply images: latest live result, same source and pixels as phone, reload, retry and enlarged view');
   console.log('PASS actual Codex: PNG upload -> image attachment -> model input_image; real view_image and generated-event previews; reload and desktop/mobile image rendering.');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{
   await browser?.close();streams?.close();wss?.clients.forEach(c=>c.terminate());wss?.close();manager?.cleanup();

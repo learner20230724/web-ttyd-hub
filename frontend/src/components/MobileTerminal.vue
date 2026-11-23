@@ -394,7 +394,7 @@ onBeforeUnmount(() => {
           <article v-for="message in messages" :key="message.id" :class="['message', message.role]" :data-message-id="message.id">
             <div class="speaker">{{ message.role === 'user' ? '你' : message.phase === 'image' ? 'Codex · 图片' : message.phase === 'commentary' ? 'Codex · 工作进展' : 'Codex · 回复' }}</div>
             <div class="markdown" v-html="message.html"></div>
-            <MessageImages v-if="message.images?.length" :images="message.images" :session-name="session.name" @loaded="alignReading" />
+            <MessageImages v-if="message.images?.length" :images="message.images" :session-name="session.name" :generation="session.createdAt" @loaded="alignReading" />
           </article>
         </template>
         <div v-else-if="showExecution || !codexAnswer" class="terminal-segments">
@@ -411,7 +411,7 @@ onBeforeUnmount(() => {
         </div>
         <article v-for="item in pendingMessages" :key="item.id" class="pending-message" :class="item.status" :role="item.status === 'uncertain' ? 'alert' : 'status'">
           <div class="pending-text">{{ item.text }}</div>
-          <MessageImages v-if="item.images?.length" :images="item.images" :session-name="session.name" @loaded="alignReading" />
+          <MessageImages v-if="item.images?.length" :images="item.images" :session-name="session.name" :generation="session.createdAt" @loaded="alignReading" />
           <div class="pending-status">
             <span>{{ item.status === 'sending' ? '发送中…' : item.status === 'delivered' ? (item.codex ? '已送达终端 · 等待 Codex 确认接收' : '已发送到终端') : item.error || '发送结果未确认，请查看全文模式后再决定是否重发' }}</span>
             <button v-if="item.status !== 'sending'" type="button" aria-label="关闭发送提示" @click="dismissPending(item.id)">×</button>

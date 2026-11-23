@@ -12,6 +12,11 @@ test('Images are scoped to a session generation; upload IDs cannot read arbitrar
     const store = new SessionImages(root), session = { name:'a', createdAt:'1', shell:'codex' };
     const image = await store.save(session, png);
     assert.deepEqual(await fs.readFile((await store.resolveUploads(session, [image.id]))[0]), png);
+    const filename = store.filename(session,image.id);
+    await fs.truncate(filename,8);
+    await Promise.all(Array.from({length:4},()=>store.save(session,png)));
+    assert.deepEqual(await fs.readFile(filename),png);
+    assert.deepEqual(await fs.readdir(store.directory(session)),[image.id]);
     await assert.rejects(store.resolveUploads({ ...session, createdAt:'2' }, [image.id]));
     await assert.rejects(store.resolveUploads({ ...session, name:'b' }, [image.id]));
     assert.throws(() => store.filename(session, '../../auth.json'));
@@ -42,4 +47,18 @@ test('Rollout image inputs, viewed images and generated results survive projecti
     const remote = { type:'response_item', payload:{ type:'message', role:'user', content:[{ type:'input_image', image_url:'https://untrusted.invalid/image.png' }] } };
     await store.project(session, remote); assert.equal(remote.payload.hubImages, undefined);
   } finally { await fs.rm(root, { recursive:true, force:true }); }
+});
+
+test('Desktop reply previews keep the newest assistant images in reply order and exclude user attachments', () => {
+  const state = {};
+  const image = n => ({id:n.toString(16).padStart(64,'0')+'.png'});
+  const append = (role,...images) => applyEvent(state,{type:'response_item',payload:{type:'message',role,content:[],hubImages:images}});
+  append('user',image(99));
+  assert.equal(state.replyImages,undefined);
+  for (let i=1;i<=9;i++) append('assistant',image(i));
+  const previous = state.replyImages;
+  append('assistant',image(6),image(10));
+  append('user',image(11));
+  assert.deepEqual(state.replyImages,[6,10,9,8,7,5,4,3].map(image));
+  assert.deepEqual(previous,[9,8,7,6,5,4,3,2].map(image));
 });

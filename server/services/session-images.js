@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { fileURLToPath } = require('node:url');
 
 const LIMIT = 20 * 1024 * 1024;
@@ -26,8 +26,16 @@ class SessionImages {
     const extension = format(bytes), id = `${hash(bytes)}.${extension}`;
     const filename = this.filename(session, id);
     await fs.mkdir(this.directory(session), { recursive: true, mode: 0o700 });
-    try { await fs.writeFile(filename, bytes, { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    try {
+      if ((await fs.stat(filename)).size === bytes.length) return { id };
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    // The content URL is immutable. Publish complete bytes in one rename,
+    // including when another reader/upload is importing the same digest.
+    const temp = path.join(this.directory(session), randomUUID() + '.tmp');
+    try {
+      await fs.writeFile(temp, bytes, { flag:'wx', mode:0o600 });
+      await fs.rename(temp, filename);
+    } finally { await fs.rm(temp, { force:true }); }
     return { id };
   }
   async local(session, filename) {

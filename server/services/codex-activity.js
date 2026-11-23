@@ -16,6 +16,12 @@ function setPhase(state, phase, timestamp) {
 function message(state, value) {
   state.messages ||= [];
   state.sequence ||= 0;
+  if (value.role === 'assistant' && value.images?.length) {
+    // tmux snapshots contain text only. Publish a bounded set of references
+    // with the existing session updates so a terminal can restore real images.
+    const ids = new Set([...value.images, ...(state.replyImages || [])].map(image => image.id));
+    state.replyImages = [...ids].slice(0, 8).map(id => ({ id }));
+  }
   state.messages.push({ ...value, id: `${value.timestamp || ''}:${state.sequence++}` });
   if (state.messages.length > 300) state.messages.shift();
 }
@@ -183,7 +189,7 @@ class CodexActivity {
       const contentRevision = changed ? createHash('sha256').update(JSON.stringify([
         generation, state.identity || '', state.path || '', messages, inputReceipts, completed,
       ])).digest('hex') : previous.contentRevision;
-      activity = { ...activity, contentRevision };
+      activity = { ...activity, contentRevision, ...(state.replyImages?.length ? { replyImages: state.replyImages } : {}) };
       state.published = { generation, threadId: session.codexThreadId || session.resumeThreadId || null, messages, inputReceipts, completed, contentRevision, activity, hasEarlier: state.sequence > messages.length };
       this.snapshots.set(session.name, state.published);
     } else this.snapshots.delete(session.name);

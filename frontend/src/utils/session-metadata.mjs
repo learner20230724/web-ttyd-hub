@@ -29,6 +29,11 @@ export function normalizeMetadata(value) {
       for (const key of ['phase', 'completed', 'contentRevision', 'source', 'startedAt', 'updatedAt']) {
         if (raw[field][key] === null || text(raw[field][key])) activity[key] = raw[field][key]
       }
+      if (Array.isArray(raw[field].replyImages)) {
+        activity.replyImages = raw[field].replyImages.slice(0, 8)
+          .filter(image => typeof image?.id === 'string' && /^[a-f0-9]{64}\.(png|jpeg|webp|gif)$/.test(image.id))
+          .map(({ id }) => ({ id }))
+      }
       if (raw[field].error) activity.error = true
       session[field] = activity
     }

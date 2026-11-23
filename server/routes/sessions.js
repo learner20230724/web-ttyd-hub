@@ -31,10 +31,14 @@ module.exports = function (sessionManager) {
   });
   router.get('/:name/images/:id', async (req, res) => {
     try {
-      const filename = images.filename(sessionManager.getSession(req.params.name), req.params.id);
+      const session = sessionManager.getSession(req.params.name);
+      if (req.query.generation !== undefined && req.query.generation !== session.createdAt) {
+        return res.set('Cache-Control', 'no-store').sendStatus(404);
+      }
+      const filename = images.filename(session, req.params.id);
       res.set({ 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
-      res.sendFile(filename, error => { if (error && !res.headersSent) res.status(404).end(); });
-    } catch { res.status(404).end(); }
+      res.sendFile(filename, error => { if (error && !res.headersSent) res.set('Cache-Control', 'no-store').status(404).end(); });
+    } catch { res.set('Cache-Control', 'no-store').status(404).end(); }
   });
   router.post('/:name/images/:id/remove-from-input', async (req, res) => {
     try {
