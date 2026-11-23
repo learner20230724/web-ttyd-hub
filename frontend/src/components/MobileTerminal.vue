@@ -173,11 +173,26 @@ async function loadEarlier() {
   } catch (e) { if (key === visibleKey && token === epoch) error.value = e.message }
   finally { clearTimeout(timeout); loadingEarlier.value = false }
 }
+// Older Android shells block new windows. Preserve their existing link handling.
+const opensNewTabs = !navigator.userAgent.includes('; wv)') || navigator.userAgent.includes(' TTYdHub');
+function renderMarkdown(text) {
+  const body = DOMPurify.sanitize(marked.parse(tableMarkdown(text)), {
+    FORBID_TAGS: ['img'], FORBID_ATTR: ['style'], RETURN_DOM: true,
+  })
+  if (opensNewTabs) {
+    for (const link of body.querySelectorAll('a[href], area[href]')) {
+      link.setAttribute('target', '_blank')
+      link.setAttribute('rel', 'noopener noreferrer')
+      link.removeAttribute('download')
+    }
+  }
+  return body.innerHTML
+}
 const messages = computed(() => [...new Map([...earlierMessages.value, ...(answerData.value?.messages || [])].map(m => [m.id, m])).values()].map(m => {
   const key = `${m.role}:${m.id}`
   const old = renderedMessages.get(key)
   if (old?.text === m.text && old?.phase === m.phase && JSON.stringify(old?.images) === JSON.stringify(m.images)) return old
-  const rendered = markRaw({ ...m, html: DOMPurify.sanitize(marked.parse(tableMarkdown(m.text)), { FORBID_TAGS: ['img'], FORBID_ATTR: ['style'] }) })
+  const rendered = markRaw({ ...m, html: renderMarkdown(m.text) })
   renderedMessages.set(key, rendered)
   if (renderedMessages.size > 1200) renderedMessages.delete(renderedMessages.keys().next().value)
   return rendered

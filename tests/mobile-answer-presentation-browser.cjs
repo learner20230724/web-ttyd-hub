@@ -19,7 +19,9 @@ async function until(predicate, label, timeout = 3000) {
   throw Error('Timed out: ' + label);
 }
 
-async function fixture(browser, initialMode = 'structured', initialPhase = 'final_answer') {
+const phone = { viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true };
+
+async function fixture(browser, initialMode = 'structured', initialPhase = 'final_answer', device = phone) {
   const session = { name: 'answer-fixture', displayName: '回答展示合成会话', createdAt, shell: 'codex', status: 'running',
     activity: { available: true, detected: true, busy: false, phase: 'completed', completed: 't1' } };
   const manager = new EventEmitter(); manager.sessions = new Map([[session.name, session]]);
@@ -52,9 +54,10 @@ async function fixture(browser, initialMode = 'structured', initialPhase = 'fina
     reads.push(req.body); res.json(manager.sync.apply(req.body));
   });
   app.post('/api/sessions/:name/input', (_req, res) => { inputs++; res.sendStatus(405); });
+  app.get('/fixture-file.html', (_req, res) => res.send('<h1>Synthetic file</h1>'));
   app.use(express.static(process.env.HUB_PUBLIC_DIR || path.join(__dirname, '../server/public')));
   const server = app.listen(0, '127.0.0.1'), wss = setupWebSocket(server, manager); await once(server, 'listening');
-  const context = await browser.newContext({ viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true });
+  const context = await browser.newContext(device);
   await context.addInitScript(({ name, createdAt }) => {
     localStorage.setItem('web-ttyd-hub.last-session.v1', JSON.stringify({ name, createdAt }));
     localStorage.setItem('web-ttyd-hub.shared-migrated.v1', '1');
@@ -164,12 +167,66 @@ async function retainedReadGuard(browser) {
   } finally { await f.close(); }
 }
 
+async function conversationLinks(browser) {
+  const external = 'https://external.example.test/guide';
+  const links = `\n\n[同站文件](/fixture-file.html)\n\n<a href="/fixture-file.html?preview" download>文件预览</a>\n\n<a href="${external}" target="_self" rel="opener">站外网页</a>\n\n<a href="javascript:alert(1)">不安全链接</a>\n\n`;
+  const filler = '\n\n合成历史，仅供滚动测试。'.repeat(40);
+  for (const device of [{ viewport: { width: 1200, height: 800 } }, phone]) {
+    const f = await fixture(browser, 'structured', 'final_answer', device);
+    try {
+      const { page } = f;
+      const initialUrl = page.url();
+      const context = page.context();
+      await context.route(external, route => route.fulfill({ contentType: 'text/html', body: '<h1>Synthetic guide</h1>' }));
+      f.setReply(filler + links + filler); await f.refresh();
+      const draft = page.getByRole('textbox', { name: '消息输入' });
+      await draft.fill('未发送的合成草稿');
+      const reading = page.locator('.mobile-reading');
+      for (const [label, url, heading] of [
+        ['同站文件', new URL('/fixture-file.html', initialUrl).href, 'Synthetic file'],
+        ['文件预览', new URL('/fixture-file.html?preview', initialUrl).href, 'Synthetic file'],
+        ['站外网页', external, 'Synthetic guide'],
+      ]) {
+        const link = page.getByRole('link', { name: label });
+        await link.scrollIntoViewIfNeeded();
+        const position = await reading.evaluate(el => el.scrollTop);
+        assert(position > 0);
+        const [opened] = await Promise.all([
+          context.waitForEvent('page', { timeout: 5000 }),
+          device.hasTouch ? link.tap() : link.press('Enter'),
+        ]);
+        assert.equal(opened.url(), url);
+        await opened.getByRole('heading', { name: heading }).waitFor();
+        assert.deepEqual(await opened.evaluate(() => [window.opener, document.referrer]), [null, '']);
+        await opened.close();
+        assert.equal(page.url(), initialUrl);
+        assert.equal(await page.locator('.mobile-session-title').innerText(), '回答展示合成会话');
+        assert.equal(await draft.inputValue(), '未发送的合成草稿');
+        assert.equal(await reading.evaluate(el => el.scrollTop), position);
+      }
+      assert.equal(await reading.getByText('不安全链接').getAttribute('href'), null);
+    } finally { await f.close(); }
+  }
+
+  const webview = 'Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 Chrome/140.0.0.0 Mobile Safari/537.36';
+  for (const suffix of ['', ' TTYdHub']) {
+    const f = await fixture(browser, 'structured', 'final_answer', { ...phone, userAgent: webview + suffix });
+    try {
+      f.setReply(links); await f.refresh();
+      const link = f.page.getByRole('link', { name: '同站文件' });
+      await link.waitFor();
+      assert.equal(await link.getAttribute('target'), suffix ? '_blank' : null);
+    } finally { await f.close(); }
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   const failures = [];
   try {
     for (const [name, run] of [['readable-cache', readableCache], ['successful-fallback', successfulFallback],
-      ['actual-http-failure', actualFailure], ['message-phase', messagePhase], ['retained-read-guard', retainedReadGuard]]) {
+      ['actual-http-failure', actualFailure], ['message-phase', messagePhase], ['retained-read-guard', retainedReadGuard],
+      ['conversation-links', conversationLinks]]) {
       if (process.env.HUB_ANSWER_CASE && process.env.HUB_ANSWER_CASE !== name) continue;
       try { await run(browser); console.log(`PASS answer presentation ${name}: no terminal input`); }
       catch (error) { failures.push(name); console.error(`FAIL answer presentation ${name}: ${error.message}`); }

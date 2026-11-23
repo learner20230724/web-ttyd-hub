@@ -12,6 +12,9 @@ import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
 import android.text.InputType;
 import android.view.View;
 import android.view.WindowInsets;
@@ -40,6 +43,9 @@ import java.util.Set;
 public class MainActivity extends Activity {
     private LinearLayout root;
     private WebView web;
+    private WebView browserLink;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable closeBrowserLink = this::destroyBrowserLink;
     private TextView status;
     private ProgressBar progress;
     private SharedPreferences preferences;
@@ -108,6 +114,7 @@ public class MainActivity extends Activity {
         return v;
     }
     private void destroyWeb() {
+        destroyBrowserLink();
         finishImagePicker(null);
         if (loginDialog != null) { loginDialog.dismiss(); loginDialog = null; }
         httpAuth.cancel();
@@ -199,9 +206,10 @@ public class MainActivity extends Activity {
         outer.addView(web,new LinearLayout.LayoutParams(-1,0,1));
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
+        settings.setUserAgentString(settings.getUserAgentString() + " TTYdHub");
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setSupportMultipleWindows(true); // Unhandled popup windows are blocked.
+        settings.setSupportMultipleWindows(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setUseWideViewPort(true); settings.setLoadWithOverviewMode(true);
         settings.setBuiltInZoomControls(true); settings.setDisplayZoomControls(false);
@@ -210,6 +218,10 @@ public class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);
         web.setDownloadListener((url, userAgent, disposition, mimeType, length) -> openInBrowser(url));
         web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message result) {
+                if (view != web || !canControl() || isDialog || !isUserGesture || browserLink != null) return false;
+                return forwardBrowserLink(result);
+            }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (view != web || !canControl()) return false;
                 finishImagePicker(null);
@@ -284,13 +296,44 @@ public class MainActivity extends Activity {
         });
         web.loadUrl(address);
     }
+    private boolean forwardBrowserLink(Message result) {
+        // Receive the new window's destination without loading it in the app.
+        browserLink = new WebView(this);
+        WebSettings settings = browserLink.getSettings();
+        settings.setBlockNetworkLoads(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        browserLink.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                if (request.isForMainFrame()) {
+                    String url = request.getUrl().toString();
+                    mainHandler.post(() -> {
+                        if (view != browserLink) return;
+                        destroyBrowserLink();
+                        if (canControl()) openInBrowser(url);
+                    });
+                }
+                return true;
+            }
+        });
+        ((WebView.WebViewTransport) result.obj).setWebView(browserLink);
+        result.sendToTarget();
+        mainHandler.postDelayed(closeBrowserLink, 5000);
+        return true;
+    }
+    private void destroyBrowserLink() {
+        mainHandler.removeCallbacks(closeBrowserLink);
+        if (browserLink == null) return;
+        browserLink.destroy();
+        browserLink = null;
+    }
     private void openInBrowser(String url) {
-        if (!ServerAddress.isWebUrl(url)) { notice("无法打开此下载地址"); return; }
+        if (!ServerAddress.isWebUrl(url)) { notice("无法打开此链接"); return; }
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
             intent.addCategory(Intent.CATEGORY_BROWSABLE);
             startActivity(intent);
-        } catch (android.content.ActivityNotFoundException e) { notice("没有可用的浏览器，请复制链接到浏览器下载"); }
+        } catch (android.content.ActivityNotFoundException e) { notice("没有可用的浏览器"); }
     }
     private void promptLogin(String scope, boolean rejected) {
         LinearLayout form = column(); form.setPadding(dp(20),dp(8),dp(20),0);
