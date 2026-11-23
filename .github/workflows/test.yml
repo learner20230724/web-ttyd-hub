@@ -44,6 +44,7 @@ jobs:
         run: node tests/images-terminal-browser.cjs
       - run: node tests/codex-picker-browser.cjs
       - run: node tests/mobile-input-browser.cjs
+      - run: node tests/codex-mobile-browser.cjs
       - run: node tests/activity-browser.cjs
       - run: node tests/mobile-state-browser.cjs
       - run: node tests/mobile-cold-start-browser.cjs
@@ -61,7 +62,6 @@ jobs:
       - run: node tests/mobile-local-cache-browser.cjs
       - run: node tests/content-cache-browser.cjs
       - run: node tests/terminal-read-browser.cjs
-      - run: node tests/codex-mobile-browser.cjs
       - run: node tests/dialog-request-deadline-browser.cjs
       - if: runner.os == 'Linux'
         run: npm run test:terminal

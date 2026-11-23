@@ -1,8 +1,10 @@
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { hubUrl } from '../utils/base.mjs'
+import { pageHidden, receiveVisibility } from '../utils/page-visibility.mjs'
 import { untilAbort } from '../utils/request-deadline.mjs'
 
+const props = defineProps({ menuOpen: Boolean })
 const expanded = ref(false)
 const loading = ref(false)
 const data = ref(null)
@@ -18,10 +20,30 @@ function time(value) {
 }
 
 let currentRequest
-let collapseTimer
+const foreground = ref(!pageHidden())
+const lifecycle = new AbortController()
+function updateForeground(event) {
+  receiveVisibility(event)
+  foreground.value = event.type !== 'pagehide' && !pageHidden()
+}
+document.addEventListener('visibilitychange', updateForeground, { signal: lifecycle.signal })
+for (const event of ['hub:visibility', 'pagehide', 'pageshow', 'focus']) {
+  window.addEventListener(event, updateForeground, { signal: lifecycle.signal })
+}
+
+let remainingMs = 0
+watch(() => expanded.value && !loading.value && props.menuOpen && foreground.value, (visible, _, onCleanup) => {
+  if (!visible) return
+  const started = performance.now()
+  const timer = setTimeout(collapse, Math.ceil(remainingMs))
+  onCleanup(() => {
+    clearTimeout(timer)
+    remainingMs = Math.max(0, remainingMs - (performance.now() - started))
+  })
+}, { flush: 'post' })
+
 function collapse() {
   expanded.value = false
-  clearTimeout(collapseTimer)
   currentRequest?.abort()
   currentRequest = null
 }
@@ -47,16 +69,19 @@ async function toggle() {
     clearTimeout(deadline)
     if (currentRequest === request) {
       currentRequest = null
+      remainingMs = 60000
       loading.value = false
-      collapseTimer = setTimeout(collapse, 60000)
     }
   }
 }
-onBeforeUnmount(collapse)
+onBeforeUnmount(() => {
+  lifecycle.abort()
+  collapse()
+})
 </script>
 
 <template>
-  <div class="usage-card" :class="{ expanded }" @keydown.esc.stop="collapse">
+  <div v-show="menuOpen" class="usage-card" :class="{ expanded }" @keydown.esc.stop="collapse">
     <div id="account-usage-details" class="reveal" :aria-hidden="!expanded">
       <div class="clip">
         <div class="details" role="status" aria-live="polite" aria-atomic="true">

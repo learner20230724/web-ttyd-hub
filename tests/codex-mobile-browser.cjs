@@ -70,12 +70,77 @@ async function desktopQuota(browser, url, output) {
   } finally { await page.close(); }
 }
 
+async function mobileQuotaReturn(browser, url) {
+  const page = await browser.newPage({ viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true });
+  try {
+    await page.addInitScript(() => localStorage.setItem('web-ttyd-hub.last-session.v1',
+      JSON.stringify({ name: 'reader', createdAt: '2026-10-14T00:00:00Z' })));
+    let attempts = 0;
+    let pendingRequest;
+    await page.route('**/api/sessions/codex-usage*', route => {
+      attempts++;
+      pendingRequest = route;
+    });
+    await page.goto(url);
+    const menu = page.getByRole('button', { name: '会话列表', exact: true });
+    const quota = page.getByRole('button', { name: '账号额度', exact: true });
+    const result = page.locator('.usage-card').getByText('61%', { exact: true });
+    const nativeVisibility = visible => page.evaluate(visible =>
+      window.dispatchEvent(new CustomEvent('hub:visibility', { detail: { visible } })), visible);
+    const tabVisibility = hidden => page.evaluate(hidden => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: hidden });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+
+    await page.getByRole('textbox', { name: '消息输入', exact: true }).waitFor();
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    await menu.tap();
+    await quota.tap();
+    await page.getByText('正在查询额度…').waitFor();
+    await page.locator('[data-session-id="other"]').tap();
+    await quota.waitFor({ state: 'hidden' });
+    await menu.tap();
+    await page.getByText('正在查询额度…').waitFor({ timeout: 2000 });
+    await page.locator('[data-session-id="reader"]').tap();
+    await quota.waitFor({ state: 'hidden' });
+    await pendingRequest.fulfill({ json: { available: true, fetchedAt: '2026-11-24T04:00:00Z',
+      windows: [{ id: 'codex:secondary', period: '每周额度', remainingPercent: 61, resetsAt: null }] } });
+    await result.waitFor({ state: 'attached' });
+
+    await page.clock.fastForward(90000);
+    await menu.tap();
+    await result.waitFor();
+    await page.clock.fastForward(20000);
+    await page.locator('.sidebar-overlay').tap({ position: { x: 320, y: 250 } });
+    await quota.waitFor({ state: 'hidden' });
+    await page.clock.fastForward(90000);
+    await menu.tap();
+    await result.waitFor();
+    await page.clock.fastForward(10000);
+    await nativeVisibility(false);
+    await page.clock.fastForward(90000);
+    await nativeVisibility(true);
+    await page.clock.fastForward(10000);
+    await tabVisibility(true);
+    await page.clock.fastForward(90000);
+    await tabVisibility(false);
+    await page.clock.fastForward(19999);
+    assert.equal(await quota.getAttribute('aria-expanded'), 'true', '59.999 seconds of visible result');
+    await page.clock.fastForward(1);
+    assert.equal(await quota.getAttribute('aria-expanded'), 'false', '60 cumulative visible seconds');
+    assert.equal(attempts, 1, 'Switching sessions, menus or foreground must reuse the original request');
+    console.log('Mobile quota: one request across session switches, 60s cumulative display excluding menu, app and tab absences.');
+  } finally { await page.close(); }
+}
+
 (async () => {
   const server = app.listen(0, '127.0.0.1'); const wss = setupWebSocket(server, manager); await once(server, 'listening');
   const browser = await chromium.launch({ args: ['--no-sandbox'] });
   const output = path.join(__dirname, '../output/playwright'); fs.mkdirSync(output, { recursive: true });
   try {
     await desktopQuota(browser, `http://127.0.0.1:${server.address().port}`, output);
+    await mobileQuotaReturn(browser, `http://127.0.0.1:${server.address().port}`);
     for (const width of [320, 412]) {
       requests = [makeQuestion()]; posts = []; offline = false; stale = false; unavailable = false;
       const context = await browser.newContext({ viewport: { width, height: 915 }, isMobile: true, hasTouch: true });

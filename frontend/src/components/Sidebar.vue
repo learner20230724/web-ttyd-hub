@@ -130,7 +130,7 @@ onBeforeUnmount(() => finishDrag());
         <p class="sub-hint">新建一个会话，开始工作</p>
       </div>
     </div>
-    <CodexUsageCard v-if="!collapsed" />
+    <CodexUsageCard :menu-open="!collapsed" />
     <details v-if="!collapsed" class="archive-section">
       <summary>归档（{{ store.archivedSessions.length }}）</summary>
       <p class="sort-hint">进程保留 30 分钟，到期自动终止</p>
