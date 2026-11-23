@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const SessionSync = require('../server/services/session-sync');
 const { CodexActivity, consumeRollout } = require('../server/services/codex-activity');
 const { matchesThread } = require('../server/services/session-identity');
@@ -43,8 +45,8 @@ test('a missing baseline never acknowledges an old identical input, and receipts
 });
 
 test('history pages retain order without duplicates beyond the 300-message live window', async t => {
-  const dir = await fs.mkdtemp('/tmp/hub-history-page-'); t.after(()=>fs.rm(dir,{recursive:true,force:true}));
-  const filename = dir+'/rollout.jsonl';
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hub-history-page-')); t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+  const filename = path.join(dir, 'rollout.jsonl');
   await fs.writeFile(filename, Array.from({length:650},(_,i)=>JSON.stringify({type:'response_item',timestamp:new Date(1700000000000+i).toISOString(),payload:{type:'message',role:'assistant',content:[{type:'output_text',text:'message '+i}]}})).join('\n'));
   const stat=await fs.stat(filename), session={name:'history',createdAt,status:'running',codexThreadId:'thread'};
   const manager={sessions:new Map([[session.name,session]]),getSession:()=>session,serialize:x=>x,emit(){}};
