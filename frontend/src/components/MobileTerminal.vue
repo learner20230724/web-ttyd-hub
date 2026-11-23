@@ -161,7 +161,9 @@ function rememberReadingSize(element) {
 }
 function atLatest() {
   const element = pane.value
-  return element && element.scrollHeight - element.scrollTop - element.clientHeight < 70
+  // DOM heights are integers but trackpad scrollTop can be fractional.
+  // Once the reader moves up, an incoming reply must not pull them back.
+  return element && element.scrollHeight - element.scrollTop - element.clientHeight <= 1
 }
 function alignReading() {
   const element = pane.value
@@ -191,13 +193,13 @@ function scrolled() {
   const p = pane.value
   if (!p || switching) return
   const resized = measuredPane !== p || measuredWidth !== p.clientWidth || measuredHeight !== p.clientHeight
-  rememberReadingSize(p)
+  if (resized) rememberReadingSize(p)
   // A viewport/keyboard resize is not an instruction to stop following the
   // latest reply. Keep deliberate history reading separate from layout shifts.
   if (resized && follow.value) { alignReading(); return }
   follow.value = Boolean(atLatest())
   if (visibleKey) positions.set(visibleKey, { top:p.scrollTop, follow:follow.value })
-  store.markRead()
+  if (follow.value) store.markRead()
 }
 async function bottom() { follow.value = true; await nextTick(); if (pane.value) pane.value.scrollTop = pane.value.scrollHeight; store.markRead() }
 async function display(entry, first = false) {

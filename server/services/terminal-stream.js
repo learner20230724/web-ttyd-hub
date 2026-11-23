@@ -2,6 +2,7 @@ const { spawn } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const { WebSocketServer } = require('ws');
 
+const outputPrefix = Buffer.from('%output ');
 const LIMIT = 16 * 1024 * 1024;
 const snapshotFields = ['screen', 'normal', 'history', 'alternate', 'pending'];
 
@@ -48,14 +49,22 @@ const fields = ['pane_id', 'pane_width', 'pane_height', 'history_size', 'cursor_
 // Control-mode output and capture-pane -C use octal escapes. Decode bytes before
 // UTF-8, including when a multibyte character crosses stdout/message boundaries.
 function unescape(data) {
+  const first = data.indexOf(92);
+  if (first === -1) return data;
   const out = Buffer.allocUnsafe(data.length);
-  let n = 0;
-  for (let i = 0; i < data.length; i++) {
-    if (data[i] === 92 && i + 3 < data.length && data.subarray(i + 1, i + 4).every(c => c >= 48 && c <= 55)) {
-      out[n++] = parseInt(data.toString('ascii', i + 1, i + 4), 8); i += 3;
-    } else if (data[i] === 92 && data[i + 1] === 92) {
-      out[n++] = 92; i++;
-    } else out[n++] = data[i];
+  data.copy(out, 0, 0, first);
+  let n = first;
+  for (let i = first; i < data.length; i++) {
+    if (data[i] === 92) {
+      const a = data[i + 1] - 48, b = data[i + 2] - 48, c = data[i + 3] - 48;
+      if (a >= 0 && a < 8 && b >= 0 && b < 8 && c >= 0 && c < 8) {
+        out[n++] = (a << 6) | (b << 3) | c;
+        i += 3;
+        continue;
+      }
+      if (data[i + 1] === 92) i++;
+    }
+    out[n++] = data[i];
   }
   return out.subarray(0, n);
 }
@@ -127,7 +136,7 @@ class TerminalStream {
   }
 
   read(chunk) {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
+    this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
     if (this.buffer.length > LIMIT) return this.close(1013, 'Terminal output is too large');
     let end;
     while (!this.closed && (end = this.buffer.indexOf(10)) !== -1) {
@@ -138,6 +147,15 @@ class TerminalStream {
   }
 
   line(line) {
+    // PTY output is binary. Inspect the prefix without decoding a whole
+    // terminal repaint into a JS string only to decode its escapes again.
+    if (!this.block && line.subarray(0, 8).equals(outputPrefix)) {
+      const space = line.indexOf(32, 8);
+      if (!this.snapshotting && space > 8 && line.toString('ascii', 8, space) === this.pane) {
+        this.send(unescape(line.subarray(space + 1)));
+      }
+      return;
+    }
     const text = line.toString('utf8');
     if (this.block) {
       if (text === `%end ${this.block.id}` || text === `%error ${this.block.id}`) {
@@ -164,11 +182,6 @@ class TerminalStream {
     const begin = /^%begin (\d+ \d+ (\d+))$/.exec(text);
     if (begin) {
       this.block = { id: begin[1], command: Boolean(Number(begin[2]) & 1), lines: [], bytes: 0 };
-    } else if (text.startsWith('%output ')) {
-      const space = line.indexOf(32, 8);
-      if (!this.snapshotting && line.toString('ascii', 8, space) === this.pane) {
-        this.send(unescape(line.subarray(space + 1)));
-      }
     } else if (/^%(layout-change|window-pane-changed|session-window-changed) /.test(text)) {
       if (this.ready) this.scheduleSnapshot();
     } else if (text.startsWith('%exit')) this.close(1000, 'Terminal exited');

@@ -40,6 +40,7 @@ export function applyTerminalDelta(baseline, message) {
 
 export function encodeTerminalBytes(buffer) {
   const bytes = new Uint8Array(buffer);
+  if (bytes.toBase64) return bytes.toBase64();
   let result = '';
   for (let offset = 0; offset < bytes.length; offset += 32768) {
     result += String.fromCharCode(...bytes.subarray(offset, offset + 32768));

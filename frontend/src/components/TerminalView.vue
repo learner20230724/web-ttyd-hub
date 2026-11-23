@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
+import { accelerateTerminal } from '../utils/terminal-renderer.mjs';
 import { Terminal } from '@xterm/xterm';
 import { ImageAddon } from '@xterm/addon-image';
 import ImageAttachments from './ImageAttachments.vue';
@@ -60,10 +61,10 @@ watch(nativeKey, async key => {
   if (version !== revision || !host.value) return;
   const element = host.value;
   const term = new Terminal({
-    cursorBlink: true, fontSize: 15, scrollback: 20000,
+    cursorBlink: false, fontSize: 15, scrollback: 20000,
     fontFamily: 'Menlo, Monaco, Consolas, "Liberation Mono", monospace',
     theme: { background: '#000000', foreground: '#ffffff' },
-    scrollOnUserInput: true, smoothScrollDuration: 100, disableStdin: true,
+    scrollOnUserInput: true, smoothScrollDuration: 0, disableStdin: true,
     allowProposedApi: true,
   });
   term.open(element);
@@ -74,6 +75,7 @@ watch(nativeKey, async key => {
   // Keep the terminal API available for local diagnostics and accessibility.
   element.terminal = term;
   let ws, timer, cacheTimer, initialTimer, stopped = false, ready = false, initializedSocket = false, attempt = 0, lastSize = '';
+  void accelerateTerminal(term, () => stopped);
   let rendering = false, queuedBytes = 0;
   let cacheState = null, tailBytes = 0, liveSnapshot = false, checkpointPending = false;
   let checkpointTimer, snapshotDeadline;
@@ -108,11 +110,14 @@ watch(nativeKey, async key => {
     if (message.type === 'checkpoint') { const target = ws; clearTimeout(checkpointTimer); checkpointTimer = setTimeout(() => { if (ws === target) { checkpointPending = false; forceReconnect(target); } }, 5000); }
     return true;
   };
+  const screenElement = element.querySelector('.xterm-screen');
+  let wheelCellHeight = 0;
   const measure = () => {
     // Measure the visible host, not the potentially wider remote terminal.
     // client sizes exclude native scrollbars; padding is not usable cell space.
-    const screen = element.querySelector('.xterm-screen')?.getBoundingClientRect();
+    const screen = screenElement.getBoundingClientRect();
     if (!screen?.width || !screen.height) return;
+    wheelCellHeight = screen.height / term.rows;
     const style = getComputedStyle(element);
     const width = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 14;
     const height = element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
@@ -136,36 +141,59 @@ watch(nativeKey, async key => {
   const stopCompletionWatch = watch(() => [currentSession.value?.activity?.completed, currentSession.value?.activity?.contentRevision], refreshRead, { flush: 'post' });
   term.onScroll(() => store.markRead());
   const input = (type, data) => {
+    resetWheel();
     if (send({ type, data })) term.scrollToBottom();
   };
   term.onData(data => input('input', data));
   term.onBinary(data => input('binary', data));
-  let wheelRemainder = 0;
-  term.attachCustomWheelEventHandler(event => {
-    if (event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY) || event.shiftKey) return false;
-    // Full-screen programs with mouse support own their scrolling. Never turn a
-    // wheel gesture into Up/Down keys in programs without mouse support.
-    if (term.buffer.active.type === 'alternate' && term.modes.mouseTrackingMode === 'none') {
-      event.preventDefault();
-      // Codex's fullscreen transcript owns history even when tmux mouse=off
-      // suppresses its capture request. Send wheel reports, never arrow keys.
-      if (currentSession.value?.activity?.detected && confirmedSession()) {
-        const screen = element.querySelector('.xterm-screen').getBoundingClientRect();
-        const cellHeight = screen.height / term.rows, cellWidth = screen.width / term.cols;
-        wheelRemainder += event.deltaY * (event.deltaMode === 1 ? cellHeight : event.deltaMode === 2 ? screen.height : 1);
-        const steps = Math.trunc(wheelRemainder / (cellHeight * 3));
-        wheelRemainder -= steps * cellHeight * 3;
-        if (steps) {
-          const x = Math.max(1, Math.min(term.cols, Math.floor((event.clientX - screen.left) / cellWidth) + 1));
-          const y = Math.max(1, Math.min(term.rows, Math.floor((event.clientY - screen.top) / cellHeight) + 1));
-          send({ type:'input', data:`\x1b[<${steps < 0 ? 64 : 65};${x};${y}M`.repeat(Math.min(30, Math.abs(steps))) });
-        }
-      }
-      return false;
-    }
-    wheelRemainder = 0;
-    return true;
-  });
+  // tmux can suppress the mouse mode request of the fullscreen Codex UI.
+  // It still expects SGR wheel reports. Normal scrollback stays local to xterm.
+  let wheelDirection = 0, wheelDistance = 0, wheelSteps = 0, wheelFrame = 0;
+  let wheelTime = -Infinity, pointerX = 0, pointerY = 0;
+  function resetWheel() {
+    cancelAnimationFrame(wheelFrame);
+    wheelFrame = wheelSteps = wheelDirection = wheelDistance = 0;
+  }
+  function ownsWheel() {
+    return ready && confirmedSession() && canAttach.value &&
+      term.buffer.active.type === 'alternate' && term.modes.mouseTrackingMode === 'none';
+  }
+  function flushWheel() {
+    wheelFrame = 0;
+    const steps = wheelSteps;
+    wheelSteps = 0;
+    if (!steps || !ownsWheel()) return;
+    const box = screenElement.getBoundingClientRect();
+    if (!box.width || !box.height) return;
+    const x = Math.max(1, Math.min(term.cols, Math.floor((pointerX - box.left) * term.cols / box.width) + 1));
+    const y = Math.max(1, Math.min(term.rows, Math.floor((pointerY - box.top) * term.rows / box.height) + 1));
+    send({ type:'input', data:`\x1b[<${wheelDirection < 0 ? 64 : 65};${x};${y}M`.repeat(steps) });
+  }
+  function codexWheel(event) {
+    if (event.ctrlKey || event.shiftKey || !event.deltaY || !wheelCellHeight || !ownsWheel()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const direction = Math.sign(event.deltaY);
+    const start = direction !== wheelDirection || event.timeStamp - wheelTime > 180;
+    if (start) resetWheel();
+    wheelDirection = direction;
+    wheelTime = event.timeStamp;
+    pointerX = event.clientX; pointerY = event.clientY;
+    // Codex moves several rows per report. Preserve OS acceleration and
+    // fractional travel, with one immediate step on first contact or reversal.
+    const scale = event.deltaMode === 1 ? wheelCellHeight : event.deltaMode === 2 ? wheelCellHeight * term.rows : 1;
+    wheelDistance += Math.abs(event.deltaY) * scale / (3 * wheelCellHeight);
+    const whole = Math.max(start ? 1 : 0, Math.floor(wheelDistance));
+    wheelDistance -= whole;
+    wheelSteps = Math.min(Math.max(30, term.rows), wheelSteps + whole);
+    if (start) flushWheel();
+    else if (wheelSteps && !wheelFrame) wheelFrame = requestAnimationFrame(flushWheel);
+  }
+  element.addEventListener('wheel', codexWheel, { capture: true, passive: false });
+  // Preserve application mouse protocols and normal scrollback. In an
+  // unrelated fullscreen program without mouse mode, never inject arrow keys.
+  term.attachCustomWheelEventHandler(event => !event.ctrlKey && !event.shiftKey && !!event.deltaY &&
+    (term.buffer.active.type !== 'alternate' || term.modes.mouseTrackingMode !== 'none'));
   term.attachCustomKeyEventHandler(event => {
     // Let the browser deliver clipboard bytes through paste. Forwarding Ctrl+V
     // would make the remote CLI read its unrelated X11 clipboard instead.
@@ -188,14 +216,19 @@ watch(nativeKey, async key => {
   observer.observe(element);
   // Font loading, zoom and display changes can alter the cell size even when
   // the layout width in CSS pixels stays the same.
-  observer.observe(element.querySelector('.xterm-screen'));
+  observer.observe(screenElement);
   const renderNext = () => {
     if (rendering || stopped || !renderQueue.length) return;
     const { data, socket, bytes, cached = false, updates = [] } = renderQueue.shift();
     queuedBytes -= bytes;
     if (!cached && socket !== ws) { renderNext(); return; }
     rendering = true;
-    const done = () => { rendering = false; renderNext(); refreshRead(); };
+    const done = () => {
+      if (stopped) return;
+      rendering = false;
+      if (renderQueue.length) renderNext();
+      else refreshRead();
+    };
     if (data instanceof ArrayBuffer) { term.write(new Uint8Array(data), done); return; }
     const message = data;
     const buffer = term.buffer.active;
@@ -211,13 +244,7 @@ watch(nativeKey, async key => {
         const finish = () => {
           if (!cached && !stopped && socket === ws && socket.readyState === WebSocket.OPEN) {
             if (distance > 0) {
-              // Snapshot replay temporarily puts the viewport at the bottom.
-              // Restore synchronously: an animated restore would leave a brief
-              // bottom position that could acknowledge an unseen completion.
-              const duration = term.options.smoothScrollDuration;
-              term.options.smoothScrollDuration = 0;
               term.scrollToLine(Math.max(0, term.buffer.active.baseY - distance));
-              term.options.smoothScrollDuration = duration;
             }
             ready = true; attempt = 0; connection.value = '';
             term.options.disableStdin = false;
@@ -311,7 +338,7 @@ watch(nativeKey, async key => {
     socket.onclose = () => {
       if (stopped || socket !== ws) return;
       clearTimeout(initialTimer);
-      ready = false; term.options.disableStdin = true;
+      resetWheel(); ready = false; term.options.disableStdin = true;
       connection.value = '连接已断开，正在重连…';
       timer = setTimeout(connect, Math.min(1000 * 2 ** attempt++, 15000));
     };
@@ -335,7 +362,8 @@ watch(nativeKey, async key => {
     document.removeEventListener('visibilitychange', resumeTerminal);
     stopNetworkWatch();
     stopCompletionWatch();
-    stopped = true; clearTimeout(timer); clearTimeout(initialTimer); observer.disconnect();
+    resetWheel(); stopped = true; clearTimeout(timer); clearTimeout(initialTimer); observer.disconnect();
+    element.removeEventListener('wheel', codexWheel, true);
     element.removeEventListener('paste', paste, true);
     ws?.close(); term.dispose(); delete element.terminal; delete element.imageAddon;
   };
@@ -376,6 +404,7 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 .terminal-images p { color:#fda4af; font-size:13px; margin-top:6px; }
 .terminal-area { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction:column; overflow: hidden; background: #000; position: relative; }
 .terminal-host { width: 100%; flex:1; height:0; min-width: 0; padding: 8px 4px 4px 8px; box-sizing: border-box; overflow: hidden; }
+.terminal-host :deep(.xterm-rows) { contain: layout paint; }
 /* xterm measures 32 copies of each glyph, then spaces the displayed text by
    that measurement. Contextual CJK punctuation spacing makes those copies
    narrower than punctuation in prose. Use full advances in both places. */

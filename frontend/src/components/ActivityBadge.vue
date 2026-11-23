@@ -18,5 +18,5 @@ defineProps({ status: { type: Object, required: true }, compact: Boolean })
 .interrupted { color:#c4b5fd; }.unknown { color:#a8b6ca; }
 .stale { opacity:.65; } .stale .activity-dot { animation:none; }
 @keyframes activity-spin { to { transform:rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .busy .activity-dot { animation:none; } }
+@media (pointer: fine), (prefers-reduced-motion: reduce) { .busy .activity-dot { animation:none; } }
 </style>

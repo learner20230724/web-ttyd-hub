@@ -170,13 +170,22 @@ class CodexActivity {
       // an immutable published array and version together, so HTTP cannot join
       // in-flight messages to the previous completion/version. Message objects
       // and receipt objects are append-only; copying the arrays is sufficient.
-      const messages = (state.messages || []).slice(), inputReceipts = (state.inputReceipts || []).slice();
       const completed = activity.completed || null;
-      const contentRevision = createHash('sha256').update(JSON.stringify([
+      const previous = this.snapshots.get(session.name);
+      // Each rollout state owns its file generation. Both lists append
+      // immutable objects and may evict their oldest entry at 300 items.
+      const changed = !previous || state.published !== previous ||
+        previous.completed !== completed ||
+        previous.messages.at(-1) !== state.messages?.at(-1) ||
+        previous.inputReceipts.at(-1) !== state.inputReceipts?.at(-1);
+      const messages = changed ? (state.messages || []).slice() : previous.messages;
+      const inputReceipts = changed ? (state.inputReceipts || []).slice() : previous.inputReceipts;
+      const contentRevision = changed ? createHash('sha256').update(JSON.stringify([
         generation, state.identity || '', state.path || '', messages, inputReceipts, completed,
-      ])).digest('hex');
+      ])).digest('hex') : previous.contentRevision;
       activity = { ...activity, contentRevision };
-      this.snapshots.set(session.name, { generation, threadId: session.codexThreadId || session.resumeThreadId || null, messages, inputReceipts, completed, contentRevision, activity, hasEarlier: state.sequence > messages.length });
+      state.published = { generation, threadId: session.codexThreadId || session.resumeThreadId || null, messages, inputReceipts, completed, contentRevision, activity, hasEarlier: state.sequence > messages.length };
+      this.snapshots.set(session.name, state.published);
     } else this.snapshots.delete(session.name);
     const changed = JSON.stringify(session.activity) !== JSON.stringify(activity);
     if (activity.available) session.lastKnownActivity = activity;

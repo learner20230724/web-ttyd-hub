@@ -151,7 +151,7 @@ function handleMobileOverlayClick() {
 .working-badge::before { content:''; position:absolute; inset:0; border:2px solid #bbc2cc40; border-top-color:#bbc2cc; border-radius:50%; animation:working-spin 1s linear infinite; }
 .activity-counters.stale { opacity:.65; } .activity-counters.stale .working-badge::before { animation:none; }
 @keyframes working-spin { to { transform:rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .working-badge::before { animation:none; } }
+@media (pointer: fine), (prefers-reduced-motion: reduce) { .working-badge::before { animation:none; } }
 .reading-views { display:flex; border-radius:8px; background:#101c2b; }
 .reading-controls { display:flex; align-items:center; gap:2px; flex-shrink:0; }
 .reading-control { min-width:40px; min-height:44px; padding:4px 6px; border:0; border-radius:7px; background:transparent; color:#a8b6ca; font-size:13px; cursor:pointer; }
