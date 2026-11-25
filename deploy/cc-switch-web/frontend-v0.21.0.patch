@@ -1,0 +1,337 @@
+--- a/src/components/providers/forms/CodexFormFields.tsx
++++ b/src/components/providers/forms/CodexFormFields.tsx
+@@ -23,7 +23,9 @@
+   partnerPromotionKey?: string;
+ 
+   // Base URL
++  shouldShowEndpoint: boolean;
+   shouldShowSpeedTest: boolean;
++  endpointError?: string;
+   codexBaseUrl: string;
+   onBaseUrlChange: (url: string) => void;
+   isEndpointModalOpen: boolean;
+@@ -54,7 +56,9 @@
+   websiteUrl,
+   isPartner,
+   partnerPromotionKey,
++  shouldShowEndpoint,
+   shouldShowSpeedTest,
++  endpointError,
+   codexBaseUrl,
+   onBaseUrlChange,
+   isEndpointModalOpen,
+@@ -98,14 +102,15 @@
+       ) : null}
+ 
+       {/* Codex Base URL 输入框 */}
+-      {shouldShowSpeedTest && (
++      {shouldShowEndpoint && (
+         <EndpointField
+           id="codexBaseUrl"
+           label={t("codexConfig.apiUrlLabel")}
+           value={codexBaseUrl}
+           onChange={onBaseUrlChange}
+           placeholder={t("providerForm.codexApiEndpointPlaceholder")}
+-          hint={t("providerForm.codexApiHint")}
++          error={endpointError}
++          showManageButton={shouldShowSpeedTest}
+           onManageClick={() => onEndpointModalToggle(true)}
+         />
+       )}
+@@ -154,6 +159,9 @@
+               <ModelDropdown
+                 models={fetchedModels}
+                 onSelect={onModelNameChange}
++                triggerLabel={t("providerForm.chooseFetchedModel", {
++                  count: fetchedModels.length,
++                })}
+               />
+             ) : null}
+           </div>
+--- a/src/components/providers/forms/ProviderForm.tsx
++++ b/src/components/providers/forms/ProviderForm.tsx
+@@ -22,6 +22,7 @@
+ import {
+   fetchCodexOauthModels,
+   fetchGithubCopilotModels,
++  fetchModelsForConfig,
+   showFetchModelsError,
+   type FetchedModel,
+ } from "@/lib/api/model-fetch";
+@@ -98,6 +99,15 @@
+ import { toast } from "sonner";
+ import { ConfirmDialog } from "@/components/ConfirmDialog";
+ 
++function isHttpEndpoint(value: string): boolean {
++  try {
++    const url = new URL(value);
++    return url.protocol === "https:" || url.protocol === "http:";
++  } catch {
++    return false;
++  }
++}
++
+ const CLAUDE_DEFAULT_CONFIG = JSON.stringify({ env: {} }, null, 2);
+ const CLAUDE_DESKTOP_DEFAULT_CONFIG = JSON.stringify(
+   {
+@@ -504,6 +514,12 @@
+     [],
+   );
+   const [isFetchingCodexModels, setIsFetchingCodexModels] = useState(false);
++  const [checkCodexEndpoint, setCheckCodexEndpoint] = useState(false);
++  const [directCodexModels, setDirectCodexModels] = useState<{
++    endpoint: string;
++    key: string;
++    models: FetchedModel[];
++  }>();
+   const [managedFetchedModels, setManagedFetchedModels] = useState<
+     FetchedModel[]
+   >([]);
+@@ -958,6 +974,48 @@
+     authMode === "managed";
+   const shouldShowCodexModelField =
+     category !== "official" || managedProviderType === "codex_oauth";
++  const shouldShowCodexEndpoint = category !== "official" && !usesManagedAuth;
++  const codexEndpointError = !codexBaseUrl.trim()
++    ? t("providerForm.endpointRequired")
++    : isHttpEndpoint(codexBaseUrl.trim())
++      ? undefined
++      : t("providerForm.endpointInvalid");
++  const directCodexModelChoices =
++    directCodexModels?.endpoint === codexBaseUrl.trim() &&
++    directCodexModels.key === codexApiKey.trim()
++      ? directCodexModels.models
++      : undefined;
++
++  const showCodexEndpointError = () => {
++    setCheckCodexEndpoint(true);
++    document.getElementById("codexBaseUrl")?.focus();
++  };
++
++  const handleFetchDirectCodexModels = async () => {
++    const endpoint = codexBaseUrl.trim();
++    const key = codexApiKey.trim();
++    if (codexEndpointError) {
++      showCodexEndpointError();
++      return;
++    }
++    if (!key) {
++      toast.error(t("providerForm.fetchModelsNeedApiKey"));
++      document.getElementById("codexApiKey")?.focus();
++      return;
++    }
++
++    setIsFetchingCodexModels(true);
++    setDirectCodexModels(undefined);
++    try {
++      const models = await fetchModelsForConfig(endpoint, key);
++      setDirectCodexModels({ endpoint, key, models });
++      if (models.length === 0) toast.info(t("providerForm.fetchModelsEmpty"));
++    } catch (error) {
++      showFetchModelsError(error, t);
++    } finally {
++      setIsFetchingCodexModels(false);
++    }
++  };
+ 
+   useEffect(() => {
+     setCodexFetchedModels([]);
+@@ -1101,6 +1159,9 @@
+ 
+   const handleSubmit = async (values: ProviderFormData) => {
+     const issues: string[] = [];
++    if (appId === "codex" && shouldShowCodexEndpoint && codexEndpointError) {
++      setCheckCodexEndpoint(true);
++    }
+ 
+     // 空模板变量不会破坏配置结构，但切换后可能无法使用。
+     if (appId === "claude" && templateValueEntries.length > 0) {
+@@ -2143,7 +2204,9 @@
+             websiteUrl={codexWebsiteUrl}
+             isPartner={isCodexPartner}
+             partnerPromotionKey={codexPartnerPromotionKey}
++            shouldShowEndpoint={shouldShowCodexEndpoint}
+             shouldShowSpeedTest={shouldShowSpeedTest}
++            endpointError={checkCodexEndpoint ? codexEndpointError : undefined}
+             codexBaseUrl={codexBaseUrl}
+             onBaseUrlChange={handleCodexBaseUrlChange}
+             isEndpointModalOpen={isCodexEndpointModalOpen}
+@@ -2154,21 +2217,26 @@
+             shouldShowModelField={shouldShowCodexModelField}
+             modelName={codexModelName}
+             onModelNameChange={handleCodexModelNameChange}
+-            fetchedModels={codexFetchedModels}
++            fetchedModels={
++              shouldShowCodexEndpoint
++                ? directCodexModelChoices
++                : codexFetchedModels
++            }
+             isFetchingModels={isFetchingCodexModels}
+             onFetchModels={
+-              managedProviderType === "codex_oauth"
+-                ? handleFetchCodexManagedModels
++              shouldShowCodexEndpoint
++                ? handleFetchDirectCodexModels
++                : managedProviderType === "codex_oauth"
++                  ? handleFetchCodexManagedModels
++                  : undefined
++            }
++            canFetchModels={
++              shouldShowCodexEndpoint || canFetchCodexManagedModels
++            }
++            fetchModelsHint={
++              !shouldShowCodexEndpoint && !canFetchCodexManagedModels
++                ? t("providerForm.fetchModelsManagedOnly")
+                 : undefined
+-            }
+-            canFetchModels={canFetchCodexManagedModels}
+-            fetchModelsHint={
+-              canFetchCodexManagedModels
+-                ? undefined
+-                : t("providerForm.fetchModelsManagedOnly", {
+-                    defaultValue:
+-                      "只有 Codex OAuth 托管账号支持拉取 live models。",
+-                  })
+             }
+             speedTestEndpoints={speedTestEndpoints}
+           />
+--- a/src/components/providers/forms/shared/EndpointField.tsx
++++ b/src/components/providers/forms/shared/EndpointField.tsx
+@@ -10,6 +10,7 @@
+   onChange: (value: string) => void;
+   placeholder: string;
+   hint?: string;
++  error?: string;
+   showManageButton?: boolean;
+   onManageClick?: () => void;
+   manageButtonLabel?: string;
+@@ -22,6 +23,7 @@
+   onChange,
+   placeholder,
+   hint,
++  error,
+   showManageButton = true,
+   onManageClick,
+   manageButtonLabel,
+@@ -54,7 +56,14 @@
+         onChange={(e) => onChange(e.target.value)}
+         placeholder={placeholder}
+         autoComplete="off"
++        aria-invalid={Boolean(error)}
++        aria-describedby={error ? `${id}-error` : undefined}
+       />
++      {error && (
++        <p id={`${id}-error`} role="alert" className="text-sm text-destructive">
++          {error}
++        </p>
++      )}
+       {hint ? (
+         <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg">
+           <p className="text-xs text-amber-600 dark:text-amber-400">{hint}</p>
+--- a/src/components/providers/forms/shared/ModelDropdown.tsx
++++ b/src/components/providers/forms/shared/ModelDropdown.tsx
+@@ -13,9 +13,11 @@
+ export function ModelDropdown({
+   models,
+   onSelect,
++  triggerLabel,
+ }: {
+   models: FetchedModel[];
+   onSelect: (id: string) => void;
++  triggerLabel?: string;
+ }) {
+   const grouped: Record<string, FetchedModel[]> = {};
+   for (const model of models) {
+@@ -28,7 +30,13 @@
+   return (
+     <DropdownMenu>
+       <DropdownMenuTrigger asChild>
+-        <Button variant="outline" size="icon" className="shrink-0">
++        <Button
++          type="button"
++          variant="outline"
++          size={triggerLabel ? "default" : "icon"}
++          className="shrink-0"
++        >
++          {triggerLabel}
+           <ChevronDown className="h-4 w-4" />
+         </Button>
+       </DropdownMenuTrigger>
+--- a/src/i18n/locales/en.json
++++ b/src/i18n/locales/en.json
+@@ -445,6 +445,16 @@
+     "promptCacheKeyHint": "Optional cache key used only when the request has a session id.",
+     "codexFastMode": "FAST mode",
+     "fetchModelsManagedOnly": "Only managed account mode can fetch live models.",
++    "fetchModels": "Fetch models",
++    "fetchModelsNeedConfig": "Enter the API endpoint and API key first.",
++    "fetchModelsNeedApiKey": "Enter an API key first.",
++    "fetchModelsNeedEndpoint": "Enter an API endpoint first.",
++    "fetchModelsAuthFailed": "The provider rejected authentication. Check the API key.",
++    "fetchModelsEndpointNotFound": "The provider did not serve a model list. Check the endpoint or enter the model name manually.",
++    "fetchModelsTimeout": "Fetching models timed out. Try again.",
++    "fetchModelsNotSupported": "The provider returned an unreadable model list. Enter the model name manually.",
++    "fetchModelsFailed": "Could not fetch models. Check whether the server can reach the endpoint, or enter the model name manually.",
++    "chooseFetchedModel": "Choose model ({{count}})",
+     "fetchModelsEmpty": "No models returned.",
+     "fetchModelsSuccess": "Fetched {{count}} models.",
+     "endpointRequired": "An API endpoint is required for non-official providers",
+@@ -536,7 +546,7 @@
+     "editCommonConfig": "Edit Common Config",
+     "editCommonConfigTitle": "Edit Codex Common Config Snippet",
+     "commonConfigHint": "This snippet will be appended to the end of config.toml when 'Write Common Config' is checked",
+-    "apiUrlLabel": "API Request URL"
++    "apiUrlLabel": "API endpoint"
+   },
+   "geminiConfig": {
+     "envFile": "Environment Variables (.env)",
+--- a/src/i18n/locales/zh.json
++++ b/src/i18n/locales/zh.json
+@@ -445,6 +445,16 @@
+     "promptCacheKeyHint": "可选，仅在请求带有 session id 时用于缓存隔离。",
+     "codexFastMode": "FAST mode",
+     "fetchModelsManagedOnly": "只有托管账号模式支持拉取 live models。",
++    "fetchModels": "获取模型",
++    "fetchModelsNeedConfig": "请先填写 API 端点和 API Key。",
++    "fetchModelsNeedApiKey": "请先填写 API Key。",
++    "fetchModelsNeedEndpoint": "请先填写 API 端点。",
++    "fetchModelsAuthFailed": "供应商拒绝了认证，请检查 API Key。",
++    "fetchModelsEndpointNotFound": "供应商未提供模型列表，请检查 API 端点或手动填写模型名称。",
++    "fetchModelsTimeout": "获取模型超时，请稍后重试。",
++    "fetchModelsNotSupported": "供应商返回了无法读取的模型列表，请手动填写模型名称。",
++    "fetchModelsFailed": "获取模型失败，请检查服务器能否访问该 API 端点，或手动填写模型名称。",
++    "chooseFetchedModel": "选择模型（{{count}}）",
+     "fetchModelsEmpty": "未返回模型。",
+     "fetchModelsSuccess": "已拉取 {{count}} 个模型。",
+     "endpointRequired": "非官方供应商请填写 API 端点",
+@@ -536,7 +546,7 @@
+     "editCommonConfig": "编辑通用配置",
+     "editCommonConfigTitle": "编辑 Codex 通用配置片段",
+     "commonConfigHint": "该片段会在勾选'写入通用配置'时追加到 config.toml 末尾",
+-    "apiUrlLabel": "API 请求地址"
++    "apiUrlLabel": "API 端点"
+   },
+   "geminiConfig": {
+     "envFile": "环境变量 (.env)",
+--- a/src/lib/api/model-fetch.ts
++++ b/src/lib/api/model-fetch.ts
+@@ -84,17 +84,12 @@
+     toast.error(t("providerForm.fetchModelsAuthFailed"));
+     return;
+   }
+-  // 所有候选端点均返回 404/405：供应商可能未开放 /models 接口，或 Base URL 有误
+-  if (msg.includes("All candidates failed")) {
+-    toast.error(t("providerForm.fetchModelsEndpointNotFound"));
++  if (msg.includes("timeout") || msg.includes("timed out")) {
++    toast.error(t("providerForm.fetchModelsTimeout"));
+     return;
+   }
+   if (msg.includes("HTTP 404") || msg.includes("HTTP 405")) {
+     toast.error(t("providerForm.fetchModelsEndpointNotFound"));
+-    return;
+-  }
+-  if (msg.includes("timeout") || msg.includes("timed out")) {
+-    toast.error(t("providerForm.fetchModelsTimeout"));
+     return;
+   }
+   if (msg.includes("Failed to parse")) {

@@ -17,6 +17,10 @@
 
 面板服务需监听本机，默认端口为 `17666`，API 前缀为 `/cc-switch/api`。`CC_SWITCH_PORT` 可覆盖端口，`CC_SWITCH_AUTH_FILE` 指向只允许服务账号读取的 HTTP Authorization 文件，默认为 `/etc/cc-switch-web/upstream-auth`。`CC_SWITCH_CODEX_BIN` 默认为 `/usr/local/bin/codex`。面板账号使用自己的配置目录，Hub 在启动时传入供应商参数，现有 Codex 配置和会话数据仍沿用原路径。面板不可用时，新终端会提示并使用 Hub 原有配置。
 
+CC Switch Web v0.21.0 的 Codex 表单支持直接编辑 API 端点。从供应商获取模型后，可按返回的列表选择，也可手动填写模型名。模型列表请求从面板所在服务器发出，供应商须提供兼容的模型列表接口。
+
+在 CC Switch Web 部署主机执行 `bash deploy/cc-switch-web/publish-frontend.sh`，对原版 v0.21.0 源码应用表单补丁并构建、发布页面。脚本默认读取 `/data-main/apps/cc-switch-web/cc-switch-web-0.21.0`，发布目录为 `/data-main/apps/cc-switch-web/frontend`。现有认证路由将 `/cc-switch/frontend/` 映射到该目录，`/cc-switch/api/` 继续代理到本机服务。升级上游版本时先在新源码上复核补丁及接口，再重新发布。
+
 ## Caddy HTTPS 与认证
 
 安装 Caddy，将 `deploy/Caddyfile` 域名改为自己的域名，设置 DNS 并开放证书签发需要的 80/443 流量。交互生成密码散列：
