@@ -126,10 +126,13 @@ class SessionManager extends EventEmitter {
       const shell = this.resolveShell(shellId);
       return shell ? [shell] : [];
     }
-    const codex = (process.env.PATH || '').split(path.delimiter).map(dir => path.resolve(dir, 'codex')).find(file => {
+    const codexCandidates = process.env.HUB_CODEX_EXE
+      ? [process.env.HUB_CODEX_EXE]
+      : (process.env.PATH || '').split(path.delimiter).map(dir => path.resolve(dir, 'codex'));
+    const codex = codexCandidates.find(file => {
       try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile(); } catch { return false; }
     });
-    if (!codex) throw new Error('服务器未安装 Codex，或 codex 不在 Hub 的 PATH 中');
+    if (!codex) throw new Error('Hub 找不到可执行的 Codex，请检查 HUB_CODEX_EXE 或 PATH');
     const shell = this.shells.find(s => s.id === 'bash') || this.shells.find(s => s.id === 'sh');
     if (!shell) throw new Error('Codex 会话需要 Bash 或 sh');
     // Interactive startup loads the same rc files (including proxy exports) as a

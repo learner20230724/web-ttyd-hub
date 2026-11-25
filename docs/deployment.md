@@ -11,6 +11,12 @@
 
 模板使用 `KillMode=process`，只终止 Hub 主进程，由 Hub 清理 ttyd 和终端观察连接，保留 tmux 和其中的任务。已有部署应先检查停止策略，默认 `control-group` 会连同任务一起终止。此策略也意味着停止 Hub 后任务继续占用资源；彻底关闭任务应在归档中永久删除会话。会话 ID、名称和状态持久保存，Hub 重启会自动恢复入口并接续仍运行的 tmux；这不等于机器重启后恢复进程。`npm run deploy:web` 构建、重启并核对原 tmux PID 存活。
 
+### CC Switch Web 供应商选择（Linux，可选）
+
+设置 `HUB_CODEX_EXE` 为可执行的 `deploy/cc-switch-codex.py` 绝对路径，新建或重新启动的 Codex 终端启动时会读取面板中的当前选项。该脚本需要 Python 3.11+。在面板中填入支持 OpenAI Responses API 的供应商地址、API Key 和模型名，保存并启用，再从 Hub 创建 Codex 终端。切回 ID 为 `hub-original-login` 的「Terminal Hub 原有登录」卡片可恢复 Hub 原有的 Codex 登录和默认模型。
+
+面板服务需监听本机，默认端口为 `17666`，API 前缀为 `/cc-switch/api`。`CC_SWITCH_PORT` 可覆盖端口，`CC_SWITCH_AUTH_FILE` 指向只允许服务账号读取的 HTTP Authorization 文件，默认为 `/etc/cc-switch-web/upstream-auth`。`CC_SWITCH_CODEX_BIN` 默认为 `/usr/local/bin/codex`。面板账号使用自己的配置目录，Hub 在启动时传入供应商参数，现有 Codex 配置和会话数据仍沿用原路径。面板不可用时，新终端会提示并使用 Hub 原有配置。
+
 ## Caddy HTTPS 与认证
 
 安装 Caddy，将 `deploy/Caddyfile` 域名改为自己的域名，设置 DNS 并开放证书签发需要的 80/443 流量。交互生成密码散列：
