@@ -15,6 +15,7 @@ function format(bytes) {
 class SessionImages {
   constructor(root = process.env.HUB_IMAGE_DIR || path.join(path.dirname(process.env.HUB_STATE_FILE || path.join(process.env.TMUX_TMPDIR || path.join(__dirname, '../../data'), 'sessions.json')), 'images')) {
     this.root = root;
+    this.pendingWrites = new Map();
   }
   directory(session) { return path.join(this.root, hash(JSON.stringify([session.name, session.createdAt || '']))); }
   filename(session, id) {
@@ -25,13 +26,21 @@ class SessionImages {
     if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > LIMIT) throw new Error('每张图片最大 20 MB');
     const extension = format(bytes), id = `${hash(bytes)}.${extension}`;
     const filename = this.filename(session, id);
-    await fs.mkdir(this.directory(session), { recursive: true, mode: 0o700 });
+    if (this.pendingWrites.has(filename)) return this.pendingWrites.get(filename);
+    const write = this.writeImage(filename, bytes, id);
+    this.pendingWrites.set(filename, write);
+    try { return await write; }
+    finally { this.pendingWrites.delete(filename); }
+  }
+  async writeImage(filename, bytes, id) {
+    const directory = path.dirname(filename);
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     try {
       if ((await fs.stat(filename)).size === bytes.length) return { id };
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     // The content URL is immutable. Publish complete bytes in one rename,
     // including when another reader/upload is importing the same digest.
-    const temp = path.join(this.directory(session), randomUUID() + '.tmp');
+    const temp = path.join(directory, randomUUID() + '.tmp');
     try {
       await fs.writeFile(temp, bytes, { flag:'wx', mode:0o600 });
       await fs.rename(temp, filename);

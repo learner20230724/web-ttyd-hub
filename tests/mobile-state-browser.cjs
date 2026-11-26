@@ -246,11 +246,12 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     await experiment('missing dialogue never takes ownership of the reading toggle', { unavailableAnswers: true }, async f => {
       await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
       assert.equal(await f.page.locator('.mobile-output').count(), 0, 'Answer mode cannot masquerade as full output');
-      const toggle = f.page.locator('.reading-control[aria-pressed]');
+      const activeView = f.page.locator('.reading-control[aria-pressed="true"]');
+      const otherView = f.page.locator('.reading-control[aria-pressed="false"]');
       for (const full of [true, false, true, false]) {
-        await toggle.tap();
-        assert.equal(await toggle.getAttribute('aria-pressed'), String(full));
-        assert.equal(await toggle.textContent(), full ? '全文' : '回答');
+        await otherView.tap();
+        assert.equal(await activeView.count(), 1);
+        assert.equal(await activeView.textContent(), full ? '全文' : '回答');
         assert.equal(await f.page.evaluate(() => JSON.parse(localStorage.getItem('web-ttyd-hub.mobile-reading.v1')).showExecution), full);
         if (full) await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
         else {
@@ -260,33 +261,30 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       }
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
-      assert.equal(await toggle.textContent(), '回答');
+      assert.equal(await activeView.textContent(), '回答');
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
-      const sourceGap = f.page.waitForResponse(async response => response.url().endsWith('/api/sessions/reader/mobile') &&
-        response.ok() && (await response.json()).text?.includes('完整终端 reader 版本 1'));
       f.answersAvailable(false); f.nextContent();
-      await sourceGap;
-      assert.equal(await f.page.getByText('精简回答 reader 版本 0', { exact: true }).count(), 1, 'A source gap preserves a final reply already fetched');
-      assert.equal(await f.page.locator('.answer-placeholder').count(), 0, 'A readable retained reply is not a failed or empty answer');
+      await f.page.locator('.answer-placeholder').waitFor();
+      assert.equal(await f.page.getByText('精简回答 reader 版本 0', { exact: true }).count(), 0, 'An unavailable source cannot confirm the previous answer');
       assert.equal(await f.page.locator('.mobile-output').count(), 0);
-      assert.equal(await toggle.textContent(), '回答');
-      await toggle.tap();
+      assert.equal(await activeView.textContent(), '回答');
+      await otherView.tap();
       await f.page.getByText('完整终端 reader 版本 1', { exact: true }).waitFor({ timeout: 1000 });
-      await toggle.tap();
-      await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
+      await otherView.tap();
+      await f.page.locator('.answer-placeholder').waitFor({ timeout: 1000 });
       f.answersAvailable(true);
       await f.page.getByText('精简回答 reader 版本 1', { exact: true }).waitFor();
-      assert.equal(await toggle.textContent(), '回答');
+      assert.equal(await activeView.textContent(), '回答');
       assert.equal(await f.page.evaluate(() => JSON.parse(localStorage.getItem('web-ttyd-hub.mobile-reading.v1')).showExecution), false);
       assert.equal(f.inputs, 0);
     });
     await experiment('a bound empty thread has a genuine empty answer state', { emptyAnswers: true }, async f => {
       await f.page.getByText('此会话还没有回答。', { exact: true }).waitFor({ timeout: 1500 });
       assert.equal(await f.page.locator('.mobile-output').count(), 0);
-      await f.page.locator('.answer-placeholder').getByRole('button', { name: '查看全文', exact: true }).tap();
+      await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 1000 });
       assert.equal(f.inputs, 0);
     });
@@ -301,10 +299,9 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
       unavailableAnswers: true,
       cachedAnswer: legacy ? { text: '旧版误存的终端全文' } : { messages: [{ id: 'saved', role: 'assistant', text: '之前已读过的回答' }], completed: 'previous-turn' },
     }, async f => {
-      if (legacy) await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
-      else await f.page.getByText('之前已读过的回答', { exact: true }).waitFor({ timeout: 2000 });
+      await f.page.locator('.answer-placeholder').waitFor({ timeout: 2000 });
       await f.page.waitForTimeout(700);
-      if (!legacy) assert.equal(await f.page.locator('.answer-placeholder').count(), 0, 'A delayed verified disk answer stays readable during a source gap');
+      assert.equal(await f.page.getByText('之前已读过的回答', { exact: true }).count(), 0, 'A delayed disk reply cannot replace the current unavailable source');
       assert.equal(await f.page.locator('.mobile-output').count(), 0);
       assert.equal(await f.page.getByText('旧版误存的终端全文', { exact: true }).count(), 0);
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
@@ -366,10 +363,11 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
     });
     await experiment('cached views switch immediately with network responses held', {}, async f => {
       await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor();
-      const toggle = f.page.locator('.reading-control[aria-pressed]');
-      assert.equal(await toggle.count(), 1, 'Keep the original single toggle');
-      assert.equal(await toggle.textContent(), '回答');
-      assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+      const activeView = f.page.locator('.reading-control[aria-pressed="true"]');
+      const otherView = f.page.locator('.reading-control[aria-pressed="false"]');
+      assert.equal(await activeView.count(), 1, 'Exactly one view is selected');
+      assert.equal(await activeView.textContent(), '回答');
+      assert.equal(await otherView.textContent(), '全文');
       await f.page.getByRole('button', { name: '显示执行过程', exact: true }).tap();
       await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor();
       await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
@@ -380,8 +378,8 @@ async function fixture(browser, { blockedStorage = false, unavailableAnswers = f
         await f.page.getByText('完整终端 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
         await f.page.getByRole('button', { name: '隐藏执行过程', exact: true }).tap();
         await f.page.getByText('精简回答 reader 版本 0', { exact: true }).waitFor({ timeout: 500 });
-        assert.equal(await toggle.textContent(), '回答');
-        assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+        assert.equal(await activeView.textContent(), '回答');
+        assert.equal(await otherView.textContent(), '全文');
       }
       assert.equal(await f.page.getByLabel('消息输入').inputValue(), '未发送的草稿');
       assert.equal(f.inputs, 0);

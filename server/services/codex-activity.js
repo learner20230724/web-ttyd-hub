@@ -1,5 +1,6 @@
 // Observe only a rollout bound to this pane, including shared-daemon Codex.
 // Never guess completion from silence; no hooks/config changes or transcript copies.
+const { displayPrompt } = require('./session-files');
 const fs = require('node:fs/promises');
 const { createReadStream } = require('node:fs');
 const { createHash } = require('node:crypto');
@@ -113,6 +114,7 @@ function applyEvent(state, event) {
       // replace those transport labels; receipt text stays what the user typed.
       text = text.replace(/<image name=\[Image #\d+\] path="[^"\r\n]*">\s*<\/image>\s*/g, '').replace(/^(?:\[Image #\d+\]\s*)+/, '');
     }
+    if (p.role === 'user') text = displayPrompt(text);
     if ((text || p.hubImages?.length) && !text.startsWith('<environment_context>')) {
       message(state, { role: p.role, text, timestamp: at, ...(p.hubImages?.length ? { images: p.hubImages } : {}), ...(p.phase ? { phase: p.phase } : {}) });
     }

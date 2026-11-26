@@ -15,6 +15,7 @@ import { ansiToRuns } from '../utils/ansi.mjs'
 import { useSessionStore } from '../stores/sessions'
 import ActivityBadge from './ActivityBadge.vue'
 import CodexQuestions from './CodexQuestions.vue'
+import FilePicker from './FilePicker.vue'
 import ImageAttachments from './ImageAttachments.vue'
 import MessageImages from './MessageImages.vue'
 const emit = defineEmits(['show-execution'])
@@ -59,9 +60,50 @@ const answerPlaceholder = computed(() => !answerUnavailable.value ? '此会话�
 const questionPending = ref(false), questionSupport = ref(null)
 const pane = ref(null), composerInput = ref(null), follow = ref(true)
 const imagePicker = ref(null), imageUploading = ref(false), imageDrafts = ref({})
+const fileDrafts = ref({})
+const uploadingName = ref('')
+let uploadRequest = null
 const attachmentKey = computed(() => draftKey(session.value))
 const attachments = computed({ get: () => imageDrafts.value[attachmentKey.value] || [], set: value => { imageDrafts.value[attachmentKey.value] = value } })
-watch(attachmentKey, () => { imageUploading.value = false })
+const files = computed(() => fileDrafts.value[attachmentKey.value] || [])
+watch(attachmentKey, () => {
+  imageUploading.value = false
+  uploadRequest?.abort()
+  uploadRequest = null
+  uploadingName.value = ''
+}, { flush: 'sync' })
+async function uploadFiles(selected) {
+  const current = session.value, identity = attachmentKey.value
+  if (!current || !canAttach.value || current.status !== 'running' || store.cachedSnapshot || sending.value || uploadRequest) return
+  const name = current.name
+  if (files.value.length + selected.length > 8) { inputErrors.value[name] = '一次最多添加 8 个文件'; return }
+  if (selected.some(file => file.size > 50 * 1024 * 1024)) { inputErrors.value[name] = '单个文件最大 50 MB'; return }
+  const request = new AbortController()
+  uploadRequest = request
+  delete inputErrors.value[name]
+  try {
+    for (const file of selected) {
+      uploadingName.value = file.name
+      const timer = setTimeout(() => request.abort(), 300000)
+      try {
+        const query = new URLSearchParams({ name: file.name })
+        const response = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/files?${query}`), {
+          method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-TTYD-Generation': current.createdAt || '',
+            'X-TTYD-Thread': current.codexThreadId || current.resumeThreadId || '' }, body: file, signal: request.signal
+        }), request.signal)
+        const result = await untilAbort(response.json(), request.signal)
+        if (!response.ok) throw new Error(result.error || '文件上传失败')
+        if (uploadRequest !== request || attachmentKey.value !== identity) return
+        fileDrafts.value[identity] = [...files.value, result]
+      } finally { clearTimeout(timer) }
+    }
+  } catch (error) {
+    if (!disposed && uploadRequest === request) inputErrors.value[name] = request.signal.aborted ? '文件上传超时，请重选文件' : error.message
+  } finally {
+    if (uploadRequest === request) { uploadingName.value = ''; uploadRequest = null }
+  }
+}
+defineExpose({ uploadFiles })
 const canAttach = computed(() => session.value?.shell === 'codex' || session.value?.activity?.detected)
 const menuInput = ref(null)
 function preparePasteMenu(event) {
@@ -99,15 +141,17 @@ let activeDraftKey = ''
 function saveDraft() {
   if (!activeDraftKey) return
   const images = imageDrafts.value[activeDraftKey] || []
-  if (draft.value || images.length) drafts.set(activeDraftKey, { text: draft.value, images })
+  const files = fileDrafts.value[activeDraftKey] || []
+  if (draft.value || images.length || files.length) drafts.set(activeDraftKey, { text: draft.value, images, files })
   else drafts.delete(activeDraftKey)
   persistDrafts(drafts)
 }
-watch([draft, imageDrafts], saveDraft, { deep: true, flush: 'sync' })
+watch([draft, imageDrafts, fileDrafts], saveDraft, { deep: true, flush: 'sync' })
 watch(attachmentKey, key => {
   saveDraft(); activeDraftKey = ''
   draft.value = drafts.get(key)?.text || ''
   imageDrafts.value[key] = drafts.get(key)?.images || []
+  fileDrafts.value[key] = drafts.get(key)?.files || []
   activeDraftKey = key; more.value = false
 }, { immediate: true, flush: 'sync' })
 window.addEventListener('pagehide', saveDraft)
@@ -385,20 +429,22 @@ function composerEnter(event) {
   void send()
 }
 async function send(key = 'Enter', withText = true) {
-  if (sending.value || imageUploading.value || !session.value || store.cachedSnapshot) return
+  if (sending.value || imageUploading.value || uploadRequest || !session.value || store.cachedSnapshot) return
   // Vue postpones v-model updates during IME composition; send the visible text.
   const name = session.value.name, text = withText ? (composerInput.value?.value ?? draft.value) : ''
   const generation = session.value.createdAt || '', identity = draftKey(session.value), threadId = session.value.codexThreadId || session.value.resumeThreadId || null
   const sentImages = withText ? attachments.value.slice() : [], imageKey = attachmentKey.value
+  const sentFiles = withText ? files.value.slice() : []
+  const receiptText = [text, ...sentFiles.map(file => '附件：' + file.name)].filter(Boolean).join('\n')
   const uninserted = sentImages.filter(image => !image.inTerminal)
   const sameSession = () => inputGenerations.get(name) === identity
-  const kind = inputKind(text, session.value)
+  const kind = sentFiles.length ? 'prompt' : inputKind(text, session.value)
   if (withText) draft.value = text
   sending.value = true; error.value = ''
   quickRefreshUntil = Date.now() + 10000
   delete inputNotices.value[name]
   delete inputErrors.value[name]
-  const pending = (text || sentImages.length) && key === 'Enter' && kind === 'prompt' ? { id: `${Date.now()}-${Math.random()}`, text, images: sentImages, codex: true, threadId, sentAt: Date.now(), status: 'sending', before: transcriptIds.get(name) || [] } : null
+  const pending = (receiptText || sentImages.length) && key === 'Enter' && kind === 'prompt' ? { id: `${Date.now()}-${Math.random()}`, text: receiptText, images: sentImages, codex: true, threadId, sentAt: Date.now(), status: 'sending', before: transcriptIds.get(name) || [] } : null
   if (pending) {
     pendingBySession.value[name] = [...(pendingBySession.value[name] || []), pending]
     await bottom()
@@ -410,14 +456,15 @@ async function send(key = 'Enter', withText = true) {
   let timedOut = false
   const confirmationTimeout = setTimeout(() => { timedOut = true; request.abort() }, 10000)
   try {
-    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TTYD-Generation': generation, 'X-TTYD-Thread': threadId || '' }, body: JSON.stringify({ text, key, ...(uninserted.length ? { images: uninserted.map(image => image.id) } : {}) }), signal: request.signal }), request.signal)
+    const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(name)}/input`), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TTYD-Generation': generation, 'X-TTYD-Thread': threadId || '' }, body: JSON.stringify({ text, key, ...(sentFiles.length ? { files: sentFiles.map(file => file.id) } : {}), ...(uninserted.length ? { images: uninserted.map(image => image.id) } : {}) }), signal: request.signal }), request.signal)
     const data = await untilAbort(res.json(), request.signal); if (!res.ok) throw new Error(data.error)
     if (disposed || !sameSession()) return
     if (pending) {
       const item = pendingBySession.value[name]?.find(item => item.id === pending.id)
       if (item) { item.status = 'delivered'; item.receivedAfter = data.receivedAfter; item.threadId = data.threadId || threadId }
-    } else if (text) inputNotices.value[name] = { text: key ? '已发送到终端' : '已输入终端，尚未按回车', expiresAt: Date.now() + 4000 }
+    } else if (receiptText) inputNotices.value[name] = { text: key ? '已发送到终端' : '已输入终端，尚未按回车', expiresAt: Date.now() + 4000 }
     if (withText) {
+      delete fileDrafts.value[imageKey]
       delete imageDrafts.value[imageKey]
       drafts.delete(imageKey); persistDrafts(drafts)
       if (store.current === name && draft.value === text) {
@@ -448,6 +495,7 @@ async function send(key = 'Enter', withText = true) {
 }
 onBeforeUnmount(() => {
   window.removeEventListener('paste', pasteIntoComposer)
+  uploadRequest?.abort()
   savePosition()
   saveDraft(); window.removeEventListener('pagehide', saveDraft)
   disposed = true; epoch++; clearTimeout(timer); clearInterval(elapsedTimer); releaseReadGuard()
@@ -470,6 +518,7 @@ onBeforeUnmount(() => {
           <div class="mobile-session-title" :title="session.displayName || session.name">{{ session.displayName || session.name }}</div>
           <ActivityBadge  class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
           <span v-if="elapsed" class="elapsed">已运行 {{ elapsed }}</span>
+          <FilePicker v-if="canAttach && session.status === 'running'" :key="'files' + attachmentKey" compact :session="session" :busy="Boolean(uploadingName)" :disabled="sending || store.cachedSnapshot" @select="uploadFiles" />
           <ImageAttachments v-if="canAttach && session.status === 'running'" compact insert-into-terminal preview-target=".mobile-image-drafts" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
         </div>
         <!-- Unavailable status stays in the title row; it needs no separate action or reading space. -->
@@ -520,11 +569,15 @@ onBeforeUnmount(() => {
       <CodexQuestions v-if="!store.cachedSnapshot && session.status === 'running' && session.activity?.detected" :session-name="session.name" @handled="refresh()" @pending="questionPending = $event" @support="questionSupport = $event" />
       <form v-if="session.status === 'running'" class="composer" @submit.prevent="send()">
         <div class="mobile-image-drafts"></div>
+        <div v-if="files.length || uploadingName" class="file-drafts">
+          <span v-for="file in files" :key="file.id" class="draft-file"><span :title="file.name">{{ file.name }}</span><button type="button" :aria-label="'移除文件 ' + file.name" :disabled="sending" @click="fileDrafts[attachmentKey] = files.filter(item => item.id !== file.id)">×</button></span>
+          <span v-if="uploadingName" class="file-progress" role="status">正在上传 {{ uploadingName }}</span>
+        </div>
         <p v-if="inputNotice" class="input-notice" role="status">{{ inputNotice }}</p>
-        <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || !draft" @click="send(null)">仅输入</button></div>
+        <div v-if="more" class="keys"><button v-for="key in ['Escape', 'Tab', 'C-c']" :key="key" type="button" :disabled="sending || store.cachedSnapshot" @click="send(key, false)">{{ {Escape:'Esc', Up:'↑', Down:'↓', Left:'←', Right:'→', Tab:'Tab', 'C-c':'中断'}[key] }}</button><button type="button" :disabled="sending || store.cachedSnapshot || uploadingName || (!draft && !files.length)" @click="send(null)">仅输入</button></div>
         <div class="compose-row"><button v-if="!desktop" type="button" class="extra" :aria-expanded="more" aria-label="终端按键" @click="more = !more">＋</button>
           <textarea ref="composerInput" v-model="draft" @keydown.enter="composerEnter" aria-label="消息输入" :placeholder="status.state === 'waiting' ? '输入回答或补充说明…' : session.activity?.busy ? '补充要求，或输入下一条消息…' : '输入消息，继续工作…'" rows="2" enterkeyhint="enter"></textarea>
-          <button class="send" :disabled="sending || imageUploading || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft || attachments.some(image => !image.inTerminal) ? '发送' : '回车' }}</button></div>
+          <button class="send" :disabled="sending || imageUploading || Boolean(uploadingName) || store.cachedSnapshot" type="submit">{{ sending ? '…' : draft || files.length || attachments.some(image => !image.inTerminal) ? '发送' : '回车' }}</button></div>
       </form>
     </template>
     <div v-else class="mobile-empty">从左上角选择会话，继续你的工作。</div>
@@ -550,7 +603,13 @@ onBeforeUnmount(() => {
 .mobile-session-header { padding:5px 12px; border-bottom:1px solid #263143; background:#111a28; flex-shrink:0; }
 .mobile-title-row { display:flex; align-items:center; gap:8px; min-width:0; }
 .mobile-session-title { min-width:0; font-size:15px; font-weight:600; line-height:1.5; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.mobile-title-row > :deep(.image-attachments) { margin:0 0 0 auto; flex-shrink:0; }
+.mobile-title-row > .file-picker { margin-left:auto; }
+.file-drafts { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; padding-bottom:6px; max-height:24vh; overflow:auto; }
+.draft-file { display:inline-flex; align-items:center; gap:4px; max-width:100%; min-width:0; padding-left:8px; background:#25364b; border-radius:6px; font-size:13px; }
+.draft-file > span, .file-progress { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.draft-file button { flex:none; min-width:32px; min-height:32px; padding:0; background:transparent; }
+.file-progress { color:#a8bdd3; font-size:13px; }
+.mobile-title-row > :deep(.image-attachments) { margin:0; flex-shrink:0; }
 .mobile-image-drafts:empty { display:none; }
 .inline-status { flex-shrink:0; white-space:nowrap; }
 .inline-status.busy :deep(.activity-dot) { display:none; }

@@ -38,6 +38,8 @@
 
 从 [IP 直链](http://42.192.115.30:8182/downloads/ttyd-hub/ttyd-hub-latest.apk) 下载 APK（[Releases 备用](https://github.com/learner20230724/web-ttyd-hub/releases)），安装后填写服务器地址即可使用。支持 Android 8.0+，适用于手机远程操作场景：滑动看彩色历史、长按复制、一键粘贴、调出键盘和会话管理。Android 1.5 的「连接选项」会列出已保存的多台服务器，分别记住登录，点一下切换，无需先退出；切换不会中断服务器任务。M153 豆包手机尚未完成实机验证；具体说明、构建和测试范围见 [Android 文档](android/README.md)。
 
+在 Codex 会话标题点「上传文件」，选择表格、文档或压缩包，补充说明后发送。手机应用请覆盖安装 1.7.0 或更新版本。[文件大小与存储位置](docs/images.md#上传普通文件)。
+
 ## 新建 Codex 或普通终端
 
 Windows 和 Linux 均支持先选项目，再选择 **新建空白会话** 或 **恢复历史会话**。历史列表支持标题/ID 搜索、分页和最近对话预览；恢复时在对应项目中运行 `codex resume <会话ID> --yolo`，已有 Hub 终端会优先复用。Linux 纯 CLI 安装也能从本机 Codex 历史中发现项目，不需要桌面版。详见 [项目与历史会话选择](docs/codex-history.md)。

@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
     private boolean activityVisible;
     private int pickerRequest = 42;
     private int interruptedPicker = -1;
-    private ValueCallback<Uri[]> imageCallback;
+    private ValueCallback<Uri[]> fileCallback;
     private LoginVault loginVault;
     private SavedServers savedServers;
     private HttpAuthSession httpAuth;
@@ -115,7 +115,7 @@ public class MainActivity extends Activity {
     }
     private void destroyWeb() {
         destroyBrowserLink();
-        finishImagePicker(null);
+        finishFilePicker(null);
         if (loginDialog != null) { loginDialog.dismiss(); loginDialog = null; }
         httpAuth.cancel();
         if (web != null) {
@@ -224,18 +224,14 @@ public class MainActivity extends Activity {
             }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (view != web || !canControl()) return false;
-                finishImagePicker(null);
-                imageCallback = callback;
-                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                intent.addCategory(Intent.CATEGORY_OPENABLE);
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
-                intent.setType("image/*");
-                intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/png", "image/jpeg", "image/webp", "image/gif"});
+                finishFilePicker(null);
+                fileCallback = callback;
+                Intent intent = filePickerIntent(params.getAcceptTypes(), params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
                 pickerRequest = pickerRequest >= 65535 ? 42 : pickerRequest + 1;
                 try { startActivityForResult(intent, pickerRequest); }
                 catch (android.content.ActivityNotFoundException error) {
-                    finishImagePicker(null);
-                    Toast.makeText(MainActivity.this, "没有可用的系统选图器", Toast.LENGTH_SHORT).show();
+                    finishFilePicker(null);
+                    Toast.makeText(MainActivity.this, "没有可用的系统文件选择器", Toast.LENGTH_SHORT).show();
                 }
                 return true;
             }
@@ -392,38 +388,61 @@ public class MainActivity extends Activity {
     }
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
-        state.putInt("pendingImagePicker", imageCallback == null ? interruptedPicker : pickerRequest);
+        state.putInt("pendingImagePicker", fileCallback == null ? interruptedPicker : pickerRequest);
     }
-    private void finishImagePicker(Uri[] images) {
-        ValueCallback<Uri[]> callback = imageCallback;
-        imageCallback = null;
-        if (callback != null) callback.onReceiveValue(images);
+    static Intent filePickerIntent(String[] accepted, boolean multiple) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+        Set<String> types = new LinkedHashSet<>();
+        if (accepted != null) for (String group : accepted) {
+            if (group == null) continue;
+            for (String value : group.split(",")) {
+                String type = value.trim();
+                if (type.contains("/")) types.add(type);
+            }
+        }
+        String base = "*/*";
+        if (!types.isEmpty() && !types.contains("*/*")) {
+            if (types.size() == 1) base = types.iterator().next();
+            else {
+                if (types.stream().allMatch(type -> type.startsWith("image/"))) base = "image/*";
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[0]));
+            }
+        }
+        intent.setType(base);
+        return intent;
+    }
+    private void finishFilePicker(Uri[] files) {
+        ValueCallback<Uri[]> callback = fileCallback;
+        fileCallback = null;
+        if (callback != null) callback.onReceiveValue(files);
     }
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == interruptedPicker) {
             interruptedPicker = -1;
-            if (resultCode == RESULT_OK) Toast.makeText(this, "页面已重新打开，请再选一次图片", Toast.LENGTH_SHORT).show();
+            if (resultCode == RESULT_OK) Toast.makeText(this, "页面已重新打开，请重新选择附件", Toast.LENGTH_SHORT).show();
             return;
         }
-        if (requestCode != pickerRequest || imageCallback == null) return;
-        if (resultCode != RESULT_OK || !canControl()) { finishImagePicker(null); return; }
-        Uri[] images = selectedImages(data);
-        if (images == null) Toast.makeText(this, "未能读取所选图片，请重新选择", Toast.LENGTH_SHORT).show();
-        finishImagePicker(images);
+        if (requestCode != pickerRequest || fileCallback == null) return;
+        if (resultCode != RESULT_OK || !canControl()) { finishFilePicker(null); return; }
+        Uri[] files = selectedFiles(data);
+        if (files == null) Toast.makeText(this, "未能读取所选附件，请重新选择", Toast.LENGTH_SHORT).show();
+        finishFilePicker(files);
     }
-    static Uri[] selectedImages(Intent data) {
+    static Uri[] selectedFiles(Intent data) {
         Set<Uri> selected = new LinkedHashSet<>();
         if (data != null) {
-            addSelectedImage(selected, data.getData());
+            addSelectedFile(selected, data.getData());
             ClipData clip = data.getClipData();
             if (clip != null) for (int i = 0; i < clip.getItemCount(); i++) {
-                addSelectedImage(selected, clip.getItemAt(i).getUri());
+                addSelectedFile(selected, clip.getItemAt(i).getUri());
             }
         }
         return selected.isEmpty() ? null : selected.toArray(new Uri[0]);
     }
-    private static void addSelectedImage(Set<Uri> selected, Uri uri) {
+    private static void addSelectedFile(Set<Uri> selected, Uri uri) {
         if (uri != null && "content".equals(uri.getScheme()) && uri.getAuthority() != null) selected.add(uri);
     }
     private void notifyPageVisibility() {

@@ -1,5 +1,6 @@
 const express = require('express');
 const { matchesThread, currentThread } = require('../services/session-identity');
+const files = require('../services/session-files');
 const contentResponse = require('../services/content-response');
 const { getProjects, resolveProject } = require('../services/codex-projects');
 const { history, pathKey } = require('../services/codex-history');
@@ -21,6 +22,23 @@ module.exports = function (sessionManager) {
     contentScope(req, 'mutation');
   };
   const images = sessionManager.activity?.images || new (require('../services/session-images').SessionImages)();
+  router.post('/:name/files', async (req, res) => {
+    try {
+      requireIdentity(req);
+      if (req.headers['content-type'] !== 'application/octet-stream') throw new Error('文件上传格式无效');
+      files.checkSize(Number(req.headers['content-length']));
+      const session = sessionManager.getSession(req.params.name);
+      const scope = contentScope(req, 'files');
+      if (req.headers['x-ttyd-thread'] !== (currentThread(session) || '')) throw replacedSession();
+      const saved = await files.save(session, req.query.name, req.iterator({ destroyOnReturn: false }), () => {
+        if (session !== sessionManager.getSession(req.params.name) || scope !== contentScope(req, 'files')) throw replacedSession();
+      });
+      res.status(201).json(saved);
+    } catch (err) {
+      req.resume();
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  });
   router.post('/:name/images', express.raw({ type: ['image/*', 'application/octet-stream'], limit: '20mb' }), async (req, res) => {
     try {
       contentScope(req, 'images');
@@ -183,9 +201,16 @@ module.exports = function (sessionManager) {
       const scope = contentScope(req, 'input');
       const session = sessionManager.getSession(req.params.name);
       const paths = await images.resolveUploads(session, req.body.images);
+      let text = req.body.text;
+      if (req.body.files !== undefined) {
+        requireIdentity(req);
+        if (req.headers['x-ttyd-thread'] !== (currentThread(session) || '')) throw replacedSession();
+        if (req.body.key != null && req.body.key !== 'Enter') throw new Error('附件需要随消息发送');
+        text = files.prompt(text, await files.resolve(session, req.body.files));
+      }
       if (session !== sessionManager.getSession(req.params.name) || scope !== contentScope(req, 'input')) throw replacedSession();
       const receivedAfter = new Date().toISOString();
-      const result = await sessionManager.input(req.params.name, { text: req.body.text, key: req.body.key, images: paths });
+      const result = await sessionManager.input(req.params.name, { text, key: req.body.key, images: paths });
       res.json({ ...result, receivedAfter, threadId: currentThread(session) });
     }
     catch (err) { res.status(err.status || 400).json({ error: err.message }); }

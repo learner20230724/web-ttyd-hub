@@ -5,9 +5,9 @@ import android.content.Intent;
 import android.net.Uri;
 import java.util.Arrays;
 
-public class SelectedImagesTest {
+public class SelectedFilesTest {
     private static void check(Intent intent, Uri... expected) {
-        Uri[] actual = MainActivity.selectedImages(intent);
+        Uri[] actual = MainActivity.selectedFiles(intent);
         if (!Arrays.equals(actual, expected.length == 0 ? null : expected)) {
             throw new AssertionError(Arrays.toString(actual));
         }
@@ -15,6 +15,13 @@ public class SelectedImagesTest {
 
     public static void main(String[] args) {
         Uri first = Uri.parse("content://photos/1"), second = Uri.parse("content://photos/2");
+        Intent files = MainActivity.filePickerIntent(new String[]{""}, true);
+        if (!"*/*".equals(files.getType()) || files.hasExtra(Intent.EXTRA_MIME_TYPES) ||
+            !files.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)) throw new AssertionError("All files");
+        Intent images = MainActivity.filePickerIntent(new String[]{"image/png,image/jpeg", "image/webp"}, false);
+        if (!"image/*".equals(images.getType()) || images.getStringArrayExtra(Intent.EXTRA_MIME_TYPES).length != 3 ||
+            images.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)) throw new AssertionError("Image filters");
+        check(new Intent().setData(Uri.parse("content://documents/test.xlsx")), Uri.parse("content://documents/test.xlsx"));
         Intent result = new Intent();
         check(null);
         check(result);

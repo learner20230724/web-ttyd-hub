@@ -3,6 +3,7 @@ import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue';
 import { accelerateTerminal } from '../utils/terminal-renderer.mjs';
 import { Terminal } from '@xterm/xterm';
 import { ImageAddon } from '@xterm/addon-image';
+import FilePicker from './FilePicker.vue';
 import ImageAttachments from './ImageAttachments.vue';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../stores/sessions';
@@ -15,7 +16,7 @@ import { loadContent, peekContent, saveContent } from '../utils/session-content.
 import { terminalCache, validSnapshot, applyTerminalDelta, encodeTerminalBytes, decodeTerminalBytes } from '../utils/terminal-cache.mjs';
 
 const store = useSessionStore();
-const emit = defineEmits(['create']);
+const emit = defineEmits(['create', 'compose-files']);
 const currentSession = computed(() => store.sessions.find(s => s.name === store.current));
 const runningName = computed(() => currentSession.value?.status === 'running' ? currentSession.value.name : null);
 // Windows workers own their ConPTY renderer; the native stream below uses tmux.
@@ -394,6 +395,7 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
 <template>
   <div class="terminal-area">
     <div v-if="runningName && canAttach" class="terminal-images">
+      <FilePicker :key="'files' + draftKey(currentSession)" :session="currentSession" :disabled="store.cachedSnapshot || attaching || imageUploading" @select="emit('compose-files', $event)" />
       <ImageAttachments ref="imagePicker" :key="draftKey(currentSession)" v-model="attachments" :session="currentSession" :attach-uploaded="attachImages" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
       <button v-if="attachments.length && imageError" type="button" :disabled="imageUploading || attaching" @click="attachImages">{{ attaching ? '加入中…' : '加入终端输入区' }}</button>
       <p v-if="imageError" role="alert">{{ imageError }}</p>

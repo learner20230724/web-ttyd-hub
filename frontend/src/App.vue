@@ -1,5 +1,6 @@
 <script setup>
-import { computed, ref, provide, watch, defineAsyncComponent } from "vue";
+import { computed, ref, provide, nextTick, watch, defineAsyncComponent } from "vue";
+import { draftKey } from './utils/session-drafts.mjs';
 import Sidebar from "./components/Sidebar.vue";
 import MobileTerminal from "./components/MobileTerminal.vue";
 const TerminalView = defineAsyncComponent(() => import("./components/TerminalView.vue"));
@@ -31,6 +32,13 @@ function selectView(next) {
   if (isMobile) mobileFull.value = next === 'full';
   else desktopChoice.value = next;
   if (isMobile) readingRefresh.value++;
+}
+const reader = ref(null);
+async function composeFiles(files) {
+  const identity = draftKey(selected.value);
+  selectView('answer');
+  await nextTick();
+  if (draftKey(selected.value) === identity) reader.value?.uploadFiles(files);
 }
 const readingSize = ref(Number.isFinite(savedReading.fontSize) ? Math.max(4, Math.min(24, savedReading.fontSize)) : 16);
 watch([mobileFull, readingSize], () => {
@@ -144,9 +152,9 @@ function handleMobileOverlayClick() {
         @select="closeOverlayAfterSelection"
       />
 
-      <MobileTerminal v-if="useReader" :positions="readingPositions" :desktop="!isMobile" :show-execution="view === 'full'" :refresh-trigger="readingRefresh" :font-size="readingSize" :navigation-open="isMobile && navigationOpen" :reading-visible="!isMobile || sidebarCollapsed"
+      <MobileTerminal v-if="useReader" ref="reader" :positions="readingPositions" :desktop="!isMobile" :show-execution="view === 'full'" :refresh-trigger="readingRefresh" :font-size="readingSize" :navigation-open="isMobile && navigationOpen" :reading-visible="!isMobile || sidebarCollapsed"
         @show-execution="selectView('full'); navigationOpen ||= $event" />
-      <TerminalView v-else @create="showCreateDialog = true" />
+      <TerminalView v-else @compose-files="composeFiles" @create="showCreateDialog = true" />
     </div>
 
     <CreateDialog v-if="showCreateDialog" @close="showCreateDialog = false" />
