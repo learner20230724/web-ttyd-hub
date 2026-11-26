@@ -1,5 +1,9 @@
 # 复制粘贴与历史输出 / Clipboard and scrollback
 
+## Files in a Codex conversation
+
+Copy one or more files in the file manager, then paste in the conversation input. On mobile, long-press the input and choose Paste. Review the filenames, write your instructions and send. When the source app copies only a name or link, it pastes as text. The upload button and paste share the same limits of 100 MB per ordinary file and 20 ordinary files per message.
+
 ## Desktop
 
 In a Codex session, paste text or a screenshot from the page and press Enter to send. If the image is still uploading, Enter submits once it has been attached. In the Answer input, Shift+Enter inserts a new line. For an ordinary shell, click inside the terminal before pasting. Select text and use the browser Copy action. Common shortcuts: Ctrl+Shift+C / Ctrl+Shift+V (Windows/Linux), Cmd+C / Cmd+V (macOS). Browser and OS shortcuts differ. Ctrl+C without a selection normally interrupts the running program. This fork has no custom copy button or clipboard synchronization service.

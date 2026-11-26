@@ -1,10 +1,11 @@
 <script setup>
 import { ref, onBeforeUnmount } from 'vue'
+import { pastedFiles, splitPastedFiles } from '../utils/clipboard-files.mjs'
 import { untilAbort } from '../utils/request-deadline.mjs'
 import { insertTerminalImages } from '../utils/terminal-images.mjs'
 import { draftKey } from '../utils/session-drafts.mjs'
 import { hubUrl } from '../utils/base.mjs'
-const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, insertIntoTerminal: Boolean, attachUploaded: Function, previewTarget: String })
+const props = defineProps({ session: Object, modelValue: { type: Array, default: () => [] }, disabled: Boolean, compact: Boolean, insertIntoTerminal: Boolean, attachUploaded: Function, pasteDocuments: Function, previewTarget: String })
 const emit = defineEmits(['update:modelValue', 'busy', 'error'])
 const picker = ref(null), uploading = ref(false)
 const pendingPreviews = ref([])
@@ -23,22 +24,33 @@ function deferEnter(submit) {
   return true
 }
 onBeforeUnmount(() => { disposed = true; request.abort(); clearPreviews() })
-async function addFiles(files) {
-  const selected = Array.from(files || [])
+async function addFiles(files, fromClipboard = false) {
+  let selected = Array.from(files || [])
   if (picker.value) picker.value.value = ''
   if (!selected.length) return
-  if (props.disabled || uploading.value) { emit('error', '当前无法添加图片，请稍后重选'); return }
-  if (selected.length + props.modelValue.length > 8) { emit('error', '一次最多添加 8 张图片'); return }
+  if (props.disabled || uploading.value) { emit('error', fromClipboard ? '正在处理附件，请稍后再粘贴' : '当前无法添加图片，请稍后重选'); return }
   const session = props.session
   const identity = draftKey(session)
   const batch = { submit: null }
   addition = batch
   request = new AbortController()
-  const timeout = setTimeout(() => request.abort(), 60000)
+  let timeout
   uploading.value = true; emit('busy', true); emit('error', '')
   try {
+    let documents = []
+    if (fromClipboard) {
+      const groups = await splitPastedFiles(selected)
+      if (disposed || draftKey(props.session) !== identity) return
+      selected = groups.images
+      documents = groups.documents
+    }
+    if (selected.length + props.modelValue.length > 8) throw new Error('一次最多添加 8 张图片')
     if (selected.some(file => file.size > 20 * 1024 * 1024)) throw new Error('每张图片最大 20 MB')
     if (selected.some(file => !file.size)) throw new Error('无法读取空图片，请重新选择')
+    if (documents.length) {
+      if (!(await props.pasteDocuments(documents, selected)) || disposed || draftKey(props.session) !== identity) return
+    }
+    timeout = setTimeout(() => request.abort(), 60000)
     if (props.compact) pendingPreviews.value = selected.map(file => ({ url: URL.createObjectURL(file), name: file.name || '图片' }))
     for (const file of selected) {
       const res = await untilAbort(fetch(hubUrl(`/api/sessions/${encodeURIComponent(session.name)}/images`), {
@@ -114,12 +126,12 @@ async function remove(item) {
   finally { clearTimeout(timeout); uploading.value = false; if (!disposed) emit('busy', false) }
 }
 function paste(event) {
-  const clipboard = event.clipboardData
-  let files = Array.from(clipboard?.files || [])
-  if (!files.length) files = Array.from(clipboard?.items || []).map(item => item.getAsFile()).filter(Boolean)
-  files = files.filter(file => file.type.startsWith('image/') || !file.type || file.type === 'application/octet-stream')
+  const files = pastedFiles(event.clipboardData)
   if (!files.length) return false
-  event.preventDefault(); event.stopImmediatePropagation(); void addFiles(files); return true
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  void addFiles(files, true)
+  return true
 }
 defineExpose({ addFiles, paste, deferEnter })
 </script>

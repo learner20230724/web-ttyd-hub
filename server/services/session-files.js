@@ -3,8 +3,8 @@ const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { currentThread } = require('./session-identity');
 
-const MAX_BYTES = 50 * 1024 * 1024;
-const MAX_FILES = 8;
+const { maxSizeMiB, maxFiles } = require('../../shared/file-limits.json');
+const MAX_BYTES = maxSizeMiB * 1024 * 1024;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const marker = '附件文件（本机路径）';
 const root = () => path.resolve(process.env.HUB_FILE_DIR || path.join(path.dirname(process.env.HUB_STATE_FILE || path.join(process.env.TMUX_TMPDIR || path.join(__dirname, '../../data'), 'sessions.json')), 'files'));
@@ -29,7 +29,7 @@ function checkName(name) {
 }
 
 function checkSize(size) {
-  if (size > MAX_BYTES) throw Object.assign(new Error('单个文件最大 50 MB'), { status: 413 });
+  if (size > MAX_BYTES) throw Object.assign(new Error(`单个文件最大 ${maxSizeMiB} MB`), { status: 413 });
 }
 
 async function save(session, name, source, stillCurrent) {
@@ -59,8 +59,8 @@ async function save(session, name, source, stillCurrent) {
 
 async function resolve(session, ids) {
   checkSession(session);
-  if (!Array.isArray(ids) || !ids.length || ids.length > MAX_FILES || ids.some(id => typeof id !== 'string' || !uuid.test(id))) {
-    throw new Error('请选择 1 至 8 个已上传的文件');
+  if (!Array.isArray(ids) || !ids.length || ids.length > maxFiles || ids.some(id => typeof id !== 'string' || !uuid.test(id))) {
+    throw new Error(`请选择 1 至 ${maxFiles} 个已上传的文件`);
   }
   const parent = directory(session);
   return Promise.all(ids.map(async id => {

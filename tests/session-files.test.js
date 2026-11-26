@@ -47,6 +47,11 @@ test('upload, remove from a prompt, and resolve only complete files in the curre
   assert.equal((await send([first.id, second.id])).status, 200);
   assert.equal(await fs.readFile(inputs[1].text.split('\n')[1], 'utf8'), values[0]);
 
+  const additional = [];
+  for (let i = 2; i < 20; i++) additional.push((await (await upload('note-' + i + '.txt', 'ok')).json()).id);
+  const twenty = [first.id, second.id, ...additional];
+  assert.equal((await send(twenty)).status, 200);
+  assert.equal((await send([...twenty, first.id])).status, 400);
   assert.equal((await upload('../outside', 'x')).status, 400);
   assert.equal((await upload('空.txt', '')).status, 201);
   assert.equal((await send(['../../outside'])).status, 400);
@@ -58,12 +63,19 @@ test('upload, remove from a prompt, and resolve only complete files in the curre
   assert.equal((await upload(name, 'x')).status, 409);
   session.shell = 'bash';
   assert.equal((await upload(name, 'x', { 'X-TTYD-Generation': 'second', 'X-TTYD-Thread': 'B' })).status, 400);
-  assert.equal(inputs.length, 2);
-  assert.throws(() => files.checkSize(50 * 1024 * 1024 + 1), /50 MB/);
-  files.checkSize(50 * 1024 * 1024);
+  assert.equal(inputs.length, 3);
+  const limit = 100 * 1024 * 1024;
+  assert.throws(() => files.checkSize(limit + 1), /100 MB/);
+  files.checkSize(limit);
   session.shell = 'codex';
   async function* interrupted() { yield Buffer.from('partial'); throw new Error('closed'); }
   await assert.rejects(files.save(session, name, interrupted(), () => {}), /closed/);
+  // Also enforce the streaming limit when the client omits Content-Length.
+  const chunk = Buffer.alloc(1024 * 1024);
+  async function* tooLarge() { for (let i = 0; i < 100; i++) yield chunk; yield Buffer.from([1]); }
+  const response = await fetch(url + '/files?name=large.bin', { method: 'POST', duplex: 'half',
+    headers: { 'Content-Type': 'application/octet-stream', 'X-TTYD-Generation': 'second', 'X-TTYD-Thread': 'B' }, body: tooLarge() });
+  assert.equal(response.status, 413);
   const contents = await fs.readdir(root, { recursive: true });
   assert(contents.every(entry => !entry.includes('.upload-')));
 });

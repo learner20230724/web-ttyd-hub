@@ -34,11 +34,11 @@ function selectView(next) {
   if (isMobile) readingRefresh.value++;
 }
 const reader = ref(null);
-async function composeFiles(files) {
+async function composeFiles(files, images) {
   const identity = draftKey(selected.value);
   selectView('answer');
   await nextTick();
-  if (draftKey(selected.value) === identity) reader.value?.uploadFiles(files);
+  if (draftKey(selected.value) === identity) reader.value?.composeFiles(files, images);
 }
 const readingSize = ref(Number.isFinite(savedReading.fontSize) ? Math.max(4, Math.min(24, savedReading.fontSize)) : 16);
 watch([mobileFull, readingSize], () => {

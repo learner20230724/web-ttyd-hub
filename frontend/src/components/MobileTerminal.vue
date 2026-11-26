@@ -1,5 +1,6 @@
 <script setup>
 import { pageHidden, receiveVisibility } from '../utils/page-visibility.mjs'
+import fileLimits from '../../../shared/file-limits.json'
 import { pageOwnsPaste } from '../utils/page-paste.mjs'
 import { draftKey, loadDrafts, persistDrafts } from '../utils/session-drafts.mjs'
 import { hubUrl } from '../utils/base.mjs'
@@ -74,10 +75,11 @@ watch(attachmentKey, () => {
 }, { flush: 'sync' })
 async function uploadFiles(selected) {
   const current = session.value, identity = attachmentKey.value
-  if (!current || !canAttach.value || current.status !== 'running' || store.cachedSnapshot || sending.value || uploadRequest) return
+  if (!current || !canAttach.value || current.status !== 'running' || store.cachedSnapshot || sending.value) return false
   const name = current.name
-  if (files.value.length + selected.length > 8) { inputErrors.value[name] = '一次最多添加 8 个文件'; return }
-  if (selected.some(file => file.size > 50 * 1024 * 1024)) { inputErrors.value[name] = '单个文件最大 50 MB'; return }
+  if (uploadRequest) { inputErrors.value[name] = '文件正在上传，请稍后再添加'; return false }
+  if (files.value.length + selected.length > fileLimits.maxFiles) { inputErrors.value[name] = `一次最多添加 ${fileLimits.maxFiles} 个文件`; return false }
+  if (selected.some(file => file.size > fileLimits.maxSizeMiB * 1024 * 1024)) { inputErrors.value[name] = `单个文件最大 ${fileLimits.maxSizeMiB} MB`; return false }
   const request = new AbortController()
   uploadRequest = request
   delete inputErrors.value[name]
@@ -97,13 +99,20 @@ async function uploadFiles(selected) {
         fileDrafts.value[identity] = [...files.value, result]
       } finally { clearTimeout(timer) }
     }
+    return true
   } catch (error) {
     if (!disposed && uploadRequest === request) inputErrors.value[name] = request.signal.aborted ? '文件上传超时，请重选文件' : error.message
   } finally {
     if (uploadRequest === request) { uploadingName.value = ''; uploadRequest = null }
   }
 }
-defineExpose({ uploadFiles })
+async function composeFiles(documents, images = []) {
+  const identity = attachmentKey.value
+  if (await uploadFiles(documents) && images.length && !disposed && attachmentKey.value === identity) {
+    await imagePicker.value?.addFiles(images)
+  }
+}
+defineExpose({ composeFiles })
 const canAttach = computed(() => session.value?.shell === 'codex' || session.value?.activity?.detected)
 const menuInput = ref(null)
 function preparePasteMenu(event) {
@@ -519,7 +528,7 @@ onBeforeUnmount(() => {
           <ActivityBadge  class="inline-status" :status="status" :title="elapsed ? `${status.detail}（本轮已运行 ${elapsed}）` : status.detail" />
           <span v-if="elapsed" class="elapsed">已运行 {{ elapsed }}</span>
           <FilePicker v-if="canAttach && session.status === 'running'" :key="'files' + attachmentKey" compact :session="session" :busy="Boolean(uploadingName)" :disabled="sending || store.cachedSnapshot" @select="uploadFiles" />
-          <ImageAttachments v-if="canAttach && session.status === 'running'" compact insert-into-terminal preview-target=".mobile-image-drafts" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
+          <ImageAttachments v-if="canAttach && session.status === 'running'" compact insert-into-terminal :paste-documents="uploadFiles" preview-target=".mobile-image-drafts" ref="imagePicker" :key="attachmentKey" v-model="attachments" :session="session" :disabled="sending || store.cachedSnapshot" @busy="imageUploading = $event" @error="inputErrors[session.name] = $event" />
         </div>
         <!-- Unavailable status stays in the title row; it needs no separate action or reading space. -->
         <div v-if="['waiting', 'error', 'interrupted'].includes(status.state) && !(status.state === 'waiting' && questionPending)" class="status-guidance" :class="status.state">

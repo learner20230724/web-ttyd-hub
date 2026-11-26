@@ -46,6 +46,11 @@ async function attachImages() {
   }
   finally { clearTimeout(timeout); attaching.value = false; }
 }
+function pasteDocuments(documents, images) {
+  // The reader owns the removable file draft, including mixed clipboard batches.
+  emit('compose-files', documents, images);
+  return false;
+}
 const connection = ref('');
 const windowsReady = ref(false);
 let nativeReadGuard = () => false;
@@ -53,7 +58,16 @@ const releaseReadGuard = store.setReadGuard(selected => store.platform === 'win3
   ? false // An iframe load cannot prove which completion reached its renderer.
   : nativeReadGuard(selected));
 watch(windowsSrc, () => { windowsReady.value = false; });
-function windowsLoaded() { windowsReady.value = true; store.markRead(); }
+function windowsLoaded(event) {
+  windowsReady.value = true;
+  store.markRead();
+  const frame = event.currentTarget, identity = draftKey(currentSession.value);
+  frame.contentDocument?.addEventListener('paste', event => {
+    if (frame.isConnected && canAttach.value && !store.cachedSnapshot && draftKey(currentSession.value) === identity) {
+      imagePicker.value?.paste(event);
+    }
+  }, true);
+}
 let dispose = () => {};
 let revision = 0;
 
@@ -396,11 +410,11 @@ onBeforeUnmount(() => { revision++; dispose(); releaseReadGuard(); });
   <div class="terminal-area">
     <div v-if="runningName && canAttach" class="terminal-images">
       <FilePicker :key="'files' + draftKey(currentSession)" :session="currentSession" :disabled="store.cachedSnapshot || attaching || imageUploading" @select="emit('compose-files', $event)" />
-      <ImageAttachments ref="imagePicker" :key="draftKey(currentSession)" v-model="attachments" :session="currentSession" :attach-uploaded="attachImages" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
+      <ImageAttachments ref="imagePicker" :key="draftKey(currentSession)" v-model="attachments" :session="currentSession" :paste-documents="pasteDocuments" :attach-uploaded="attachImages" :disabled="store.cachedSnapshot || attaching" @busy="imageUploading = $event" @error="imageError = $event" />
       <button v-if="attachments.length && imageError" type="button" :disabled="imageUploading || attaching" @click="attachImages">{{ attaching ? '加入中…' : '加入终端输入区' }}</button>
       <p v-if="imageError" role="alert">{{ imageError }}</p>
     </div>
-    <iframe v-if="windowsSrc" :src="windowsSrc" class="windows-terminal" title="交互终端 / Interactive terminal" @load="windowsLoaded"></iframe>
+    <iframe v-if="windowsSrc" :key="draftKey(currentSession)" :src="windowsSrc" class="windows-terminal" title="交互终端 / Interactive terminal" @load="windowsLoaded"></iframe>
     <div v-else-if="nativeName" ref="host" class="terminal-host" aria-label="交互终端 / Interactive terminal"></div>
     <div v-if="nativeName && connection" class="connection-status" role="status">{{ connection }}</div>
     <div v-if="!runningName" class="welcome__container">

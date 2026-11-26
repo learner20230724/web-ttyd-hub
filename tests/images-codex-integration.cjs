@@ -64,7 +64,7 @@ let root, model, initial, rpc, tm, manager, server, wss, streams, browser;
     await desktop.locator('.session-card').click();
     const fullTab = desktop.getByRole('button', { name: '全文', exact: true });
     await checkFileDrafts({ page, desktop, fullTab, requests: () => requests });
-    console.log('PASS file choice, removal, restored draft, real Codex tool reads XLSX B2, desktop terminal file choice');
+    console.log('PASS pasted workbook, draft removal and reload, 100 MiB and 20-file boundaries, real Codex reads B2, mixed desktop terminal paste');
     return;
   }
   const png=Buffer.from(await page.evaluate(()=>{const c=document.createElement('canvas');c.width=320;c.height=160;const x=c.getContext('2d');x.fillStyle='#f35d60';x.fillRect(0,0,160,160);x.fillStyle='#38a9ed';x.fillRect(160,0,160,160);return c.toDataURL('image/png').split(',')[1];}),'base64');
