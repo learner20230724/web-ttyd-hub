@@ -10,10 +10,19 @@
 
 (browser_authorize) {
 	request_header -X-Browser-Upstream
-	forward_auth 127.0.0.1:4281 {
-		uri /verify
+	reverse_proxy 127.0.0.1:4281 {
+		method GET
+		rewrite /verify
+		header_up X-Forwarded-Method {method}
+		header_up X-Forwarded-Uri {uri}
 		header_up X-Login-Scope {args[0]}
-		copy_headers X-Browser-Upstream
+		@verified status 204
+		handle_response @verified {
+			copy_response_headers {
+				include Set-Cookie
+			}
+			request_header X-Browser-Upstream {rp.header.X-Browser-Upstream}
+		}
 	}
 }
 

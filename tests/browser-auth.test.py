@@ -63,7 +63,7 @@ class BrowserAuthTest(unittest.TestCase):
                     "entry": entry, "home": f"/{scope}/", "name": scope,
                     "origins": ["https://example.test"],
                     "routes": [f"/{scope}", "/download" if scope == "home" else f"/{scope}"],
-                    "cookie": f"login-{scope}", "cookie_paths": [f"/{scope}"],
+                    "cookie": f"login-{scope}", "cookie_paths": ["/home", "/download"] if scope == "home" else ["/cc"],
                     "username": USERNAME, "password_hash": bcrypt_hash,
                     "relay_basic": scope == "home",
                 }
@@ -114,12 +114,17 @@ class BrowserAuthTest(unittest.TestCase):
                 with subprocess.Popen(["caddy", "run", "--config", caddyfile], stdout=log, stderr=log) as proxy:
                     try:
                         self.run_checks(proxy_port, gateway, temp)
-                        remembered = self.request(proxy_port, "POST", "/home/_access/login",
-                                                  form={"username": USERNAME, "password": PASSWORD, "remember": "1"})
-                        cookie = self.one_cookie(remembered)
+                        result = self.request(proxy_port, "POST", "/home/_access/login",
+                                              form={"username": USERNAME, "password": PASSWORD})
+                        cookie = self.one_cookie(result)
                         now += auth.DAYS - 1
-                        self.assertEqual(self.request(proxy_port, "GET", "/home/api", cookie=cookie)[0], 200)
-                        now += 1
+                        renewed = self.request(proxy_port, "GET", "/home/api", cookie=cookie)
+                        self.assertEqual(renewed[0], 200)
+                        self.assertEqual(len(renewed[1]["cookies"]), 2)
+                        for value in renewed[1]["cookies"]:
+                            self.assertTrue(value.startswith(cookie + ";"))
+                            self.assertIn("Max-Age=2592000", value)
+                        now += auth.DAYS
                         self.assertEqual(self.request(proxy_port, "GET", "/home/api", cookie=cookie)[0], 401)
                     finally:
                         proxy.terminate()
@@ -135,7 +140,10 @@ class BrowserAuthTest(unittest.TestCase):
         try:
             client.request(method, path, body=urlencode(form) if form is not None else None, headers=headers)
             with client.getresponse() as response:
-                return response.status, dict(response.getheaders()), b"" if response.status == 101 else response.read()
+                response_headers = dict(response.getheaders())
+                response_headers["cookies"] = response.headers.get_all("Set-Cookie", [])
+                body = b"" if response.status == 101 else response.read()
+                return response.status, response_headers, body
         finally:
             client.close()
 
@@ -157,9 +165,10 @@ class BrowserAuthTest(unittest.TestCase):
         self.assertTrue(headers["Location"].startswith("/home/_access/login?return="))
         status, _, html = self.request(port, "GET", headers["Location"])
         self.assertEqual(status, 200)
-        self.assertIn("记住此设备 30 天".encode(), html)
+        self.assertNotIn(b"checkbox", html)
+        self.assertNotIn("记住此设备".encode(), html)
 
-        form = {"username": USERNAME, "password": PASSWORD, "remember": "1", "return": "/home/term?session=example"}
+        form = {"username": USERNAME, "password": PASSWORD, "return": "/home/term?session=example"}
         self.assertEqual(self.request(port, "POST", "/home/_access/login", form=form, Origin="https://other.test")[0], 403)
         self.assertEqual(self.request(port, "POST", "/home/_access/login", form={**form, "password": "incorrect"})[0], 401)
         result = self.request(port, "POST", "/home/_access/login", form=form)
@@ -191,10 +200,17 @@ class BrowserAuthTest(unittest.TestCase):
         self.assertEqual(self.request(port, "GET", "/home/ws", cookie=cookie, **websocket)[0], 401)
 
         result = self.request(port, "POST", "/cc/_access/login",
-                              form={**form, "remember": "0", "return": "//outside.test"})
+                              form={**form, "return": "//outside.test"})
         cookie = self.one_cookie(result)
         self.assertEqual(result[1]["Location"], "/cc/")
-        self.assertNotIn("Max-Age", result[1]["Set-Cookie"])
+        self.assertIn("Max-Age=2592000", result[1]["Set-Cookie"])
+        # An older browser-only cookie keeps the same value and receives a new lifetime.
+        with sqlite3.connect(temp / "sessions.db") as db:
+            db.execute("UPDATE sessions SET expires=? WHERE scope='cc'", (int(gateway.clock()) + 12 * 3600,))
+        existing = self.request(port, "GET", "/cc/", cookie=cookie)
+        self.assertEqual(existing[0], 200)
+        self.assertTrue(existing[1]["Set-Cookie"].startswith(cookie + ";"))
+        self.assertIn("Max-Age=2592000", existing[1]["Set-Cookie"])
         self.assertFalse(json.loads(self.request(port, "GET", "/cc/", cookie=cookie)[2])["authorized"])
 
 

@@ -149,7 +149,7 @@ Linux 新启动的 Codex 使用进程级 `tui.terminal_title=["thread-id"]`，�
 
 ## 浏览器保持登录
 
-`deploy/browser-auth.caddy` 和 `deploy/browser-auth.service` 提供 HTTPS 登录页和服务端会话验证。网关监听本机，Caddy 在转发页面、接口、下载和 WebSocket 前验证会话。登录时可选择记住设备 30 天，退出后服务器立即撤销凭证。浏览器 Cookie 仅面向对应入口。会话数据库使用持久磁盘，重启服务后继续读取。
+`deploy/browser-auth.caddy` 和 `deploy/browser-auth.service` 提供 HTTPS 登录页和服务端会话验证。网关监听本机，Caddy 在转发页面、接口、下载和 WebSocket 前验证会话。登录成功即保持 30 天，后续每次通过有效会话校验时在后台自动续期。退出后服务器立即撤销凭证。浏览器 Cookie 仅面向对应入口。会话数据库使用持久磁盘，重启服务后继续读取。
 
 - 安装 Python 的 `bcrypt` 与 `cryptography` 包，使用专用服务账号。每个入口在私有 `/etc/browser-auth/profiles.json` 指定账号、密码散列、来源和受保护路径。家庭终端如有独立上游认证，使用独立系统凭据加密转发所需的授权材料。配置文件和加密密钥均留在本机。
 - Caddy 在站点内为登录与退出路径导入 `browser_login`，在受保护路径的 `route` 内先导入 `browser_authorize`，再代理请求。TTYd Hub 使用 `/_access`，浏览器页面的退出链接由 `/etc/browser-auth/ttyd-web-origin` 指定的 HTTPS 来源启用。用 `python3 scripts/deploy-web.py` 发布时会读取该配置。

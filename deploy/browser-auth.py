@@ -22,7 +22,6 @@ import bcrypt
 from cryptography.fernet import Fernet, InvalidToken
 
 DAYS = 30 * 86400
-BROWSER_SESSION = 12 * 3600
 LOGIN_WINDOW = 600
 MAX_ATTEMPTS = 8
 FORM_LIMIT = 4096
@@ -77,15 +76,23 @@ class SessionStore:
             """, (scope, client, window)).fetchone()[0]
             return count <= MAX_ATTEMPTS
 
-    def issue(self, scope, client, previous, session_id, now, lifetime, relay):
+    def issue(self, scope, client, previous, session_id, now, relay):
         with closing(self.open()) as db, db:
             db.execute("DELETE FROM sessions WHERE expires<=? OR (id=? AND scope=?)", (now, previous, scope))
-            db.execute("INSERT INTO sessions VALUES (?, ?, ?, ?)", (session_id, scope, now + lifetime, relay))
+            db.execute("INSERT INTO sessions VALUES (?, ?, ?, ?)", (session_id, scope, now + DAYS, relay))
             db.execute("DELETE FROM attempts WHERE scope=? AND client=?", (scope, client))
 
     def find(self, scope, session_id, now):
         with closing(self.open()) as db:
-            return db.execute("SELECT relay FROM sessions WHERE id=? AND scope=? AND expires>?",
+            return db.execute("SELECT relay, expires FROM sessions WHERE id=? AND scope=? AND expires>?",
+                              (session_id, scope, now)).fetchone()
+
+    def renew(self, scope, session_id, now):
+        with closing(self.open()) as db, db:
+            db.execute("""UPDATE sessions SET expires=MAX(expires, ?)
+                          WHERE id=? AND scope=? AND expires>?""",
+                       (now + DAYS, session_id, scope, now))
+            return db.execute("SELECT expires FROM sessions WHERE id=? AND scope=? AND expires>?",
                               (session_id, scope, now)).fetchone()
 
     def revoke(self, scope, session_id):
@@ -127,19 +134,17 @@ class Handler(BaseHTTPRequestHandler):
     def session_id(self, token):
         return digest(self.scope + ":" + self.profile["password_hash"] + ":" + token)
 
-    def current_session(self):
+    def current_token(self):
         try:
             cookie = SimpleCookie(self.headers.get("Cookie", "")).get(self.profile["cookie"])
         except CookieError:
             return None
         if cookie and TOKEN.fullmatch(cookie.value):
-            return self.session_id(cookie.value)
+            return cookie.value
         return None
 
     def cookie_headers(self, token, age):
-        suffix = "; HttpOnly; Secure; SameSite=Lax"
-        if age is not None:
-            suffix += f"; Max-Age={age}"
+        suffix = f"; HttpOnly; Secure; SameSite=Lax; Max-Age={age}"
         return [("Set-Cookie", f"{self.profile['cookie']}={token}; Path={path}{suffix}")
                 for path in self.profile["cookie_paths"]]
 
@@ -151,8 +156,7 @@ class Handler(BaseHTTPRequestHandler):
         label = "退出登录" if logout else "登录"
         fields = "" if logout else """
           <label>账号<input name="username" required maxlength="100" autocomplete="username"></label>
-          <label>密码<input name="password" type="password" required maxlength="72" autocomplete="current-password"></label>
-          <label class="remember"><input name="remember" type="checkbox" value="1"> 记住此设备 30 天</label>"""
+          <label>密码<input name="password" type="password" required maxlength="72" autocomplete="current-password"></label>"""
         notice = f'<p role="alert">{html.escape(message)}</p>' if message else ""
         self.respond(status, f"""<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{name} · {label}</title>
@@ -161,8 +165,7 @@ class Handler(BaseHTTPRequestHandler):
 body{{min-height:100dvh;display:grid;place-items:center;margin:0;padding:1rem;box-sizing:border-box}}
 main{{background:#fff;border:1px solid #d7e3de;padding:clamp(1.3rem,5vw,2.2rem);width:min(100%,25rem);border-radius:1rem;box-sizing:border-box}}
 h1{{margin:0 0 1.4rem;font-size:1.55rem}}label{{display:block;margin:1rem 0}}
-input:not([type=checkbox]){{display:block;width:100%;box-sizing:border-box;margin-top:.4rem;padding:.75rem;border:1px solid #879b92;border-radius:.45rem;font:inherit}}
-.remember{{display:flex;align-items:center;gap:.4rem}}input[type=checkbox]{{width:1.1rem;height:1.1rem;accent-color:#184b3f}}
+input:not([type=hidden]){{display:block;width:100%;box-sizing:border-box;margin-top:.4rem;padding:.75rem;border:1px solid #879b92;border-radius:.45rem;font:inherit}}
 button{{width:100%;background:#184b3f;color:white;border:0;border-radius:.45rem;padding:.8rem;font:inherit;cursor:pointer}}
 [role=alert]{{color:#9c2525}}a{{color:#184b3f;display:inline-block;margin-top:1rem}}
 </style><main><h1>{name}</h1>{notice}<form method="post" action="{entry}/{action}">
@@ -170,7 +173,8 @@ button{{width:100%;background:#184b3f;color:white;border:0;border-radius:.45rem;
 {f'<a href="{target}">返回</a>' if logout else ''}</main></html>""")
 
     def verify(self):
-        current = self.current_session()
+        token = self.current_token()
+        current = self.session_id(token) if token else None
         row = self.server.store.find(self.scope, current, self.now) if current else None
         if row:
             headers = []
@@ -182,6 +186,12 @@ button{{width:100%;background:#184b3f;color:white;border:0;border-radius:.45rem;
                     self.respond(401)
                     return
                 headers.append(("X-Browser-Upstream", upstream))
+            if row[1] < self.now + DAYS:
+                expiry = self.server.store.renew(self.scope, current, self.now)
+                if expiry is None:
+                    self.respond(401)
+                    return
+                headers.extend(self.cookie_headers(token, expiry[0] - self.now))
             self.respond(204, headers=headers)
             return
         method = self.headers.get("X-Forwarded-Method")
@@ -229,11 +239,11 @@ button{{width:100%;background:#184b3f;color:white;border:0;border-radius:.45rem;
         if self.profile.get("relay_basic"):
             upstream = "Basic " + base64.b64encode(username.encode() + b":" + password).decode()
             relay = self.server.relay.encrypt(upstream.encode()).decode()
-        remembered = form.get("remember") == "1"
+        previous = self.current_token()
         token = secrets.token_urlsafe(32)
-        self.server.store.issue(self.scope, client, self.current_session(), self.session_id(token),
-                                self.now, DAYS if remembered else BROWSER_SESSION, relay)
-        self.respond(303, headers=[("Location", next_path), *self.cookie_headers(token, DAYS if remembered else None)])
+        self.server.store.issue(self.scope, client, self.session_id(previous) if previous else None,
+                                self.session_id(token), self.now, relay)
+        self.respond(303, headers=[("Location", next_path), *self.cookie_headers(token, DAYS)])
 
     def handle_request(self):
         self.scope = self.headers.get("X-Login-Scope")
@@ -266,7 +276,9 @@ button{{width:100%;background:#184b3f;color:white;border:0;border-radius:.45rem;
             if route.path == "/login":
                 self.login(form, next_path)
             else:
-                self.server.store.revoke(self.scope, self.current_session())
+                token = self.current_token()
+                if token:
+                    self.server.store.revoke(self.scope, self.session_id(token))
                 self.respond(303, headers=[("Location", self.profile["entry"] + "/login?return=" + quote(next_path, safe="")),
                                            *self.cookie_headers("", 0)])
         else:
