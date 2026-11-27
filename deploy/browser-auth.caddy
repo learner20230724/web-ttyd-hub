@@ -16,3 +16,14 @@
 		copy_headers X-Browser-Upstream
 	}
 }
+
+(browser_legacy_redirect) {
+	@browser_document {
+		method GET HEAD
+		header Accept *text/html*
+		not header User-Agent *TTYdHub*
+		not query legacy=1
+		not path /downloads/*
+	}
+	redir @browser_document {args[0]}{uri} 307
+}
