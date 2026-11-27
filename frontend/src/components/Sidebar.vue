@@ -4,6 +4,10 @@ import { useSessionStore } from "../stores/sessions";
 import SessionCard from "./SessionCard.vue";
 import CodexUsageCard from "./CodexUsageCard.vue";
 
+const logoutPath = import.meta.env.VITE_HUB_BROWSER_AUTH_ORIGIN === window.location.origin
+  ? "/_access/logout"
+  : "";
+
 defineProps({
   collapsed: Boolean,
   mobile: Boolean, // New prop to detect if we are in mobile mode (optional, or just use css media queries)
@@ -131,6 +135,7 @@ onBeforeUnmount(() => finishDrag());
       </div>
     </div>
     <CodexUsageCard :menu-open="!collapsed" />
+    <a v-if="logoutPath && !collapsed" class="sign-out" :href="logoutPath">退出登录</a>
     <details v-if="!collapsed" class="archive-section">
       <summary>归档（{{ store.archivedSessions.length }}）</summary>
       <p class="sort-hint">进程保留 30 分钟，到期自动终止</p>
@@ -143,6 +148,7 @@ onBeforeUnmount(() => finishDrag());
 </template>
 
 <style scoped>
+.sign-out { flex-shrink: 0; padding: 8px 16px; font-size: 12px; color: var(--text-secondary); }
 .archive-section { flex-shrink:0; max-height:40%; overflow:auto; border-top:1px solid var(--border-color); padding:8px; }
 .archive-section summary { cursor:pointer; font-size:12px; color:var(--text-secondary); padding:8px; }
 .archive-list { display:flex; flex-direction:column; gap:4px; }

@@ -1,0 +1,18 @@
+(browser_login) {
+	handle {args[1]}/* {
+		uri strip_prefix {args[1]}
+		reverse_proxy 127.0.0.1:4281 {
+			header_up X-Login-Scope {args[0]}
+			header_up X-Login-Client {remote_host}
+		}
+	}
+}
+
+(browser_authorize) {
+	request_header -X-Browser-Upstream
+	forward_auth 127.0.0.1:4281 {
+		uri /verify
+		header_up X-Login-Scope {args[0]}
+		copy_headers X-Browser-Upstream
+	}
+}

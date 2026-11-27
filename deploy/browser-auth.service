@@ -1,0 +1,21 @@
+[Unit]
+Description=Persistent browser sessions for protected web tools
+After=network.target
+RequiresMountsFor=/data-main
+
+[Service]
+Type=simple
+User=browser-auth
+Group=browser-auth
+LoadCredential=relay-key:/etc/browser-auth/relay-key
+ExecStart=/usr/bin/python3 /data-main/apps/browser-auth/browser-auth.py /etc/browser-auth/profiles.json /data-main/services/browser-auth/sessions.sqlite ${CREDENTIALS_DIRECTORY}/relay-key 4281
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/data-main/services/browser-auth
+
+[Install]
+WantedBy=multi-user.target

@@ -20,11 +20,15 @@ if command('systemctl', 'show', service, '-p', 'KillMode', '--value') != 'proces
     raise SystemExit('Refusing restart: configure KillMode=process to preserve tmux tasks first.')
 asset_helper = root / 'scripts' / 'retain-web-assets.cjs'
 public_dir = root / 'server' / 'public'
+build_environment = os.environ.copy()
+browser_origin = pathlib.Path('/etc/browser-auth/ttyd-web-origin')
+if browser_origin.is_file():
+    build_environment.setdefault('VITE_HUB_BROWSER_AUTH_ORIGIN', browser_origin.read_text().strip())
 # Keep old lazy-loaded chunks available to already-open pages after Vite
 # replaces the build. Only bounded, recent hashed assets cross generations.
 with tempfile.TemporaryDirectory(prefix='hub-web-assets-') as retained_assets:
     subprocess.run(['node', str(asset_helper), str(public_dir), retained_assets], cwd=root, check=True)
-    subprocess.run(['npm', 'run', 'build'], cwd=root, check=True)
+    subprocess.run(['npm', 'run', 'build'], cwd=root, env=build_environment, check=True)
     subprocess.run(['node', str(asset_helper), retained_assets, str(public_dir)], cwd=root, check=True)
 sessions = api()['sessions']
 panes = command('tmux', 'list-panes', '-a', '-F', '#{session_name}\t#{pane_id}\t#{pane_pid}') if sessions else ''

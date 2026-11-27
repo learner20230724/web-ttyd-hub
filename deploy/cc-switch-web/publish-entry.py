@@ -59,6 +59,11 @@ def main():
   if (!localStorage.getItem('cc-switch:active-app')) localStorage.setItem('cc-switch:active-app', 'codex');
 } catch {}</script>"""
     html = html.replace('</head>', first_visit + '</head>', 1)
+    sign_out = """<a href="/cc-switch/_access/logout" style="position:fixed;z-index:20;
+right:12px;bottom:12px;display:grid;place-items:center;min-height:42px;padding:0 12px;
+border:1px solid color-mix(in srgb, CanvasText 20%, Canvas);border-radius:8px;
+background:Canvas;color:CanvasText;font:14px system-ui;text-decoration:none">退出登录</a>"""
+    html = html.replace('</body>', sign_out + '</body>', 1)
     replace_text(PRIVATE_CONFIG / 'upstream.caddy', f'header_up Authorization "{authorization}"\n')
     replace_text(PRIVATE_CONFIG / 'upstream-auth', authorization + '\n')
     replace_text(APP_DIR / 'index.html', html)

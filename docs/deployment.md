@@ -146,3 +146,12 @@ Linux 新启动的 Codex 使用进程级 `tui.terminal_title=["thread-id"]`，�
 共享 daemon 的已加载历史会话可能没有保持 rollout 文件描述符打开。打开文件发现失败时，观察器通过已验证的本地 daemon socket，只读调用 `thread/loaded/list` 和 `thread/read(includeTurns:false)`，匹配当前终端标题，再核对 sessions 目录、真实路径、元数据 UUID 与 cwd。总读取有 3.5 秒截止；歧义、越界和校验失败保持未关联。不发送输入，不调用 `thread/resume` 或启动模型。此补充同时适用于尚未重启、仍使用旧标题的现有终端。
 
 `tests/mobile-passive-refresh-browser.cjs` 故意丢失正文定时回调、保持完成状态不变：旧客户端在 7 秒内无法更新，新客户端自动显示新回复；全程输入请求为零。另覆盖 360px 触摸下慢速全文请求、连续来回切换、重复点击当前视图。真实 Codex 隔离测试补充了隐藏 rollout FD 后的只读发现，确认没有额外模型请求。单元测试 213 通过、1 项跳过；回答展示、自动收敛、本地缓存与真实 Codex 隔离测试通过。以上不等于用户 M153 现场验证。
+
+## 浏览器保持登录
+
+`deploy/browser-auth.caddy` 和 `deploy/browser-auth.service` 提供 HTTPS 登录页和服务端会话验证。网关监听本机，Caddy 在转发页面、接口、下载和 WebSocket 前验证会话。登录时可选择记住设备 30 天，退出后服务器立即撤销凭证。浏览器 Cookie 仅面向对应入口。会话数据库使用持久磁盘，重启服务后继续读取。
+
+- 安装 Python 的 `bcrypt` 与 `cryptography` 包，使用专用服务账号。每个入口在私有 `/etc/browser-auth/profiles.json` 指定账号、密码散列、来源和受保护路径。家庭终端如有独立上游认证，使用独立系统凭据加密转发所需的授权材料。配置文件和加密密钥均留在本机。
+- Caddy 在站点内为登录与退出路径导入 `browser_login`，在受保护路径的 `route` 内先导入 `browser_authorize`，再代理请求。TTYd Hub 使用 `/_access`，浏览器页面的退出链接由 `/etc/browser-auth/ttyd-web-origin` 指定的 HTTPS 来源启用。用 `python3 scripts/deploy-web.py` 发布时会读取该配置。
+- 现有 Android 应用保存的旧端口仍提供原认证。可在应用内另加 HTTPS 地址使用 30 天登录。旧网页书签的普通浏览器访问会转到 HTTPS，旧浏览器本地缓存可用原地址加 `?legacy=1` 查看。安装包下载仍走原下载路径。
+- 运行 `PYTHONDONTWRITEBYTECODE=1 python3 tests/browser-auth.test.py` 验证代理鉴权、受保护路径、持久会话、30 天边界、退出及终端断线重连。
