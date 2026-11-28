@@ -155,3 +155,11 @@ Linux 新启动的 Codex 使用进程级 `tui.terminal_title=["thread-id"]`，�
 - Caddy 在站点内为登录与退出路径导入 `browser_login`，在受保护路径的 `route` 内先导入 `browser_authorize`，再代理请求。TTYd Hub 使用 `/_access`，浏览器页面的退出链接由 `/etc/browser-auth/ttyd-web-origin` 指定的 HTTPS 来源启用。用 `python3 scripts/deploy-web.py` 发布时会读取该配置。
 - 现有 Android 应用保存的旧端口仍提供原认证。可在应用内另加 HTTPS 地址使用 30 天登录。旧网页书签的普通浏览器访问会转到 HTTPS，旧浏览器本地缓存可用原地址加 `?legacy=1` 查看。安装包下载仍走原下载路径。
 - 运行 `PYTHONDONTWRITEBYTECODE=1 python3 tests/browser-auth.test.py` 验证代理鉴权、受保护路径、持久会话、30 天边界、退出及终端断线重连。
+
+## VL 单终端网页
+
+在部署主机安装 [VL](https://github.com/foursmith/vl)、ttyd、Git、ripgrep、Python 3、curl 和 binutils，将本仓库的 `deploy/vl-web/` 同步到数据盘的 `/data-main/apps/vl-web/`，以 root 运行其中的 `install.sh`。脚本按本机 Ubuntu 的 ttyd 和 libwebsockets 软件包组装专用运行目录。VL、ttyd 更新后重新执行同一脚本。已保存的工作文件位于 `/data-main/services/vl-web/workspace/`。
+
+在现有 HTTPS 终端站点的 `import browser_login ttyd /_access` 后引入 `import /data-main/apps/vl-web/site.caddy`，验证并热重载 Caddy。访问同站点的 `/vl/`，已登录的浏览器直接进入中文 VL。网页、令牌和 WebSocket 共用终端登录验证。后端仅监听私有 Unix 套接字。服务以专用账号在隔离的文件系统与网络中运行。
+
+每个标签页独立启动编辑器，共用这个终端账号的专用工作区。按 Ctrl+G 找文件，按 i 编辑，按 Ctrl+S 保存。触屏可使用底部的找文件、Esc 和保存键。刷新后重新打开已保存的文件。

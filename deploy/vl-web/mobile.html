@@ -1,0 +1,48 @@
+<style>
+#vl-keys { display: none }
+@media (pointer: coarse) {
+  #terminal-container {
+    position: fixed !important;
+    inset: env(safe-area-inset-top) 0 calc(44px + env(safe-area-inset-bottom)) !important;
+    height: auto !important;
+    padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+  }
+  #vl-keys {
+    display: flex; position: fixed; bottom: 0; left: 0; right: 0;
+    height: 44px; box-sizing: content-box; background: #202124;
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  #vl-keys button {
+    flex: 1; border: 0; border-top: 1px solid #45474a;
+    background: transparent; color: #e5e7eb; font: 15px system-ui;
+  }
+  #vl-keys button:active { background: #383a3d }
+}
+</style>
+<nav id="vl-keys" aria-label="终端按键">
+  <button data-key="Escape" data-code="27">Esc</button>
+  <button data-key="Tab" data-code="9">Tab</button>
+  <button data-key="g" data-code="71" data-ctrl>找文件</button>
+  <button data-key="s" data-code="83" data-ctrl>保存</button>
+  <button data-key="p" data-code="80" data-ctrl>命令</button>
+</nav>
+<script>
+const vlKeys = document.getElementById('vl-keys');
+vlKeys.addEventListener('pointerdown', event => event.preventDefault());
+vlKeys.addEventListener('click', event => {
+  const key = event.target.closest('button');
+  if (key && window.term) {
+    const ctrlKey = key.hasAttribute('data-ctrl');
+    const name = key.dataset.key;
+    const options = {
+      key: name, code: ctrlKey ? 'Key' + name.toUpperCase() : name,
+      keyCode: Number(key.dataset.code), ctrlKey, bubbles: true, cancelable: true
+    };
+    window.term.focus();
+    for (const type of ['keydown', 'keyup']) {
+      window.term.textarea.dispatchEvent(new KeyboardEvent(type, options));
+    }
+  }
+});
+if (window.term) window.term.fit();
+</script>

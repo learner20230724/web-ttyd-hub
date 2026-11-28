@@ -1,0 +1,16 @@
+handle /vl {
+	redir /vl/ 308
+}
+handle /vl/* {
+	route {
+		import browser_authorize ttyd
+		header Cache-Control "private, no-store"
+		header X-Frame-Options DENY
+		reverse_proxy unix//run/vl-web/terminal.sock {
+			header_up Host {http.request.hostport}
+			header_up -Cookie
+			header_up -Authorization
+			header_up -X-Browser-Upstream
+		}
+	}
+}

@@ -1,0 +1,37 @@
+[Unit]
+Description=VL browser terminal
+After=local-fs.target
+RequiresMountsFor=/data-main/services/vl-web
+
+[Service]
+User=vl-web
+Group=vl-web
+RootDirectory=/data-main/services/vl-web/root
+WorkingDirectory=/workspace
+BindPaths=/data-main/services/vl-web/workspace:/workspace /data-main/services/vl-web/preferences:/preferences
+RuntimeDirectory=vl-web
+RuntimeDirectoryMode=0700
+Environment=HOME=/preferences LANG=C.UTF-8 PATH=/bin
+ExecStart=/bin/ttyd -i /run/vl-web/terminal.sock -b /vl -W -O -m 8 -t titleFixed=VL -t fontSize=14 -I /client.html /bin/vl --lang zh-CN --icons=false /workspace
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/workspace /preferences /run/vl-web
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+MemoryMax=384M
+TasksMax=128
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
